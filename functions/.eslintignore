@@ -1,0 +1,4 @@
+# Excluir archivos de configuración y otros archivos generados
+.eslintrc.js
+*.config.js
+node_modules/

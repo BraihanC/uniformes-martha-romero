@@ -1,0 +1,2557 @@
+import { useState, useEffect } from 'react';
+import {
+  collection,
+  getDocs,
+  updateDoc,
+  doc,
+  serverTimestamp,
+  query,
+  orderBy,
+  writeBatch,
+  increment
+} from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../services/firebase';
+import { useAuth } from '../context/AuthContext';
+import {
+  Search,
+  Plus,
+  Eye,
+  Printer,
+  Calendar,
+  DollarSign,
+  XCircle,
+  CheckCircle,
+  AlertTriangle,
+  Clock,
+  Phone
+} from 'lucide-react';
+
+const Apartados = () => {
+  const { currentUser } = useAuth();
+
+  // Estados principales
+  const [apartados, setApartados] = useState([]);
+  const [productos, setProductos] = useState([]);
+  const [clientes, setClientes] = useState([]);
+  const [companyConfig, setCompanyConfig] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(null);
+
+  // Estados de búsqueda y filtros
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filtroEstado, setFiltroEstado] = useState('Todos');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  // Estados de modales
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showManageModal, setShowManageModal] = useState(false);
+  const [showReceiptModal, setShowReceiptModal] = useState(false);
+  const [showAbonoReceiptModal, setShowAbonoReceiptModal] = useState(false);
+  const [showFacturaModal, setShowFacturaModal] = useState(false);
+  const [selectedApartado, setSelectedApartado] = useState(null);
+  const [lastAbono, setLastAbono] = useState(null);
+  const [facturaData, setFacturaData] = useState(null);
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [emailRecipient, setEmailRecipient] = useState('');
+  const [sendingEmail, setSendingEmail] = useState(false);
+
+  // Estados para crear apartado
+  const [selectedClienteId, setSelectedClienteId] = useState('');
+  const [searchCliente, setSearchCliente] = useState('');
+  const [searchProducto, setSearchProducto] = useState('');
+  const [selectedProductos, setSelectedProductos] = useState([]);
+  const [tallasSeleccionadas, setTallasSeleccionadas] = useState({});
+  const [plazoSeleccionado, setPlazoSeleccionado] = useState(30);
+  const [abonoInicial, setAbonoInicial] = useState('0');
+  const [metodoPago, setMetodoPago] = useState('Efectivo');
+  const [notasApartado, setNotasApartado] = useState('');
+
+  // Estados para gestión de apartado
+  const [nuevoAbono, setNuevoAbono] = useState('');
+  const [notasAbono, setNotasAbono] = useState('');
+
+  // Cargar datos iniciales
+  useEffect(() => {
+    const loadData = async () => {
+      if (currentUser) {
+        console.log('✅ Usuario autenticado detectado:', currentUser.uid);
+        setLoading(true);
+        setAuthError(null);
+
+        await Promise.all([
+          fetchApartados(),
+          fetchProductos(),
+          fetchClientes(),
+          fetchCompanyConfig()
+        ]);
+
+        setLoading(false);
+      } else {
+        console.log('⚠️ No hay usuario autenticado');
+        setAuthError('No hay usuario autenticado. Por favor inicia sesión.');
+        setLoading(false);
+      }
+    };
+
+    loadData();
+  }, [currentUser]);
+
+  // Verificar vencimientos automáticamente
+  useEffect(() => {
+    const verificarVencimientos = async () => {
+      const hoy = new Date();
+      hoy.setHours(0, 0, 0, 0);
+
+      const apartadosActivos = apartados.filter(
+        a => a.estadoGeneral === 'Activo' && a.fechaLimite
+      );
+
+      for (const apartado of apartadosActivos) {
+        const fechaLimite = apartado.fechaLimite.toDate();
+        fechaLimite.setHours(0, 0, 0, 0);
+
+        if (fechaLimite < hoy) {
+          const apartadoRef = doc(db, 'apartados', apartado.id);
+          await updateDoc(apartadoRef, {
+            estadoGeneral: 'Vencido',
+            updatedAt: serverTimestamp()
+          });
+        }
+      }
+    };
+
+    if (currentUser && apartados.length > 0) {
+      verificarVencimientos();
+    }
+  }, [apartados, currentUser]);
+
+  const fetchApartados = async () => {
+    try {
+      console.log('🔄 Intentando cargar apartados...');
+      const q = query(collection(db, 'apartados'), orderBy('createdAt', 'desc'));
+      const snapshot = await getDocs(q);
+      console.log('📦 Apartados recibidos:', snapshot.size);
+
+      const apartadosData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      console.log('✅ Apartados cargados:', apartadosData.length);
+
+      setApartados(apartadosData);
+    } catch (error) {
+      console.error('❌ Error al cargar apartados:', error);
+      console.error('❌ Código del error:', error.code);
+      console.error('❌ Mensaje del error:', error.message);
+
+      if (error.code === 'permission-denied') {
+        setAuthError('Error de permisos en Firebase. Verifica las reglas de seguridad en Firestore.');
+      }
+    }
+  };
+
+  const fetchProductos = async () => {
+    try {
+      console.log('🔄 Intentando cargar productos...');
+      console.log('👤 Usuario actual:', currentUser?.uid);
+
+      const productosRef = collection(db, 'products');
+      console.log('📂 Referencia de colección creada:', productosRef.path);
+
+      const snapshot = await getDocs(productosRef);
+      console.log('📦 Productos recibidos:', snapshot.size);
+
+      const productosData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      console.log('✅ Productos cargados:', productosData.length);
+      console.log('📊 Productos con stock:', productosData.filter(p => (p.stockTotal || 0) > 0).length);
+      console.log('📊 Datos de ejemplo:', productosData[0]);
+
+      setProductos(productosData);
+    } catch (error) {
+      console.error('❌ Error al cargar productos:', error);
+      console.error('❌ Código del error:', error.code);
+      console.error('❌ Mensaje del error:', error.message);
+      console.error('❌ Stack completo:', error.stack);
+
+      if (error.code === 'permission-denied') {
+        setAuthError('Error de permisos en Firebase. Verifica las reglas de seguridad en Firestore.');
+      }
+    }
+  };
+
+  const fetchClientes = async () => {
+    try {
+      console.log('🔄 Intentando cargar clientes...');
+      console.log('👤 Usuario actual:', currentUser);
+      console.log('🔐 UID del usuario:', currentUser?.uid);
+      console.log('📧 Email del usuario:', currentUser?.email);
+
+      const clientesRef = collection(db, 'clients');
+      console.log('📂 Referencia de colección creada:', clientesRef.path);
+
+      const snapshot = await getDocs(clientesRef);
+      console.log('📦 Documentos recibidos:', snapshot.size);
+
+      const clientesData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      console.log('✅ Clientes cargados:', clientesData.length);
+      if (clientesData.length > 0) {
+        console.log('📊 Datos de ejemplo del primer cliente:', clientesData[0]);
+        console.log('🔍 Campos del cliente:', Object.keys(clientesData[0]));
+      }
+
+      setClientes(clientesData);
+    } catch (error) {
+      console.error('❌ Error al cargar clientes:', error);
+      console.error('❌ Código del error:', error.code);
+      console.error('❌ Mensaje del error:', error.message);
+      console.error('❌ Stack completo:', error.stack);
+
+      if (error.code === 'permission-denied') {
+        setAuthError('Error de permisos en Firebase. Verifica las reglas de seguridad en Firestore.');
+      }
+    }
+  };
+
+  const fetchCompanyConfig = async () => {
+    try {
+      console.log('🔄 Intentando cargar configuración...');
+      const snapshot = await getDocs(collection(db, 'config'));
+      console.log('📦 Documentos de configuración recibidos:', snapshot.size);
+
+      if (!snapshot.empty) {
+        const config = snapshot.docs[0].data();
+        console.log('✅ Configuración cargada:', config);
+        setCompanyConfig(config);
+      } else {
+        console.log('⚠️ No se encontró configuración de la empresa');
+      }
+    } catch (error) {
+      console.error('❌ Error al cargar configuración:', error);
+      console.error('❌ Código del error:', error.code);
+      console.error('❌ Mensaje del error:', error.message);
+      // No mostramos error crítico si falla la configuración, solo en consola
+    }
+  };
+
+  // Funciones auxiliares
+  const calcularDiasRestantes = (fechaLimite) => {
+    if (!fechaLimite) return null;
+    const hoy = new Date();
+    const limite = fechaLimite.toDate();
+    const diferencia = Math.ceil((limite - hoy) / (1000 * 60 * 60 * 24));
+    return diferencia;
+  };
+
+  const getColorDiasRestantes = (dias) => {
+    if (dias === null) return 'text-gray-500';
+    if (dias < 0) return 'text-red-600 font-bold';
+    if (dias <= 5) return 'text-red-500 font-semibold';
+    if (dias <= 10) return 'text-yellow-600 font-semibold';
+    return 'text-green-600';
+  };
+
+  const getEstadoBadgeColor = (estado) => {
+    const colors = {
+      'Activo': 'bg-blue-100 text-blue-800',
+      'Completado': 'bg-green-100 text-green-800',
+      'Vencido': 'bg-red-100 text-red-800',
+      'Cancelado': 'bg-gray-100 text-gray-800'
+    };
+    return colors[estado] || 'bg-gray-100 text-gray-800';
+  };
+
+  // Filtrar clientes
+  const clientesFiltrados = clientes.filter(cliente => {
+    const searchLower = searchCliente.toLowerCase();
+    return (
+      cliente.nombre?.toLowerCase().includes(searchLower) ||
+      cliente.nombreCompleto?.toLowerCase().includes(searchLower) ||
+      cliente.telefono?.includes(searchCliente) ||
+      cliente.documento?.includes(searchCliente) ||
+      cliente.numeroDocumento?.includes(searchCliente)
+    );
+  });
+
+  // Filtrar productos
+  const productosFiltrados = productos.filter(producto => {
+    const stockDisponible = (producto.stockTotal || 0) - (producto.stockReservadoApartados || 0);
+    const matchSearch = producto.nombre?.toLowerCase().includes(searchProducto.toLowerCase()) ||
+                       producto.referencia?.toLowerCase().includes(searchProducto.toLowerCase());
+    return matchSearch && stockDisponible > 0;
+  });
+
+  // Agregar producto al apartado
+  const agregarProducto = (producto) => {
+    const stockDisponible = (producto.stockTotal || 0) - (producto.stockReservadoApartados || 0);
+
+    if (stockDisponible <= 0) {
+      alert('No hay stock disponible para este producto');
+      return;
+    }
+
+    const tallaKey = `${producto.id}`;
+    const tallaSeleccionada = tallasSeleccionadas[tallaKey] || producto.tallas?.[0] || 'Única';
+
+    const productoExistente = selectedProductos.find(
+      p => p.id === producto.id && p.tallaSeleccionada === tallaSeleccionada
+    );
+
+    if (productoExistente) {
+      alert('Este producto con esta talla ya está agregado');
+      return;
+    }
+
+    setSelectedProductos([...selectedProductos, {
+      id: producto.id,
+      nombre: producto.nombre,
+      referencia: producto.referencia,
+      tallaSeleccionada: tallaSeleccionada,
+      cantidad: 1,
+      precioUnitario: producto.precio || 0,
+      stockDisponible: stockDisponible
+    }]);
+  };
+
+  const handleTallaChange = (productoId, talla) => {
+    setTallasSeleccionadas(prev => ({
+      ...prev,
+      [productoId]: talla
+    }));
+  };
+
+  const actualizarCantidadProducto = (index, nuevaCantidad) => {
+    const cantidad = parseInt(nuevaCantidad) || 0;
+    const producto = selectedProductos[index];
+
+    if (cantidad > producto.stockDisponible) {
+      alert(`Solo hay ${producto.stockDisponible} unidades disponibles`);
+      return;
+    }
+
+    if (cantidad < 1) {
+      eliminarProducto(index);
+      return;
+    }
+
+    const nuevosProductos = [...selectedProductos];
+    nuevosProductos[index].cantidad = cantidad;
+    setSelectedProductos(nuevosProductos);
+  };
+
+  const eliminarProducto = (index) => {
+    setSelectedProductos(selectedProductos.filter((_, i) => i !== index));
+  };
+
+  const calcularTotales = () => {
+    const subtotal = selectedProductos.reduce(
+      (sum, p) => sum + (p.cantidad * p.precioUnitario), 0
+    );
+    return { subtotal };
+  };
+
+  // Crear apartado
+  const handleCrearApartado = async () => {
+    if (!selectedClienteId) {
+      alert('Selecciona un cliente');
+      return;
+    }
+
+    if (selectedProductos.length === 0) {
+      alert('Agrega al menos un producto');
+      return;
+    }
+
+    const { subtotal } = calcularTotales();
+    const abono = parseFloat(abonoInicial) || 0;
+
+    if (abono > subtotal) {
+      alert('El abono inicial no puede ser mayor al total');
+      return;
+    }
+
+    try {
+      const cliente = clientes.find(c => c.id === selectedClienteId);
+      const fechaLimite = new Date();
+      fechaLimite.setDate(fechaLimite.getDate() + plazoSeleccionado);
+
+      const historialAbonos = abono > 0 ? [{
+        fecha: new Date(),
+        monto: abono,
+        notas: 'Abono inicial',
+        metodoPago: metodoPago
+      }] : [];
+
+      const nuevoApartado = {
+        clienteId: selectedClienteId,
+        clienteNombre: cliente.nombreCompleto || cliente.nombre || 'Sin nombre',
+        clienteTelefono: cliente.telefono || '',
+        clienteDocumento: cliente.numeroDocumento || cliente.documento || '',
+        items: selectedProductos.map(p => ({
+          productoId: p.id,
+          nombre: p.nombre,
+          referencia: p.referencia,
+          talla: p.tallaSeleccionada,
+          cantidad: p.cantidad,
+          precioUnitario: p.precioUnitario,
+          subtotal: p.cantidad * p.precioUnitario
+        })),
+        totalApartado: subtotal,
+        totalAbonado: abono,
+        saldoPendiente: subtotal - abono,
+        plazoOriginalDias: plazoSeleccionado,
+        diasExtendidos: 0,
+        fechaLimite: fechaLimite,
+        estadoGeneral: 'Activo',
+        historialAbonos: historialAbonos,
+        notas: notasApartado,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+
+      // Usar batch para actualizar inventario y crear apartado
+      const batch = writeBatch(db);
+
+      // Crear el apartado
+      const apartadoRef = doc(collection(db, 'apartados'));
+      batch.set(apartadoRef, nuevoApartado);
+
+      // Actualizar inventario (reservar stock)
+      for (const producto of selectedProductos) {
+        const productoRef = doc(db, 'products', producto.id);
+        batch.update(productoRef, {
+          stockReservadoApartados: increment(producto.cantidad)
+        });
+      }
+
+      // 4. (NUEVO) Registrar Transacción de Abono Inicial
+      if (abono > 0) {
+        const transactionRef = doc(collection(db, 'transactions'));
+        batch.set(transactionRef, {
+          tipo: 'abono_apartado',
+          monto: abono,
+          metodoPago: metodoPago,
+          apartadoId: apartadoRef.id,
+          descripcion: `Abono inicial Apartado (nuevo)`,
+          clienteId: selectedClienteId,
+          clienteNombre: cliente.nombreCompleto || cliente.nombre,
+          fecha: serverTimestamp(),
+          userId: currentUser.uid
+        });
+      }
+
+      await batch.commit();
+
+      alert('Apartado creado exitosamente');
+      resetCreateForm();
+      setShowCreateModal(false);
+      fetchApartados();
+      fetchProductos();
+
+    } catch (error) {
+      console.error('Error al crear apartado:', error);
+      alert('Error al crear apartado');
+    }
+  };
+
+  const resetCreateForm = () => {
+    setSelectedClienteId('');
+    setSearchCliente('');
+    setSearchProducto('');
+    setSelectedProductos([]);
+    setTallasSeleccionadas({});
+    setPlazoSeleccionado(30);
+    setAbonoInicial('0');
+    setMetodoPago('Efectivo');
+    setNotasApartado('');
+  };
+
+  // Registrar abono (VERSIÓN ATÓMICA MEJORADA)
+  const handleRegistrarAbono = async () => {
+    const monto = parseFloat(nuevoAbono);
+
+    if (!monto || monto <= 0) {
+      alert('Ingresa un monto válido');
+      return;
+    }
+
+    if (monto > selectedApartado.saldoPendiente) {
+      alert('El abono no puede ser mayor al saldo pendiente');
+      return;
+    }
+
+    setLoading(true); // Activar loading
+    try {
+      const batch = writeBatch(db);
+      const apartadoRef = doc(db, 'apartados', selectedApartado.id);
+
+      const nuevoTotalAbonado = selectedApartado.totalAbonado + monto;
+      const nuevoSaldoPendiente = selectedApartado.totalApartado - nuevoTotalAbonado;
+      const estaCompletado = nuevoSaldoPendiente <= 0; // Más seguro que === 0
+
+      const nuevoHistorial = {
+        fecha: new Date().toISOString(), // Usar ISO string para historial
+        monto: monto,
+        notas: notasAbono || '',
+        metodoPago: 'Efectivo' // TODO: Permitir seleccionar método de pago
+      };
+
+      const updatedHistorial = [...(selectedApartado.historialAbonos || []), nuevoHistorial];
+
+      // 1. Actualizar el Apartado en el Batch
+      batch.update(apartadoRef, {
+        totalAbonado: nuevoTotalAbonado,
+        saldoPendiente: nuevoSaldoPendiente,
+        estadoGeneral: estaCompletado ? 'Completado' : 'Activo',
+        historialAbonos: updatedHistorial,
+        updatedAt: serverTimestamp()
+      });
+
+      // 2. (NUEVO) Registrar la Transacción del Abono
+      const transactionRef = doc(collection(db, 'transactions'));
+      batch.set(transactionRef, {
+        tipo: 'abono_apartado',
+        monto: monto,
+        metodoPago: 'Efectivo', // TODO: Usar el método de pago seleccionado
+        apartadoId: selectedApartado.id,
+        descripcion: `Abono Apartado #${selectedApartado.id.substring(0, 5)}`,
+        clienteId: selectedApartado.clienteId,
+        clienteNombre: selectedApartado.clienteNombre,
+        fecha: serverTimestamp(),
+        userId: currentUser.uid
+      });
+
+      // 3. (LÓGICA DE CONVERTIRAVENTA INTEGRADA) Si se completa, crear Venta y actualizar Stock
+      if (estaCompletado) {
+        // Crear la venta
+        const ventaData = {
+          clienteId: selectedApartado.clienteId,
+          clienteNombre: selectedApartado.clienteNombre,
+          items: selectedApartado.items,
+          subtotal: selectedApartado.totalApartado,
+          descuento: 0,
+          totalPagado: selectedApartado.totalApartado,
+          metodoPago: 'Apartado Completado',
+          notas: `Venta generada desde apartado completado. ${selectedApartado.notas || ''}`,
+          apartadoId: selectedApartado.id,
+          esFacturaDeApartado: true,
+          createdAt: serverTimestamp(),
+          userId: currentUser.uid
+          // Nota: Falta numeroFactura consecutivo, se puede añadir luego si es crítico
+        };
+        const ventaRef = doc(collection(db, 'sales'));
+        batch.set(ventaRef, ventaData);
+
+        // Actualizar el apartado con el ID de la venta
+        batch.update(apartadoRef, { facturaId: ventaRef.id });
+
+        // Actualizar inventario (decrementar stock y liberar reserva)
+        for (const item of selectedApartado.items) {
+          const productoRef = doc(db, 'products', item.productoId);
+          batch.update(productoRef, {
+            stockTotal: increment(-item.cantidad),
+            stockReservadoApartados: increment(-item.cantidad)
+          });
+        }
+      }
+
+      // 4. Commit Atómico
+      await batch.commit();
+
+      // 5. Preparar Modal de Recibo
+      setLastAbono({
+        monto: monto,
+        fecha: new Date(),
+        notas: notasAbono || '',
+        apartado: selectedApartado,
+        nuevoSaldoPendiente: nuevoSaldoPendiente,
+        nuevoTotalAbonado: nuevoTotalAbonado
+      });
+
+      setNuevoAbono('');
+      setNotasAbono('');
+      fetchApartados(); // Refrescar lista
+      if(estaCompletado) {
+        fetchProductos(); // Refrescar stock si se completó
+      }
+
+      // Actualizar el estado local
+      const updatedApartado = {
+        ...selectedApartado,
+        totalAbonado: nuevoTotalAbonado,
+        saldoPendiente: nuevoSaldoPendiente,
+        estadoGeneral: estaCompletado ? 'Completado' : 'Activo',
+        historialAbonos: updatedHistorial
+      };
+      setSelectedApartado(updatedApartado);
+      setShowAbonoReceiptModal(true);
+
+      if (estaCompletado) {
+        alert('¡Apartado completado y convertido a venta!');
+      }
+
+    } catch (error) {
+      console.error('Error al registrar abono:', error);
+      alert('Error al registrar abono: ' + error.message);
+    } finally {
+      setLoading(false); // Desactivar loading
+    }
+  };
+
+  // Extender plazo
+  const handleExtenderPlazo = async (diasExtension) => {
+    if (!selectedApartado) return;
+
+    try {
+      const nuevaFechaLimite = selectedApartado.fechaLimite.toDate();
+      nuevaFechaLimite.setDate(nuevaFechaLimite.getDate() + diasExtension);
+
+      const apartadoRef = doc(db, 'apartados', selectedApartado.id);
+      await updateDoc(apartadoRef, {
+        fechaLimite: nuevaFechaLimite,
+        diasExtendidos: selectedApartado.diasExtendidos + diasExtension,
+        estadoGeneral: 'Activo', // Reactivar si estaba vencido
+        updatedAt: serverTimestamp()
+      });
+
+      alert(`Plazo extendido por ${diasExtension} días`);
+      fetchApartados();
+
+      const updatedApartado = {
+        ...selectedApartado,
+        fechaLimite: { toDate: () => nuevaFechaLimite },
+        diasExtendidos: selectedApartado.diasExtendidos + diasExtension,
+        estadoGeneral: 'Activo'
+      };
+      setSelectedApartado(updatedApartado);
+
+    } catch (error) {
+      console.error('Error al extender plazo:', error);
+      alert('Error al extender plazo');
+    }
+  };
+
+  // Cancelar apartado
+  const handleCancelarApartado = async () => {
+    if (!selectedApartado) return;
+
+    const confirmar = window.confirm(
+      `¿Estás seguro de cancelar este apartado?\n\n` +
+      `Cliente: ${selectedApartado.clienteNombre}\n` +
+      `Total: $${selectedApartado.totalApartado.toLocaleString()}\n` +
+      `Abonado: $${selectedApartado.totalAbonado.toLocaleString()}\n\n` +
+      `Los productos volverán a estar disponibles en inventario.`
+    );
+
+    if (!confirmar) return;
+
+    try {
+      const batch = writeBatch(db);
+
+      // Actualizar estado del apartado
+      const apartadoRef = doc(db, 'apartados', selectedApartado.id);
+      batch.update(apartadoRef, {
+        estadoGeneral: 'Cancelado',
+        fechaCancelacion: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      // Liberar inventario reservado
+      for (const item of selectedApartado.items) {
+        const productoRef = doc(db, 'products', item.productoId);
+        batch.update(productoRef, {
+          stockReservadoApartados: increment(-item.cantidad)
+        });
+      }
+
+      await batch.commit();
+
+      alert('Apartado cancelado exitosamente. El inventario ha sido liberado.');
+      setShowManageModal(false);
+      setSelectedApartado(null);
+      fetchApartados();
+      fetchProductos();
+
+    } catch (error) {
+      console.error('Error al cancelar apartado:', error);
+      alert('Error al cancelar apartado');
+    }
+  };
+
+  // Facturar apartado
+  const handleFacturarApartado = async () => {
+    if (!selectedApartado) return;
+
+    const saldoPendiente = selectedApartado.saldoPendiente || 0;
+
+    // Paso 1: Preguntar datos de pago final
+    const montoPagadoHoyStr = window.prompt(
+      `Facturación de Apartado\n\n` +
+      `Cliente: ${selectedApartado.clienteNombre}\n` +
+      `Total del apartado: $${selectedApartado.totalApartado.toLocaleString()}\n` +
+      `Ya abonado: $${selectedApartado.totalAbonado.toLocaleString()}\n` +
+      `Saldo pendiente: $${saldoPendiente.toLocaleString()}\n\n` +
+      `Ingresa el monto que paga el cliente HOY:`,
+      saldoPendiente.toString()
+    );
+
+    if (!montoPagadoHoyStr) return; // Usuario canceló
+
+    const montoPagadoHoy = parseFloat(montoPagadoHoyStr) || 0;
+
+    if (montoPagadoHoy < saldoPendiente) {
+      alert(`El monto debe ser al menos $${saldoPendiente.toLocaleString()} (el saldo pendiente)`);
+      return;
+    }
+
+    const metodoPagoFinal = window.prompt(
+      `Método de pago\n\nOpciones: Efectivo, Transferencia, Datafono, Nequi\n\nIngresa el método:`,
+      'Efectivo'
+    );
+
+    if (!metodoPagoFinal) return;
+
+    const confirmar = window.confirm(
+      `¿Confirmar facturación?\n\n` +
+      `Monto a pagar ahora: $${montoPagadoHoy.toLocaleString()}\n` +
+      `Método: ${metodoPagoFinal}\n\n` +
+      `Se generará una factura y el apartado quedará completado.`
+    );
+
+    if (!confirmar) return;
+
+    try {
+      // Paso 2: Obtener siguiente número de factura
+      const salesSnapshot = await getDocs(query(collection(db, 'sales'), orderBy('numeroFactura', 'desc')));
+      let siguienteNumero = 1;
+      if (!salesSnapshot.empty) {
+        const ultimaFactura = salesSnapshot.docs[0].data();
+        siguienteNumero = (ultimaFactura.numeroFactura || 0) + 1;
+      }
+
+      // Paso 3: Preparar datos de la venta
+      const ventaData = {
+        numeroFactura: siguienteNumero,
+        clienteId: selectedApartado.clienteId,
+        clienteNombre: selectedApartado.clienteNombre,
+        clienteTelefono: selectedApartado.clienteTelefono || '',
+        clienteDocumento: selectedApartado.clienteDocumento || '',
+        items: selectedApartado.items,
+        subtotal: selectedApartado.totalApartado,
+        totalVenta: selectedApartado.totalApartado,
+        metodoPago: metodoPagoFinal,
+        montoPagado: montoPagadoHoy,
+        cambio: montoPagadoHoy - saldoPendiente,
+        apartadoId: selectedApartado.id,
+        esFacturaDeApartado: true,
+        totalAbonoPrevio: selectedApartado.totalAbonado,
+        pagoFinal: montoPagadoHoy,
+        userId: currentUser.uid,
+        createdAt: serverTimestamp()
+      };
+
+      // Paso 4: Ejecutar batch
+      const batch = writeBatch(db);
+
+      // Crear venta
+      const ventaRef = doc(collection(db, 'sales'));
+      batch.set(ventaRef, ventaData);
+
+      // Actualizar apartado a Completado
+      const apartadoRef = doc(db, 'apartados', selectedApartado.id);
+      batch.update(apartadoRef, {
+        estadoGeneral: 'Completado',
+        saldoPendiente: 0,
+        totalAbonado: selectedApartado.totalApartado,
+        fechaCompletado: serverTimestamp(),
+        facturaId: ventaRef.id,
+        numeroFactura: siguienteNumero,
+        updatedAt: serverTimestamp()
+      });
+
+      // Actualizar inventario: restar del total y liberar reserva
+      for (const item of selectedApartado.items) {
+        const productoRef = doc(db, 'products', item.productoId);
+        batch.update(productoRef, {
+          stockTotal: increment(-item.cantidad),
+          stockReservadoApartados: increment(-item.cantidad)
+        });
+      }
+
+      // 5. (NUEVO) Registrar Transacción del Pago Final
+      if (montoPagadoHoy > 0) {
+        const transactionRef = doc(collection(db, 'transactions'));
+        batch.set(transactionRef, {
+          tipo: 'abono_apartado', // Se registra como abono
+          monto: montoPagadoHoy,
+          metodoPago: metodoPagoFinal,
+          apartadoId: selectedApartado.id,
+          ventaId: ventaRef.id, // Referencia a la factura que genera
+          descripcion: `Pago final Apartado -> Factura #${siguienteNumero}`,
+          clienteId: selectedApartado.clienteId,
+          clienteNombre: selectedApartado.clienteNombre,
+          fecha: serverTimestamp(),
+          userId: currentUser.uid
+        });
+      }
+
+      await batch.commit();
+
+      // Paso 5: Preparar datos para tirilla de factura
+      setFacturaData({
+        ...ventaData,
+        id: ventaRef.id,
+        fecha: new Date()
+      });
+
+      alert('¡Apartado facturado exitosamente!');
+      setShowManageModal(false);
+      setShowFacturaModal(true);
+      fetchApartados();
+      fetchProductos();
+
+    } catch (error) {
+      console.error('Error al facturar apartado:', error);
+      alert('Error al facturar apartado: ' + error.message);
+    }
+  };
+
+  // Imprimir tirilla
+  const handlePrint = () => {
+    const receiptElement = document.getElementById('receipt-print');
+    if (!receiptElement) {
+      alert('No se pudo encontrar el contenido de la tirilla');
+      return;
+    }
+
+    const printWindow = window.open('', '_blank', 'width=800,height=700');
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Tirilla de Apartado</title>
+        <style>
+          @page { size: 80mm auto; margin: 0; }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            background: #f0f0f0;
+          }
+          #receipt-container {
+            width: 80mm;
+            max-width: 80mm;
+            background: white;
+            margin: 0;
+          }
+        </style>
+      </head>
+      <body>
+        <div id="receipt-container">${receiptElement.innerHTML}</div>
+      </body>
+      </html>
+    `);
+
+    printWindow.document.close();
+    printWindow.onload = () => {
+      setTimeout(() => {
+        printWindow.print();
+        printWindow.close();
+      }, 250);
+    };
+  };
+
+  // Imprimir recibo de abono
+  const handlePrintAbono = () => {
+    const receiptElement = document.getElementById('abono-receipt-print');
+    if (!receiptElement) {
+      alert('No se pudo encontrar el contenido del recibo');
+      return;
+    }
+
+    const printWindow = window.open('', '_blank', 'width=800,height=700');
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Recibo de Abono</title>
+        <style>
+          @page { size: 80mm auto; margin: 0; }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            background: #f0f0f0;
+          }
+          #receipt-container {
+            width: 80mm;
+            max-width: 80mm;
+            background: white;
+            margin: 0;
+          }
+        </style>
+      </head>
+      <body>
+        <div id="receipt-container">${receiptElement.innerHTML}</div>
+      </body>
+      </html>
+    `);
+
+    printWindow.document.close();
+    printWindow.onload = () => {
+      setTimeout(() => {
+        printWindow.print();
+        printWindow.close();
+      }, 250);
+    };
+  };
+
+  // ====== SEND EMAIL ======
+  const handleOpenEmailModal = () => {
+    // Pre-fill with client's email if available
+    const clientEmail = clientes.find(c => c.id === selectedApartado?.clienteId)?.email || '';
+    setEmailRecipient(clientEmail);
+    setShowEmailModal(true);
+  };
+
+  const handleSendEmail = async () => {
+    if (!emailRecipient.trim()) {
+      alert('Por favor ingrese un correo electrónico');
+      return;
+    }
+
+    // Simple email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(emailRecipient)) {
+      alert('Por favor ingrese un correo electrónico válido');
+      return;
+    }
+
+    setSendingEmail(true);
+    try {
+      const sendApartadoEmail = httpsCallable(functions, 'sendApartadoEmail');
+      const result = await sendApartadoEmail({
+        apartadoId: selectedApartado.id,
+        toEmail: emailRecipient.trim()
+      });
+
+      // Actualizar el email del cliente en la base de datos si se ingresó manualmente
+      if (selectedApartado?.clienteId) {
+        try {
+          const clienteActual = clientes.find(c => c.id === selectedApartado.clienteId);
+          // Solo actualizar si el email es diferente o no existe
+          if (clienteActual && clienteActual.email !== emailRecipient.trim()) {
+            const { updateDoc } = await import('firebase/firestore');
+            await updateDoc(doc(db, 'clients', selectedApartado.clienteId), {
+              email: emailRecipient.trim()
+            });
+            console.log('Email del cliente actualizado en la base de datos');
+
+            // Actualizar el cliente en el estado local
+            setClientes(prevClientes =>
+              prevClientes.map(c =>
+                c.id === selectedApartado.clienteId
+                  ? { ...c, email: emailRecipient.trim() }
+                  : c
+              )
+            );
+          }
+        } catch (error) {
+          console.error('Error al actualizar email del cliente:', error);
+          // No mostramos error al usuario, el correo sí se envió
+        }
+      }
+
+      alert('✅ Correo enviado exitosamente a ' + emailRecipient);
+      setShowEmailModal(false);
+    } catch (error) {
+      console.error('Error al enviar correo:', error);
+      alert('❌ Error al enviar el correo: ' + (error.message || 'Error desconocido'));
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
+  // Filtrar apartados
+  const apartadosFiltrados = apartados.filter(apartado => {
+    const matchSearch = apartado.clienteNombre?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                       apartado.clienteTelefono?.includes(searchTerm) ||
+                       apartado.clienteDocumento?.includes(searchTerm);
+
+    const matchEstado = filtroEstado === 'Todos' || apartado.estadoGeneral === filtroEstado;
+
+    return matchSearch && matchEstado;
+  });
+
+  // Paginación
+  const indexOfLastItem = currentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  const apartadosActuales = apartadosFiltrados.slice(indexOfFirstItem, indexOfLastItem);
+  const totalPages = Math.ceil(apartadosFiltrados.length / itemsPerPage);
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-6">
+      {/* Loading State */}
+      {loading && (
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="text-center">
+            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-pink-600 mb-4"></div>
+            <p className="text-gray-600">Cargando datos...</p>
+          </div>
+        </div>
+      )}
+
+      {/* Error State */}
+      {authError && !loading && (
+        <div className="max-w-7xl mx-auto mt-8">
+          <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center">
+            <AlertTriangle className="mx-auto mb-3" size={48} style={{ color: '#dc2626' }} />
+            <h3 className="text-xl font-bold text-red-800 mb-2">Error de autenticación</h3>
+            <p className="text-red-600">{authError}</p>
+            <button
+              onClick={() => window.location.href = '/'}
+              className="mt-4 px-6 py-2 text-white rounded-lg hover:opacity-90"
+              style={{ backgroundColor: '#D50565' }}
+            >
+              Ir al inicio
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main Content */}
+      {!loading && !authError && (
+        <>
+          {/* Header */}
+          <div className="max-w-7xl mx-auto mb-8">
+        <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Apartados</h1>
+            <p className="text-gray-600 mt-1">Gestiona los apartados de tus clientes</p>
+          </div>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base text-white rounded-xl hover:opacity-90 transition-all flex items-center gap-2 font-medium shadow-md"
+            style={{ backgroundColor: '#D50565' }}
+          >
+            <Plus size={20} />
+            <span className="hidden sm:inline">Nuevo Apartado</span>
+            <span className="sm:hidden">Nuevo</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <div className="max-w-7xl mx-auto mb-6">
+        <div className="bg-white rounded-xl shadow-sm p-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Búsqueda */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
+              <input
+                type="text"
+                placeholder="Buscar por cliente, teléfono o documento..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              />
+            </div>
+
+            {/* Filtro de estado */}
+            <select
+              value={filtroEstado}
+              onChange={(e) => setFiltroEstado(e.target.value)}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+            >
+              <option value="Todos">Todos los estados</option>
+              <option value="Activo">Activos</option>
+              <option value="Completado">Completados</option>
+              <option value="Vencido">Vencidos</option>
+              <option value="Cancelado">Cancelados</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Tabla de apartados */}
+      <div className="max-w-7xl mx-auto">
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+
+          {/* Vista de Tarjetas - Solo Móvil */}
+          <div className="md:hidden space-y-4 p-4">
+            {apartadosActuales.length === 0 ? (
+              <div className="py-8 text-center text-gray-500">
+                No se encontraron apartados
+              </div>
+            ) : (
+              apartadosActuales.map((apartado) => {
+                const diasRestantes = calcularDiasRestantes(apartado.fechaLimite);
+                return (
+                  <div key={apartado.id} className="bg-white border rounded-lg p-4 shadow-sm">
+                    {/* Header de la tarjeta */}
+                    <div className="flex justify-between items-start mb-3">
+                      <div className="flex-1">
+                        <p className="font-semibold text-gray-900">{apartado.clienteNombre}</p>
+                        {apartado.clienteTelefono && (
+                          <a
+                            href={`tel:${apartado.clienteTelefono}`}
+                            className="text-sm hover:underline flex items-center gap-1 mt-1"
+                            style={{ color: '#D50565' }}
+                          >
+                            <Phone size={12} />
+                            {apartado.clienteTelefono}
+                          </a>
+                        )}
+                      </div>
+                      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getEstadoBadgeColor(apartado.estadoGeneral)}`}>
+                        {apartado.estadoGeneral}
+                      </span>
+                    </div>
+
+                    {/* Información del apartado */}
+                    <div className="grid grid-cols-2 gap-2 text-sm mb-3">
+                      <div>
+                        <span className="text-gray-500">Productos:</span>
+                        <p className="font-medium text-gray-900">
+                          {apartado.items?.length || 0} producto{apartado.items?.length !== 1 ? 's' : ''}
+                        </p>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Total:</span>
+                        <p className="font-bold text-gray-900">${apartado.totalApartado?.toLocaleString() || 0}</p>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Abonado:</span>
+                        <p className="font-medium text-green-600">${apartado.totalAbonado?.toLocaleString() || 0}</p>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Saldo:</span>
+                        <p className="font-bold text-red-600">${apartado.saldoPendiente?.toLocaleString() || 0}</p>
+                      </div>
+                    </div>
+
+                    {/* Días restantes */}
+                    {diasRestantes !== null && (
+                      <div className={`text-sm mb-3 p-2 rounded ${getColorDiasRestantes(diasRestantes)}`}>
+                        {diasRestantes < 0 ? (
+                          <span className="flex items-center gap-1 justify-center">
+                            <AlertTriangle size={16} />
+                            Vencido hace {Math.abs(diasRestantes)} días
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1 justify-center">
+                            <Clock size={16} />
+                            {diasRestantes} día{diasRestantes !== 1 ? 's' : ''} restante{diasRestantes !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Botones de acción */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setSelectedApartado(apartado);
+                          setShowManageModal(true);
+                        }}
+                        className="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition-opacity text-sm font-medium flex items-center justify-center gap-2"
+                        style={{ backgroundColor: '#D50565' }}
+                      >
+                        <Eye size={16} />
+                        Ver Detalles
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedApartado(apartado);
+                          setShowReceiptModal(true);
+                        }}
+                        className="px-4 py-2 rounded-lg hover:opacity-90 transition-opacity border-2 text-sm font-medium flex items-center justify-center"
+                        style={{ borderColor: '#EA5C2E', color: '#EA5C2E' }}
+                      >
+                        <Printer size={16} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Vista de Tabla - Solo Desktop */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                    Cliente
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                    Productos
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                    Total / Abonado
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                    Saldo Pendiente
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                    Días Restantes
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                    Estado
+                  </th>
+                  <th className="px-6 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                    Acciones
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {apartadosActuales.length === 0 ? (
+                  <tr>
+                    <td colSpan="7" className="px-6 py-8 text-center text-gray-500">
+                      No se encontraron apartados
+                    </td>
+                  </tr>
+                ) : (
+                  apartadosActuales.map((apartado) => {
+                    const diasRestantes = calcularDiasRestantes(apartado.fechaLimite);
+                    return (
+                      <tr key={apartado.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div>
+                            <p className="font-medium text-gray-800">{apartado.clienteNombre}</p>
+                            {apartado.clienteTelefono && (
+                              <a
+                                href={`tel:${apartado.clienteTelefono}`}
+                                className="text-sm hover:underline flex items-center gap-1"
+                                style={{ color: '#D50565' }}
+                              >
+                                <Phone size={12} />
+                                {apartado.clienteTelefono}
+                              </a>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <p className="text-sm text-gray-700">
+                            {apartado.items?.length || 0} producto{apartado.items?.length !== 1 ? 's' : ''}
+                          </p>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm">
+                            <p className="font-semibold text-gray-800">
+                              ${apartado.totalApartado?.toLocaleString() || 0}
+                            </p>
+                            <p className="text-green-600">
+                              ${apartado.totalAbonado?.toLocaleString() || 0}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <p className="font-semibold text-red-600">
+                            ${apartado.saldoPendiente?.toLocaleString() || 0}
+                          </p>
+                        </td>
+                        <td className="px-6 py-4">
+                          {diasRestantes !== null ? (
+                            <div className={getColorDiasRestantes(diasRestantes)}>
+                              {diasRestantes < 0 ? (
+                                <span className="flex items-center gap-1">
+                                  <AlertTriangle size={16} />
+                                  Vencido hace {Math.abs(diasRestantes)} días
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-1">
+                                  <Clock size={16} />
+                                  {diasRestantes} día{diasRestantes !== 1 ? 's' : ''}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-gray-400">-</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getEstadoBadgeColor(apartado.estadoGeneral)}`}>
+                            {apartado.estadoGeneral}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex justify-center gap-2">
+                            <button
+                              onClick={() => {
+                                setSelectedApartado(apartado);
+                                setShowManageModal(true);
+                              }}
+                              className="p-2 hover:bg-pink-50 rounded-lg transition-colors"
+                              style={{ color: '#D50565' }}
+                              title="Ver detalles"
+                            >
+                              <Eye size={20} />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSelectedApartado(apartado);
+                                setShowReceiptModal(true);
+                              }}
+                              className="p-2 hover:bg-orange-50 rounded-lg transition-colors"
+                              style={{ color: '#EA5C2E' }}
+                              title="Imprimir tirilla"
+                            >
+                              <Printer size={20} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Paginación */}
+          {totalPages > 1 && (
+            <div className="px-4 sm:px-6 py-4 border-t border-gray-200 flex flex-col sm:flex-row justify-between items-center gap-3">
+              <p className="text-xs sm:text-sm text-gray-600 text-center sm:text-left">
+                <span className="hidden sm:inline">
+                  Mostrando {indexOfFirstItem + 1} - {Math.min(indexOfLastItem, apartadosFiltrados.length)} de {apartadosFiltrados.length}
+                </span>
+                <span className="sm:hidden">
+                  {indexOfFirstItem + 1}-{Math.min(indexOfLastItem, apartadosFiltrados.length)} de {apartadosFiltrados.length}
+                </span>
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 sm:px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <span className="hidden sm:inline">Anterior</span>
+                  <span className="sm:hidden">&larr;</span>
+                </button>
+                <span className="sm:hidden flex items-center px-3 text-sm font-medium text-gray-700">
+                  Pág. {currentPage} de {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                  className="px-3 sm:px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <span className="hidden sm:inline">Siguiente</span>
+                  <span className="sm:hidden">&rarr;</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Modal: Crear Apartado */}
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10 rounded-t-xl">
+              <h2 className="text-2xl font-bold text-gray-800">Nuevo Apartado</h2>
+              <button
+                onClick={() => {
+                  setShowCreateModal(false);
+                  resetCreateForm();
+                }}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Selección de cliente */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Cliente *
+                </label>
+                <div className="relative mb-2">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+                  <input
+                    type="text"
+                    placeholder="Buscar cliente por nombre, teléfono o documento..."
+                    value={searchCliente}
+                    onChange={(e) => setSearchCliente(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                  />
+                </div>
+                {searchCliente && (
+                  <div className="border border-gray-300 rounded-lg max-h-48 overflow-y-auto mt-2">
+                    {clientesFiltrados.length === 0 ? (
+                      <p className="p-4 text-center text-gray-500">No se encontraron clientes</p>
+                    ) : (
+                      clientesFiltrados.map(cliente => {
+                        const nombreCliente = cliente.nombreCompleto || cliente.nombre || 'Sin nombre';
+                        const documentoCliente = cliente.numeroDocumento || cliente.documento;
+                        return (
+                          <div
+                            key={cliente.id}
+                            onClick={() => {
+                              setSelectedClienteId(cliente.id);
+                              setSearchCliente(nombreCliente);
+                            }}
+                            className={`p-3 border-b border-gray-100 last:border-0 cursor-pointer hover:bg-pink-50 transition-colors ${
+                              selectedClienteId === cliente.id ? 'bg-pink-100' : ''
+                            }`}
+                          >
+                            <p className="font-medium text-gray-800">{nombreCliente}</p>
+                            <p className="text-sm text-gray-600">
+                              {cliente.telefono && `Tel: ${cliente.telefono}`}
+                              {cliente.telefono && documentoCliente && ' | '}
+                              {documentoCliente && `Doc: ${documentoCliente}`}
+                            </p>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Plazo */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Plazo (días)
+                </label>
+                <select
+                  value={plazoSeleccionado}
+                  onChange={(e) => setPlazoSeleccionado(parseInt(e.target.value))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                >
+                  <option value={15}>15 días</option>
+                  <option value={30}>30 días</option>
+                  <option value={45}>45 días</option>
+                  <option value={60}>60 días</option>
+                </select>
+              </div>
+
+              {/* Selección de productos */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Agregar Productos
+                </label>
+                <div className="relative mb-2">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+                  <input
+                    type="text"
+                    placeholder="Buscar producto por nombre o referencia..."
+                    value={searchProducto}
+                    onChange={(e) => setSearchProducto(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                  />
+                </div>
+                {searchProducto && (
+                  <div className="border border-gray-300 rounded-lg p-4 max-h-64 overflow-y-auto mt-2">
+                    {productosFiltrados.length === 0 ? (
+                      <p className="text-center text-gray-500">No se encontraron productos con stock disponible</p>
+                    ) : (
+                      productosFiltrados.map(producto => {
+                        const stockDisponible = (producto.stockTotal || 0) - (producto.stockReservadoApartados || 0);
+                        const tallaKey = `${producto.id}`;
+                        return (
+                          <div key={producto.id} className="flex justify-between items-center py-3 border-b border-gray-100 last:border-0">
+                            <div className="flex-1">
+                              <p className="font-medium text-gray-800">{producto.nombre}</p>
+                              <p className="text-sm text-gray-600">
+                                Ref: {producto.referencia} | Disponible: {stockDisponible}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {producto.tallas && producto.tallas.length > 0 && (
+                                <select
+                                  value={tallasSeleccionadas[tallaKey] || producto.tallas[0]}
+                                  onChange={(e) => handleTallaChange(tallaKey, e.target.value)}
+                                  className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+                                >
+                                  {producto.tallas.map(talla => (
+                                    <option key={talla} value={talla}>{talla}</option>
+                                  ))}
+                                </select>
+                              )}
+                              <button
+                                onClick={() => agregarProducto(producto)}
+                                className="px-3 py-1 text-white rounded hover:opacity-90 text-sm transition-all"
+                                style={{ backgroundColor: '#EA5C2E' }}
+                              >
+                                Agregar
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Productos seleccionados */}
+              {selectedProductos.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Productos Seleccionados ({selectedProductos.length})
+                  </label>
+                  <div className="border border-gray-300 rounded-lg overflow-hidden">
+                    <table className="w-full">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700">Producto</th>
+                          <th className="px-4 py-2 text-center text-sm font-semibold text-gray-700">Talla</th>
+                          <th className="px-4 py-2 text-center text-sm font-semibold text-gray-700">Cantidad</th>
+                          <th className="px-4 py-2 text-right text-sm font-semibold text-gray-700">Precio Unit.</th>
+                          <th className="px-4 py-2 text-right text-sm font-semibold text-gray-700">Subtotal</th>
+                          <th className="px-4 py-2 text-center text-sm font-semibold text-gray-700">Acción</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {selectedProductos.map((producto, index) => (
+                          <tr key={index}>
+                            <td className="px-4 py-2 text-sm text-gray-800">{producto.nombre}</td>
+                            <td className="px-4 py-2 text-center text-sm text-gray-600">{producto.tallaSeleccionada}</td>
+                            <td className="px-4 py-2 text-center">
+                              <input
+                                type="number"
+                                min="1"
+                                max={producto.stockDisponible}
+                                value={producto.cantidad}
+                                onChange={(e) => actualizarCantidadProducto(index, e.target.value)}
+                                className="w-16 px-2 py-1 border border-gray-300 rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+                              />
+                            </td>
+                            <td className="px-4 py-2 text-right text-sm text-gray-800">
+                              ${producto.precioUnitario.toLocaleString()}
+                            </td>
+                            <td className="px-4 py-2 text-right text-sm font-semibold text-gray-800">
+                              ${(producto.cantidad * producto.precioUnitario).toLocaleString()}
+                            </td>
+                            <td className="px-4 py-2 text-center">
+                              <button
+                                onClick={() => eliminarProducto(index)}
+                                className="text-red-600 hover:text-red-700"
+                              >
+                                <XCircle size={18} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Total y abono inicial */}
+              {selectedProductos.length > 0 && (
+                <div className="rounded-lg p-4 space-y-4" style={{ backgroundColor: '#FFF1E5' }}>
+                  <div className="flex justify-between items-center text-lg">
+                    <span className="font-semibold text-gray-700">Total del Apartado:</span>
+                    <span className="font-bold text-gray-900">
+                      ${calcularTotales().subtotal.toLocaleString()}
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Abono Inicial (opcional)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={calcularTotales().subtotal}
+                      value={abonoInicial}
+                      onChange={(e) => setAbonoInicial(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                      placeholder="0"
+                    />
+                  </div>
+
+                  {parseFloat(abonoInicial) > 0 && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Método de Pago
+                        </label>
+                        <select
+                          value={metodoPago}
+                          onChange={(e) => setMetodoPago(e.target.value)}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                        >
+                          <option value="Efectivo">Efectivo</option>
+                          <option value="Transferencia">Transferencia</option>
+                          <option value="Datafono">Datafono</option>
+                        </select>
+                      </div>
+
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-medium text-gray-700">Saldo Pendiente:</span>
+                        <span className="font-bold text-red-600">
+                          ${(calcularTotales().subtotal - parseFloat(abonoInicial)).toLocaleString()}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Notas */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Notas (opcional)
+                </label>
+                <textarea
+                  value={notasApartado}
+                  onChange={(e) => setNotasApartado(e.target.value)}
+                  rows="3"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                  placeholder="Observaciones del apartado..."
+                />
+              </div>
+            </div>
+
+            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-3 rounded-b-xl">
+              <button
+                onClick={() => {
+                  setShowCreateModal(false);
+                  resetCreateForm();
+                }}
+                className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 font-medium"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCrearApartado}
+                disabled={!selectedClienteId || selectedProductos.length === 0}
+                className="px-6 py-2 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                style={{ backgroundColor: '#D50565' }}
+              >
+                Crear Apartado
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Gestionar Apartado - Continuará en el siguiente bloque... */}
+      {showManageModal && selectedApartado && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10 rounded-t-xl">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-800">
+                  Gestión de Apartado
+                </h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  Cliente: {selectedApartado.clienteNombre}
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    setSelectedApartado(selectedApartado);
+                    setShowReceiptModal(true);
+                  }}
+                  className="px-4 py-2 text-white rounded-lg hover:opacity-90 font-medium flex items-center gap-2"
+                  style={{ backgroundColor: '#EA5C2E' }}
+                >
+                  <Printer size={18} />
+                  Imprimir Tirilla
+                </button>
+                <button
+                  onClick={() => {
+                    setShowManageModal(false);
+                    setSelectedApartado(null);
+                    setNuevoAbono('');
+                    setNotasAbono('');
+                  }}
+                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                >
+                  &times;
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Información general */}
+              <div className="rounded-lg p-4" style={{ backgroundColor: '#C5D6EF' }}>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-700">Total Apartado</p>
+                    <p className="text-lg font-bold text-gray-900">
+                      ${selectedApartado.totalApartado?.toLocaleString()}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-700">Total Abonado</p>
+                    <p className="text-lg font-bold text-green-600">
+                      ${selectedApartado.totalAbonado?.toLocaleString()}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-700">Saldo Pendiente</p>
+                    <p className="text-lg font-bold text-red-600">
+                      ${selectedApartado.saldoPendiente?.toLocaleString()}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-700">Estado</p>
+                    <span className={`inline-block px-3 py-1 rounded-full text-sm font-semibold ${getEstadoBadgeColor(selectedApartado.estadoGeneral)}`}>
+                      {selectedApartado.estadoGeneral}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Información de plazo */}
+              <div className="rounded-lg p-4" style={{ backgroundColor: '#FFF1E5' }}>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-600">Plazo Original</p>
+                    <p className="text-lg font-semibold text-gray-900">
+                      {selectedApartado.plazoOriginalDias} días
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Días Extendidos</p>
+                    <p className="text-lg font-semibold text-gray-900">
+                      {selectedApartado.diasExtendidos || 0} días
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Días Restantes</p>
+                    <p className={`text-lg font-semibold ${getColorDiasRestantes(calcularDiasRestantes(selectedApartado.fechaLimite))}`}>
+                      {(() => {
+                        const dias = calcularDiasRestantes(selectedApartado.fechaLimite);
+                        if (dias < 0) return `Vencido hace ${Math.abs(dias)} días`;
+                        return `${dias} día${dias !== 1 ? 's' : ''}`;
+                      })()}
+                    </p>
+                  </div>
+                </div>
+
+                {(selectedApartado.estadoGeneral === 'Activo' || selectedApartado.estadoGeneral === 'Vencido') && (
+                  <div className="mt-4 flex gap-2">
+                    <button
+                      onClick={() => handleExtenderPlazo(15)}
+                      className="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition-all flex items-center justify-center gap-2"
+                      style={{ backgroundColor: '#EA5C2E' }}
+                    >
+                      <Calendar size={18} />
+                      Extender 15 días
+                    </button>
+                    <button
+                      onClick={() => handleExtenderPlazo(30)}
+                      className="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition-all flex items-center justify-center gap-2"
+                      style={{ backgroundColor: '#D50565' }}
+                    >
+                      <Calendar size={18} />
+                      Extender 30 días
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Productos */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800 mb-3">Productos</h3>
+                <div className="border border-gray-300 rounded-lg overflow-hidden">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700">Producto</th>
+                        <th className="px-4 py-2 text-center text-sm font-semibold text-gray-700">Talla</th>
+                        <th className="px-4 py-2 text-center text-sm font-semibold text-gray-700">Cantidad</th>
+                        <th className="px-4 py-2 text-right text-sm font-semibold text-gray-700">Precio Unit.</th>
+                        <th className="px-4 py-2 text-right text-sm font-semibold text-gray-700">Subtotal</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {selectedApartado.items?.map((item, index) => (
+                        <tr key={index}>
+                          <td className="px-4 py-2 text-sm text-gray-800">{item.nombre}</td>
+                          <td className="px-4 py-2 text-center text-sm text-gray-600">{item.talla}</td>
+                          <td className="px-4 py-2 text-center text-sm text-gray-600">{item.cantidad}</td>
+                          <td className="px-4 py-2 text-right text-sm text-gray-800">
+                            ${item.precioUnitario?.toLocaleString()}
+                          </td>
+                          <td className="px-4 py-2 text-right text-sm font-semibold text-gray-800">
+                            ${item.subtotal?.toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Registrar abono */}
+              {selectedApartado.estadoGeneral === 'Activo' && selectedApartado.saldoPendiente > 0 && (
+                <div className="bg-green-50 rounded-lg p-4 border-2 border-green-200">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                    <DollarSign size={20} style={{ color: '#D50565' }} />
+                    Registrar Abono
+                  </h3>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Monto del Abono
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        max={selectedApartado.saldoPendiente}
+                        value={nuevoAbono}
+                        onChange={(e) => setNuevoAbono(e.target.value)}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                        placeholder="0"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Notas del Abono (opcional)
+                      </label>
+                      <input
+                        type="text"
+                        value={notasAbono}
+                        onChange={(e) => setNotasAbono(e.target.value)}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                        placeholder="Observaciones..."
+                      />
+                    </div>
+                    <button
+                      onClick={handleRegistrarAbono}
+                      disabled={!nuevoAbono || parseFloat(nuevoAbono) <= 0}
+                      className="w-full px-4 py-2 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed font-medium flex items-center justify-center gap-2"
+                      style={{ backgroundColor: '#D50565' }}
+                    >
+                      <CheckCircle size={18} />
+                      Registrar Abono
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Historial de abonos */}
+              {selectedApartado.historialAbonos && selectedApartado.historialAbonos.length > 0 && (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-800 mb-3">Historial de Abonos</h3>
+                  <div className="border border-gray-300 rounded-lg overflow-hidden">
+                    <table className="w-full">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700">Fecha</th>
+                          <th className="px-4 py-2 text-right text-sm font-semibold text-gray-700">Monto</th>
+                          <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700">Notas</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {selectedApartado.historialAbonos.map((abono, index) => (
+                          <tr key={index}>
+                            <td className="px-4 py-2 text-sm text-gray-600">
+                              {abono.fecha?.toDate?.()?.toLocaleDateString('es-CO') || 'Fecha no disponible'}
+                            </td>
+                            <td className="px-4 py-2 text-right text-sm font-semibold text-green-600">
+                              ${abono.monto?.toLocaleString()}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-gray-600">
+                              {abono.notas || '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Notas del apartado */}
+              {selectedApartado.notas && (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">Notas</h3>
+                  <p className="text-gray-600 bg-gray-50 rounded-lg p-3">
+                    {selectedApartado.notas}
+                  </p>
+                </div>
+              )}
+
+              {/* Botón cancelar apartado */}
+              {(selectedApartado.estadoGeneral === 'Activo' || selectedApartado.estadoGeneral === 'Vencido') && (
+                <div className="border-t border-gray-200 pt-4">
+                  <button
+                    onClick={handleCancelarApartado}
+                    className="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium flex items-center justify-center gap-2"
+                  >
+                    <XCircle size={18} />
+                    Cancelar Apartado
+                  </button>
+                  <p className="text-xs text-gray-500 text-center mt-2">
+                    El inventario será liberado y el apartado quedará cancelado
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-3 rounded-b-xl">
+              {(selectedApartado.estadoGeneral === 'Activo' || selectedApartado.estadoGeneral === 'Vencido') && (
+                <button
+                  onClick={handleFacturarApartado}
+                  className="px-6 py-2 text-white rounded-lg hover:opacity-90 font-medium flex items-center gap-2"
+                  style={{ backgroundColor: '#EA5C2E' }}
+                >
+                  <CheckCircle size={18} />
+                  Facturar Apartado
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  setShowManageModal(false);
+                  setSelectedApartado(null);
+                  setNuevoAbono('');
+                  setNotasAbono('');
+                }}
+                className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 font-medium"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Imprimir Tirilla de Apartado - CONTINÚA... */}
+      {showReceiptModal && selectedApartado && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10 rounded-t-xl">
+              <h2 className="text-xl font-bold text-gray-800">Vista Previa - Tirilla</h2>
+              <button
+                onClick={() => {
+                  setShowReceiptModal(false);
+                  if (!showManageModal) {
+                    setSelectedApartado(null);
+                  }
+                }}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="p-6">
+              {/* Contenido de la tirilla */}
+              <div id="receipt-print" style={{
+                maxWidth: '300px',
+                margin: '0 auto',
+                padding: '16px',
+                backgroundColor: '#fff',
+                border: '1px solid #ccc',
+                fontFamily: 'Arial, sans-serif'
+              }}>
+                {/* Encabezado */}
+                <div style={{ textAlign: 'center', marginBottom: '16px' }}>
+                  <h3 style={{ fontWeight: 'bold', fontSize: '18px', margin: '10px 0 8px 0' }}>
+                    {companyConfig?.nombre || 'MARTHA ROMERO UNIFORMES'}
+                  </h3>
+                  {companyConfig?.direccion && (
+                    <p style={{ fontSize: '12px', margin: '4px 0', color: '#666' }}>
+                      {companyConfig.direccion}
+                    </p>
+                  )}
+                  {companyConfig?.telefono && (
+                    <p style={{ fontSize: '12px', margin: '4px 0', color: '#666' }}>
+                      Tel: {companyConfig.telefono}
+                    </p>
+                  )}
+                  {companyConfig?.nit && (
+                    <p style={{ fontSize: '12px', margin: '4px 0', color: '#666' }}>
+                      NIT: {companyConfig.nit}
+                    </p>
+                  )}
+                </div>
+
+                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
+
+                {/* Tipo de documento */}
+                <div style={{ textAlign: 'center', marginBottom: '12px' }}>
+                  <h4 style={{ fontWeight: 'bold', fontSize: '16px', margin: '0' }}>
+                    APARTADO
+                  </h4>
+                </div>
+
+                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
+
+                {/* Información del cliente */}
+                <div style={{ marginBottom: '12px', fontSize: '12px' }}>
+                  <p style={{ margin: '4px 0' }}>
+                    <strong>Cliente:</strong> {selectedApartado.clienteNombre}
+                  </p>
+                  {selectedApartado.clienteTelefono && (
+                    <p style={{ margin: '4px 0' }}>
+                      <strong>Teléfono:</strong> {selectedApartado.clienteTelefono}
+                    </p>
+                  )}
+                  <p style={{ margin: '4px 0' }}>
+                    <strong>Fecha:</strong> {selectedApartado.createdAt?.toDate?.()?.toLocaleDateString('es-CO') || 'N/A'}
+                  </p>
+                  <p style={{ margin: '4px 0' }}>
+                    <strong>Fecha Límite:</strong> {selectedApartado.fechaLimite?.toDate?.()?.toLocaleDateString('es-CO') || 'N/A'}
+                  </p>
+                  {(() => {
+                    const dias = calcularDiasRestantes(selectedApartado.fechaLimite);
+                    return dias !== null && (
+                      <p style={{ margin: '4px 0', color: dias < 0 ? '#dc2626' : (dias <= 5 ? '#ea580c' : '#16a34a') }}>
+                        <strong>Días Restantes:</strong> {dias < 0 ? `Vencido hace ${Math.abs(dias)} días` : `${dias} día${dias !== 1 ? 's' : ''}`}
+                      </p>
+                    );
+                  })()}
+                </div>
+
+                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
+
+                {/* Productos */}
+                <div style={{ marginBottom: '12px' }}>
+                  <table style={{ width: '100%', fontSize: '11px', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: 'left', paddingBottom: '8px', borderBottom: '1px solid #000' }}>Producto</th>
+                        <th style={{ textAlign: 'center', paddingBottom: '8px', borderBottom: '1px solid #000' }}>Cant</th>
+                        <th style={{ textAlign: 'right', paddingBottom: '8px', borderBottom: '1px solid #000' }}>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedApartado.items?.map((item, index) => (
+                        <tr key={index}>
+                          <td style={{ paddingTop: '8px', paddingBottom: '4px' }}>
+                            <div style={{ fontWeight: '600' }}>{item.nombre}</div>
+                            <div style={{ fontSize: '10px', color: '#666' }}>
+                              Ref: {item.referencia} | Talla: {item.talla}
+                            </div>
+                            <div style={{ fontSize: '10px', color: '#666' }}>
+                              ${item.precioUnitario?.toLocaleString()} c/u
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'center', paddingTop: '8px', verticalAlign: 'top' }}>
+                            {item.cantidad}
+                          </td>
+                          <td style={{ textAlign: 'right', paddingTop: '8px', verticalAlign: 'top' }}>
+                            ${item.subtotal?.toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
+
+                {/* Totales */}
+                <div style={{ fontSize: '13px', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0' }}>
+                    <strong>TOTAL APARTADO:</strong>
+                    <strong>${selectedApartado.totalApartado?.toLocaleString()}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', color: '#16a34a' }}>
+                    <strong>Total Abonado:</strong>
+                    <strong>${selectedApartado.totalAbonado?.toLocaleString()}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', color: '#dc2626' }}>
+                    <strong>SALDO PENDIENTE:</strong>
+                    <strong>${selectedApartado.saldoPendiente?.toLocaleString()}</strong>
+                  </div>
+                </div>
+
+                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
+
+                {/* Información adicional */}
+                <div style={{ fontSize: '10px', textAlign: 'center', color: '#666', marginTop: '12px' }}>
+                  <p style={{ margin: '4px 0' }}>Estado: {selectedApartado.estadoGeneral}</p>
+                  {selectedApartado.notas && (
+                    <p style={{ margin: '8px 0', fontStyle: 'italic' }}>
+                      Notas: {selectedApartado.notas}
+                    </p>
+                  )}
+                  <p style={{ margin: '12px 0 4px 0' }}>
+                    Gracias por su preferencia
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-3 rounded-b-xl">
+              <div className="flex gap-3">
+                <button
+                  onClick={handlePrint}
+                  className="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 font-medium flex items-center justify-center gap-2"
+                  style={{ backgroundColor: '#EA5C2E' }}
+                >
+                  <Printer size={18} />
+                  Imprimir
+                </button>
+                <button
+                  onClick={handleOpenEmailModal}
+                  className="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 font-medium flex items-center justify-center gap-2"
+                  style={{ backgroundColor: '#D50565' }}
+                >
+                  📧 Enviar por Correo
+                </button>
+              </div>
+              <button
+                onClick={() => {
+                  setShowReceiptModal(false);
+                  if (!showManageModal) {
+                    setSelectedApartado(null);
+                  }
+                }}
+                className="w-full px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 font-medium"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Recibo de Abono */}
+      {showAbonoReceiptModal && lastAbono && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10 rounded-t-xl">
+              <h2 className="text-xl font-bold text-gray-800">Recibo de Abono</h2>
+              <button
+                onClick={() => {
+                  setShowAbonoReceiptModal(false);
+                  setLastAbono(null);
+                }}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="p-6">
+              {/* Contenido del recibo de abono */}
+              <div id="abono-receipt-print" style={{
+                maxWidth: '300px',
+                margin: '0 auto',
+                padding: '16px',
+                backgroundColor: '#fff',
+                border: '1px solid #ccc',
+                fontFamily: 'Arial, sans-serif'
+              }}>
+                {/* Encabezado */}
+                <div style={{ textAlign: 'center', marginBottom: '16px' }}>
+                  <h3 style={{ fontWeight: 'bold', fontSize: '18px', margin: '10px 0 8px 0' }}>
+                    {companyConfig?.nombre || 'MARTHA ROMERO UNIFORMES'}
+                  </h3>
+                  {companyConfig?.direccion && (
+                    <p style={{ fontSize: '12px', margin: '4px 0', color: '#666' }}>
+                      {companyConfig.direccion}
+                    </p>
+                  )}
+                  {companyConfig?.telefono && (
+                    <p style={{ fontSize: '12px', margin: '4px 0', color: '#666' }}>
+                      Tel: {companyConfig.telefono}
+                    </p>
+                  )}
+                  {companyConfig?.nit && (
+                    <p style={{ fontSize: '12px', margin: '4px 0', color: '#666' }}>
+                      NIT: {companyConfig.nit}
+                    </p>
+                  )}
+                </div>
+
+                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
+
+                {/* Tipo de documento */}
+                <div style={{ textAlign: 'center', marginBottom: '12px' }}>
+                  <h4 style={{ fontWeight: 'bold', fontSize: '16px', margin: '0' }}>
+                    RECIBO DE ABONO
+                  </h4>
+                </div>
+
+                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
+
+                {/* Información */}
+                <div style={{ marginBottom: '12px', fontSize: '12px' }}>
+                  <p style={{ margin: '4px 0' }}>
+                    <strong>Cliente:</strong> {lastAbono.apartado.clienteNombre}
+                  </p>
+                  {lastAbono.apartado.clienteTelefono && (
+                    <p style={{ margin: '4px 0' }}>
+                      <strong>Teléfono:</strong> {lastAbono.apartado.clienteTelefono}
+                    </p>
+                  )}
+                  <p style={{ margin: '4px 0' }}>
+                    <strong>Fecha:</strong> {lastAbono.fecha.toLocaleDateString('es-CO')}
+                  </p>
+                  <p style={{ margin: '4px 0' }}>
+                    <strong>Hora:</strong> {lastAbono.fecha.toLocaleTimeString('es-CO')}
+                  </p>
+                </div>
+
+                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
+
+                {/* Detalles del abono */}
+                <div style={{ fontSize: '14px', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '8px 0' }}>
+                    <span>Total Apartado:</span>
+                    <span>${lastAbono.apartado.totalApartado?.toLocaleString()}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '8px 0', color: '#16a34a', fontWeight: 'bold', fontSize: '16px' }}>
+                    <span>ABONO RECIBIDO:</span>
+                    <span>${lastAbono.monto.toLocaleString()}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '8px 0' }}>
+                    <span>Total Abonado:</span>
+                    <span>${lastAbono.nuevoTotalAbonado.toLocaleString()}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '8px 0', color: '#dc2626', fontWeight: 'bold' }}>
+                    <span>SALDO PENDIENTE:</span>
+                    <span>${lastAbono.nuevoSaldoPendiente.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                {lastAbono.notas && (
+                  <>
+                    <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
+                    <div style={{ fontSize: '11px', marginBottom: '12px' }}>
+                      <p style={{ margin: '4px 0' }}>
+                        <strong>Observaciones:</strong>
+                      </p>
+                      <p style={{ margin: '4px 0', fontStyle: 'italic' }}>
+                        {lastAbono.notas}
+                      </p>
+                    </div>
+                  </>
+                )}
+
+                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
+
+                {/* Información adicional */}
+                <div style={{ fontSize: '10px', textAlign: 'center', color: '#666', marginTop: '12px' }}>
+                  {lastAbono.nuevoSaldoPendiente === 0 ? (
+                    <p style={{ margin: '8px 0', fontWeight: 'bold', color: '#16a34a', fontSize: '12px' }}>
+                      ¡APARTADO COMPLETADO!
+                    </p>
+                  ) : (
+                    <p style={{ margin: '8px 0' }}>
+                      Fecha límite: {lastAbono.apartado.fechaLimite?.toDate?.()?.toLocaleDateString('es-CO')}
+                    </p>
+                  )}
+                  <p style={{ margin: '12px 0 4px 0' }}>
+                    Gracias por su abono
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-3 rounded-b-xl">
+              <button
+                onClick={() => {
+                  setShowAbonoReceiptModal(false);
+                  setLastAbono(null);
+                }}
+                className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 font-medium"
+              >
+                Cerrar
+              </button>
+              <button
+                onClick={handlePrintAbono}
+                className="px-6 py-2 text-white rounded-lg hover:opacity-90 font-medium flex items-center gap-2"
+                style={{ backgroundColor: '#D50565' }}
+              >
+                <Printer size={18} />
+                Imprimir Recibo
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Imprimir Factura de Apartado */}
+      {showFacturaModal && facturaData && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10 rounded-t-xl">
+              <h2 className="text-xl font-bold text-gray-800">Factura de Venta</h2>
+              <button
+                onClick={() => {
+                  setShowFacturaModal(false);
+                  setFacturaData(null);
+                }}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="p-6">
+              <div id="factura-print" style={{ fontFamily: 'Arial, sans-serif', fontSize: '12px', lineHeight: '1.4' }}>
+                {/* Header */}
+                <div style={{ textAlign: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '2px dashed #000' }}>
+                  <h2 style={{ fontSize: '18px', fontWeight: 'bold', margin: '0 0 8px 0' }}>
+                    {companyConfig?.nombre || 'UNIFORMES MARTHA ROMERO'}
+                  </h2>
+                  {companyConfig?.direccion && (
+                    <p style={{ margin: '4px 0', fontSize: '11px' }}>{companyConfig.direccion}</p>
+                  )}
+                  {companyConfig?.telefono && (
+                    <p style={{ margin: '4px 0', fontSize: '11px' }}>Tel: {companyConfig.telefono}</p>
+                  )}
+                  {companyConfig?.nit && (
+                    <p style={{ margin: '4px 0', fontSize: '11px' }}>NIT: {companyConfig.nit}</p>
+                  )}
+                </div>
+
+                {/* Tipo de documento */}
+                <div style={{ textAlign: 'center', marginBottom: '16px' }}>
+                  <h3 style={{ fontSize: '16px', fontWeight: 'bold', margin: '0 0 4px 0' }}>
+                    FACTURA DE VENTA
+                  </h3>
+                  <p style={{ fontSize: '14px', fontWeight: 'bold', margin: '4px 0' }}>
+                    N° {facturaData.numeroFactura}
+                  </p>
+                  <p style={{ fontSize: '10px', margin: '4px 0' }}>
+                    {facturaData.fecha?.toLocaleDateString('es-CO', {
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </p>
+                  <p style={{ fontSize: '10px', margin: '4px 0', fontStyle: 'italic', color: '#666' }}>
+                    (Apartado Completado)
+                  </p>
+                </div>
+
+                {/* Info del cliente */}
+                <div style={{ marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid #ddd', fontSize: '11px' }}>
+                  <p style={{ margin: '4px 0' }}>
+                    <strong>Cliente:</strong> {facturaData.clienteNombre}
+                  </p>
+                  {facturaData.clienteTelefono && (
+                    <p style={{ margin: '4px 0' }}>
+                      <strong>Teléfono:</strong> {facturaData.clienteTelefono}
+                    </p>
+                  )}
+                  {facturaData.clienteDocumento && (
+                    <p style={{ margin: '4px 0' }}>
+                      <strong>Documento:</strong> {facturaData.clienteDocumento}
+                    </p>
+                  )}
+                </div>
+
+                {/* Items */}
+                <div style={{ marginBottom: '16px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10px' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid #000' }}>
+                        <th style={{ padding: '4px', textAlign: 'left' }}>Producto</th>
+                        <th style={{ padding: '4px', textAlign: 'center' }}>Cant.</th>
+                        <th style={{ padding: '4px', textAlign: 'right' }}>Precio</th>
+                        <th style={{ padding: '4px', textAlign: 'right' }}>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {facturaData.items?.map((item, index) => (
+                        <tr key={index} style={{ borderBottom: '1px dashed #ddd' }}>
+                          <td style={{ padding: '6px 4px' }}>
+                            <div>{item.nombre}</div>
+                            <div style={{ fontSize: '9px', color: '#666' }}>Talla: {item.talla}</div>
+                          </td>
+                          <td style={{ padding: '6px 4px', textAlign: 'center' }}>{item.cantidad}</td>
+                          <td style={{ padding: '6px 4px', textAlign: 'right' }}>
+                            ${item.precioUnitario?.toLocaleString()}
+                          </td>
+                          <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 'bold' }}>
+                            ${item.subtotal?.toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Totales */}
+                <div style={{ marginBottom: '16px', paddingTop: '12px', borderTop: '2px solid #000' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '8px 0', fontSize: '14px', fontWeight: 'bold' }}>
+                    <span>SUBTOTAL:</span>
+                    <span>${facturaData.subtotal?.toLocaleString()}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '8px 0', fontSize: '16px', fontWeight: 'bold' }}>
+                    <span>TOTAL:</span>
+                    <span>${facturaData.totalVenta?.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                {/* Desglose de pagos */}
+                <div style={{ marginBottom: '16px', padding: '12px', backgroundColor: '#f0f0f0', borderRadius: '4px', fontSize: '11px' }}>
+                  <p style={{ margin: '4px 0', fontWeight: 'bold', textAlign: 'center', marginBottom: '8px' }}>
+                    DESGLOSE DE PAGOS
+                  </p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0' }}>
+                    <span>Abonos previos:</span>
+                    <span>${facturaData.totalAbonoPrevio?.toLocaleString()}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontWeight: 'bold', color: '#16a34a' }}>
+                    <span>Pago final ({facturaData.metodoPago}):</span>
+                    <span>${facturaData.pagoFinal?.toLocaleString()}</span>
+                  </div>
+                  {facturaData.cambio > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', fontWeight: 'bold' }}>
+                      <span>Cambio:</span>
+                      <span>${facturaData.cambio?.toLocaleString()}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
+
+                {/* Footer */}
+                <div style={{ textAlign: 'center', fontSize: '10px', color: '#666', marginTop: '12px' }}>
+                  <p style={{ margin: '8px 0', fontWeight: 'bold' }}>
+                    ¡Gracias por su compra!
+                  </p>
+                  <p style={{ margin: '4px 0' }}>
+                    Este documento es su comprobante de pago
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-3 rounded-b-xl">
+              <button
+                onClick={() => {
+                  setShowFacturaModal(false);
+                  setFacturaData(null);
+                }}
+                className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 font-medium"
+              >
+                Cerrar
+              </button>
+              <button
+                onClick={() => {
+                  const receiptElement = document.getElementById('factura-print');
+                  if (!receiptElement) {
+                    alert('No se pudo encontrar el contenido de la factura');
+                    return;
+                  }
+
+                  const printWindow = window.open('', '_blank', 'width=800,height=700');
+                  printWindow.document.write(`
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                      <meta charset="UTF-8">
+                      <title>Factura N° ${facturaData.numeroFactura}</title>
+                      <style>
+                        @page { size: 80mm auto; margin: 0; }
+                        * { box-sizing: border-box; }
+                        body {
+                          margin: 0;
+                          padding: 0;
+                          font-family: Arial, sans-serif;
+                          display: flex;
+                          justify-content: center;
+                          background: #f0f0f0;
+                        }
+                        #receipt-container {
+                          width: 80mm;
+                          max-width: 80mm;
+                          background: white;
+                          margin: 0;
+                        }
+                      </style>
+                    </head>
+                    <body>
+                      <div id="receipt-container">${receiptElement.innerHTML}</div>
+                    </body>
+                    </html>
+                  `);
+                  printWindow.document.close();
+                  printWindow.onload = () => {
+                    setTimeout(() => {
+                      printWindow.print();
+                      printWindow.close();
+                    }, 250);
+                  };
+                }}
+                className="px-6 py-2 text-white rounded-lg hover:opacity-90 font-medium flex items-center gap-2"
+                style={{ backgroundColor: '#EA5C2E' }}
+              >
+                <Printer size={18} />
+                Imprimir Factura
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EMAIL MODAL */}
+      {showEmailModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h2 className="text-xl font-bold mb-4 text-gray-800">Enviar Apartado por Correo</h2>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Correo Electrónico del Cliente
+              </label>
+              <input
+                type="email"
+                value={emailRecipient}
+                onChange={(e) => setEmailRecipient(e.target.value)}
+                placeholder="ejemplo@correo.com"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                disabled={sendingEmail}
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={handleSendEmail}
+                disabled={sendingEmail}
+                className="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ backgroundColor: '#D50565' }}
+              >
+                {sendingEmail ? '📤 Enviando...' : '📧 Enviar'}
+              </button>
+              <button
+                onClick={() => setShowEmailModal(false)}
+                disabled={sendingEmail}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+        </>
+      )}
+    </div>
+  );
+};
+
+export default Apartados;

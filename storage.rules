@@ -1,0 +1,15 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      // Regla 1: Permitir que CUALQUIERA lea archivos.
+      // Esto es necesario para que el logo se vea en la página de Login
+      // y en las tirillas impresas (que no están "logueadas").
+      allow read;
+
+      // Regla 2: Permitir que SOLO usuarios autenticados (logueados)
+      // puedan subir, actualizar o borrar archivos (como el logo).
+      allow write: if request.auth != null;
+    }
+  }
+}
