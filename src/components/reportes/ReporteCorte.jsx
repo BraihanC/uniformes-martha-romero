@@ -264,7 +264,36 @@ const ReporteCorte = () => {
 
         {reportData.length > 0 && (
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
-            <div className="p-4 border-b">
+            {/* Encabezado del reporte (solo visible al imprimir) */}
+            <div className="hidden print:block border-b-2 border-gray-800 pb-3 mb-4">
+              <h1 className="text-2xl font-bold text-gray-900">UNIFORMES MARTHA ROMERO</h1>
+              <h2 className="text-xl font-semibold text-gray-700 mt-1">Reporte de Corte (Producción)</h2>
+              <p className="text-sm text-gray-600 mt-2">
+                Período: {startDate.toLocaleDateString('es-CO', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric'
+                })} - {endDate.toLocaleDateString('es-CO', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric'
+                })}
+              </p>
+              <p className="text-sm text-gray-600">
+                Estado: {filtroEstado} | Total de filas: {reportData.length}
+              </p>
+              <p className="text-sm text-gray-600">
+                Generado: {new Date().toLocaleDateString('es-CO', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit'
+                })}
+              </p>
+            </div>
+
+            <div className="p-4 border-b print:hidden">
               <h2 className="text-base sm:text-lg font-semibold text-gray-800">
                 Reporte de Corte Agrupado ({reportData.length} filas)
               </h2>
@@ -336,12 +365,22 @@ const ReporteCorte = () => {
       {/* --- Estilos de Impresión --- */}
       <style>{`
         @media print {
+          /* Configuración de página tamaño carta */
+          @page {
+            size: letter;
+            margin: 0.5in;
+          }
+
+          /* Ocultar todo excepto el reporte */
           body * {
             visibility: hidden;
           }
-          #reporte-corte-print, #reporte-corte-print * {
+
+          #reporte-corte-print,
+          #reporte-corte-print * {
             visibility: visible;
           }
+
           #reporte-corte-print {
             position: absolute;
             left: 0;
@@ -350,14 +389,146 @@ const ReporteCorte = () => {
             margin: 0;
             padding: 0;
           }
-          .print\:hidden {
-            display: none;
+
+          .print\\:hidden {
+            display: none !important;
           }
-          table {
-            font-size: 10px; /* Más pequeño para que quepa */
+
+          /* Mostrar elementos con print:block */
+          .print\\:block {
+            display: block !important;
           }
-          td, th {
-            padding: 6px 4px; /* Menos padding */
+
+          /* Reducir tamaños de fuente */
+          #reporte-corte-print {
+            font-size: 9px;
+          }
+
+          #reporte-corte-print h1 {
+            font-size: 16px;
+            margin-bottom: 4px;
+          }
+
+          #reporte-corte-print h2 {
+            font-size: 12px;
+            margin-bottom: 6px;
+          }
+
+          #reporte-corte-print .text-2xl {
+            font-size: 16px !important;
+          }
+
+          #reporte-corte-print .text-xl {
+            font-size: 14px !important;
+          }
+
+          #reporte-corte-print .text-lg {
+            font-size: 12px !important;
+          }
+
+          #reporte-corte-print .text-base {
+            font-size: 10px !important;
+          }
+
+          #reporte-corte-print .text-sm {
+            font-size: 9px !important;
+          }
+
+          #reporte-corte-print .text-xs {
+            font-size: 8px !important;
+          }
+
+          /* Reducir espaciados */
+          #reporte-corte-print .p-4 {
+            padding: 6px !important;
+          }
+
+          #reporte-corte-print .p-3 {
+            padding: 4px !important;
+          }
+
+          #reporte-corte-print .px-3 {
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+          }
+
+          #reporte-corte-print .py-2 {
+            padding-top: 3px !important;
+            padding-bottom: 3px !important;
+          }
+
+          #reporte-corte-print .mb-4 {
+            margin-bottom: 8px !important;
+          }
+
+          #reporte-corte-print .mt-2 {
+            margin-top: 4px !important;
+          }
+
+          #reporte-corte-print .mt-1 {
+            margin-top: 2px !important;
+          }
+
+          /* Tablas más compactas */
+          #reporte-corte-print table {
+            font-size: 8px;
+            width: 100%;
+          }
+
+          #reporte-corte-print th,
+          #reporte-corte-print td {
+            padding: 3px 4px !important;
+            font-size: 8px !important;
+          }
+
+          #reporte-corte-print th {
+            font-size: 7px !important;
+            text-transform: uppercase;
+          }
+
+          /* Ajustar bordes y sombras para impresión */
+          #reporte-corte-print .shadow-md {
+            box-shadow: none !important;
+            border: 1px solid #e5e7eb;
+          }
+
+          #reporte-corte-print .rounded-lg {
+            border-radius: 4px !important;
+          }
+
+          /* Evitar saltos de página dentro de elementos */
+          #reporte-corte-print .bg-white {
+            page-break-inside: avoid;
+          }
+
+          /* Optimizar el espacio del encabezado */
+          #reporte-corte-print .border-b-2 {
+            padding-bottom: 8px !important;
+            margin-bottom: 10px !important;
+            border-bottom: 2px solid #333 !important;
+          }
+
+          /* Hacer que la tabla use todo el ancho */
+          #reporte-corte-print .overflow-x-auto {
+            overflow: visible !important;
+          }
+
+          /* Ajustar cantidad para que resalte */
+          #reporte-corte-print .text-pink-600 {
+            font-size: 11px !important;
+            font-weight: bold;
+          }
+
+          /* Espaciado entre filas */
+          #reporte-corte-print tbody tr {
+            border-bottom: 1px solid #e5e7eb;
+          }
+
+          /* Encabezado de tabla con fondo */
+          #reporte-corte-print thead {
+            background-color: #f9fafb !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
         }
       `}</style>

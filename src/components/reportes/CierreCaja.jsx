@@ -264,6 +264,31 @@ const CierreCaja = () => { // <--- Nombre cambiado
 
         {reportData && (
           <div className="space-y-6">
+            {/* Encabezado del reporte (solo visible al imprimir) */}
+            <div className="hidden print:block border-b-2 border-gray-800 pb-3 mb-4">
+              <h1 className="text-2xl font-bold text-gray-900">UNIFORMES MARTHA ROMERO</h1>
+              <h2 className="text-xl font-semibold text-gray-700 mt-1">Reporte de Cierre de Caja</h2>
+              <p className="text-sm text-gray-600 mt-2">
+                Período: {startDate.toLocaleDateString('es-CO', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric'
+                })} - {endDate.toLocaleDateString('es-CO', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric'
+                })}
+              </p>
+              <p className="text-sm text-gray-600">
+                Generado: {new Date().toLocaleDateString('es-CO', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit'
+                })}
+              </p>
+            </div>
 
             {/* --- Resumen de Totales --- */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -429,22 +454,164 @@ const CierreCaja = () => { // <--- Nombre cambiado
       {/* --- Estilos de Impresión --- */}
       <style>{`
         @media print {
+          /* Configuración de página tamaño carta */
+          @page {
+            size: letter;
+            margin: 0.5in;
+          }
+
+          /* Ocultar todo excepto el reporte */
           body * {
             visibility: hidden;
           }
-          #reporte-print, #reporte-print * {
+
+          #reporte-print,
+          #reporte-print * {
             visibility: visible;
           }
+
           #reporte-print {
             position: absolute;
             left: 0;
             top: 0;
             width: 100%;
             margin: 0;
-            padding: 20px;
+            padding: 0;
           }
-          .print\:hidden {
-            display: none;
+
+          .print\\:hidden {
+            display: none !important;
+          }
+
+          /* Mostrar elementos con print:block */
+          .print\\:block {
+            display: block !important;
+          }
+
+          /* Reducir tamaños de fuente */
+          #reporte-print {
+            font-size: 10px;
+          }
+
+          #reporte-print h2 {
+            font-size: 12px;
+            margin-bottom: 8px;
+          }
+
+          #reporte-print .text-2xl {
+            font-size: 16px !important;
+          }
+
+          #reporte-print .text-xl {
+            font-size: 14px !important;
+          }
+
+          #reporte-print .text-lg {
+            font-size: 12px !important;
+          }
+
+          #reporte-print .text-base {
+            font-size: 10px !important;
+          }
+
+          #reporte-print .text-sm {
+            font-size: 9px !important;
+          }
+
+          #reporte-print .text-xs {
+            font-size: 8px !important;
+          }
+
+          /* Reducir espaciados */
+          #reporte-print .p-4 {
+            padding: 8px !important;
+          }
+
+          #reporte-print .p-3 {
+            padding: 6px !important;
+          }
+
+          #reporte-print .gap-4 {
+            gap: 8px !important;
+          }
+
+          #reporte-print .gap-6 {
+            gap: 12px !important;
+          }
+
+          #reporte-print .space-y-6 > * + * {
+            margin-top: 12px !important;
+          }
+
+          /* Ajustar íconos */
+          #reporte-print svg {
+            width: 20px !important;
+            height: 20px !important;
+          }
+
+          /* Tablas más compactas */
+          #reporte-print table {
+            font-size: 8px;
+          }
+
+          #reporte-print th,
+          #reporte-print td {
+            padding: 4px 8px !important;
+          }
+
+          /* Evitar saltos de página dentro de elementos */
+          #reporte-print .bg-white {
+            page-break-inside: avoid;
+          }
+
+          /* Forzar layout de grid a 1 columna en secciones específicas */
+          #reporte-print .grid.lg\\:grid-cols-2 {
+            grid-template-columns: repeat(2, 1fr) !important;
+          }
+
+          /* Asegurar que las tarjetas de resumen quepan */
+          #reporte-print .grid.md\\:grid-cols-3 {
+            grid-template-columns: repeat(3, 1fr) !important;
+          }
+
+          /* Limitar altura de la tabla de transacciones */
+          #reporte-print .overflow-x-auto {
+            max-height: 250px;
+            overflow-y: auto;
+          }
+
+          /* Ajustar bordes y sombras para impresión */
+          #reporte-print .shadow-md {
+            box-shadow: none !important;
+            border: 1px solid #e5e7eb;
+          }
+
+          #reporte-print .rounded-lg {
+            border-radius: 4px !important;
+          }
+
+          /* Reducir márgenes entre secciones */
+          #reporte-print .mb-6 {
+            margin-bottom: 8px !important;
+          }
+
+          #reporte-print .mb-4 {
+            margin-bottom: 6px !important;
+          }
+
+          #reporte-print .mt-4 {
+            margin-top: 6px !important;
+          }
+
+          /* Hacer las tarjetas de resumen más compactas */
+          #reporte-print .grid.md\\:grid-cols-3 .border {
+            padding: 6px !important;
+          }
+
+          /* Optimizar el espacio del encabezado */
+          #reporte-print .border-b-2 {
+            padding-bottom: 8px !important;
+            margin-bottom: 12px !important;
           }
         }
       `}</style>
