@@ -2,6 +2,12 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Permitir lectura pública del logo de la empresa (para la página de login)
+    match /config/company {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
     // Permitir lectura y escritura a todos los usuarios autenticados
     // en todas las colecciones
     match /{document=**} {
