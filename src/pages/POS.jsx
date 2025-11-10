@@ -822,7 +822,7 @@ const POS = () => {
           </div>
 
           {/* Cart Items */}
-          <div className="flex-1 overflow-auto p-4 border-b">
+          <div className="flex-1 overflow-unset p-4 border-b">
             <h3 className="font-semibold text-gray-800 mb-3">Carrito</h3>
 
             {cartItems.length === 0 ? (
