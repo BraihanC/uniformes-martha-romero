@@ -8,6 +8,7 @@ import { httpsCallable } from 'firebase/functions';
 import {
   ref, uploadBytesResumable, getDownloadURL
 } from 'firebase/storage';
+import GestionCostos from '../components/config/GestionCostos';
 
 const Config = () => {
   const [activeTab, setActiveTab] = useState('colegios');
@@ -615,6 +616,17 @@ const Config = () => {
           >
             <span className="hidden sm:inline">Gestión de Proveedores</span>
             <span className="sm:hidden">Proveedores</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('costos')}
+            className={`pb-3 px-1 text-sm sm:text-base font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'costos'
+                ? 'border-b-2 border-primary text-primary'
+                : 'text-gray-600 hover:text-gray-800'
+            }`}
+          >
+            <span className="hidden sm:inline">Gestión de Costos</span>
+            <span className="sm:hidden">Costos</span>
           </button>
           <button
             onClick={() => setActiveTab('usuarios')}
@@ -1408,6 +1420,11 @@ const Config = () => {
             )}
           </div>
         </div>
+      )}
+
+      {/* CONTENIDO PESTAÑA GESTIÓN DE COSTOS */}
+      {activeTab === 'costos' && (
+        <GestionCostos />
       )}
 
       {/* Modal para Crear Usuario */}

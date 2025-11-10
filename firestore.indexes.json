@@ -1,0 +1,19 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "stockEntries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "tipoEntrada",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "pagado",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

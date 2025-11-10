@@ -1,5 +1,5 @@
 import { Outlet, NavLink } from 'react-router-dom';
-import { DollarSign, Search, Scissors } from 'lucide-react';
+import { DollarSign, Search, Scissors, Users, TrendingUp } from 'lucide-react';
 
 // Estilo base para las pestañas de navegación
 const navLinkStyle = "flex items-center justify-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 sm:py-3 text-sm sm:text-base font-medium border-b-4 transition-all";
@@ -42,6 +42,22 @@ const ReportesLayout = () => {
           <Scissors size={16} className="sm:w-[18px] sm:h-[18px]" />
           <span className="hidden sm:inline">Reporte de Corte</span>
           <span className="sm:hidden whitespace-nowrap">Corte</span>
+        </NavLink>
+        <NavLink
+          to="/reportes/cuentas-por-pagar"
+          className={({ isActive }) => `${navLinkStyle} ${isActive ? activeStyle : inactiveStyle}`}
+        >
+          <Users size={16} className="sm:w-[18px] sm:h-[18px]" />
+          <span className="hidden sm:inline">Cuentas por Pagar</span>
+          <span className="sm:hidden whitespace-nowrap">Cuentas</span>
+        </NavLink>
+        <NavLink
+          to="/reportes/utilidad"
+          className={({ isActive }) => `${navLinkStyle} ${isActive ? activeStyle : inactiveStyle}`}
+        >
+          <TrendingUp size={16} className="sm:w-[18px] sm:h-[18px]" />
+          <span className="hidden sm:inline">Utilidad Productos</span>
+          <span className="sm:hidden whitespace-nowrap">Utilidad</span>
         </NavLink>
       </nav>
 

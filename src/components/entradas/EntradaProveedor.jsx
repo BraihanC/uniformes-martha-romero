@@ -23,7 +23,6 @@ const EntradaProveedor = () => {
 
   // Estados del formulario
   const [cantidad, setCantidad] = useState('');
-  const [costo, setCosto] = useState('');
   const [proveedorId, setProveedorId] = useState('');
   const [facturaProveedor, setFacturaProveedor] = useState('');
   const [notas, setNotas] = useState('');
@@ -91,19 +90,17 @@ const EntradaProveedor = () => {
     setSearchTerm('');
     // Limpiar formulario
     setCantidad('');
-    setCosto(product.costo || '');
     setProveedorId('');
     setFacturaProveedor('');
     setNotas('');
   };
 
-  // Guardar entrada de stock (Compra)
+  // Guardar entrada de stock (Compra - Costo Automático)
   const handleSaveCompra = async (e) => {
     e.preventDefault();
 
     // Validaciones
     const numCantidad = Number(cantidad);
-    const numCosto = Number(costo);
 
     if (!numCantidad || numCantidad <= 0) {
       alert('Por favor, ingresa una cantidad válida.');
@@ -113,20 +110,18 @@ const EntradaProveedor = () => {
       alert('Por favor, selecciona un proveedor.');
       return;
     }
-    if (numCosto < 0) {
-      alert('Por favor, ingresa un costo válido.');
-      return;
-    }
+
+    // Obtener el costo de compra del producto (configurado en Gestión de Costos)
+    const costoCompra = selectedProduct.costoCompra || 0;
 
     setLoading(true);
     try {
       const batch = writeBatch(db);
 
-      // 1. Actualizar el stockTotal y el Costo del producto
+      // 1. Actualizar el stockTotal del producto
       const productRef = doc(db, 'products', selectedProduct.id);
       batch.update(productRef, {
         stockTotal: increment(numCantidad),
-        costo: numCosto,
         updatedAt: serverTimestamp()
       });
 
@@ -139,8 +134,8 @@ const EntradaProveedor = () => {
         nombre: selectedProduct.nombre,
         talla: selectedProduct.talla || 'Única',
         cantidad: numCantidad,
-        costoUnitario: numCosto,
-        costoTotal: numCosto * numCantidad,
+        costoUnitario: costoCompra,
+        costoTotal: costoCompra * numCantidad,
         proveedorId: proveedorId,
         facturaProveedor: facturaProveedor.trim() || '',
         userId: currentUser.uid,
@@ -170,7 +165,6 @@ const EntradaProveedor = () => {
   const handleCancel = () => {
     setSelectedProduct(null);
     setCantidad('');
-    setCosto('');
     setProveedorId('');
     setFacturaProveedor('');
     setNotas('');
@@ -225,7 +219,7 @@ const EntradaProveedor = () => {
                           Stock: {calcularStockTotal(product)}
                         </p>
                         <p className="text-sm text-gray-500">
-                          Costo: ${product.costo?.toLocaleString('es-CO') || 0}
+                          ${product.precio?.toLocaleString('es-CO')}
                         </p>
                       </div>
                     </div>
@@ -254,40 +248,21 @@ const EntradaProveedor = () => {
           </div>
 
           <form onSubmit={handleSaveCompra} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Cantidad */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Cantidad Comprada <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  value={cantidad}
-                  onChange={(e) => setCantidad(e.target.value)}
-                  placeholder="Ej: 100"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                  required
-                  disabled={loading}
-                />
-              </div>
-
-              {/* Costo Unitario */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Costo de Compra (Unidad) <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  value={costo}
-                  onChange={(e) => setCosto(e.target.value)}
-                  placeholder="Costo por unidad pagado al proveedor"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                  required
-                  disabled={loading}
-                />
-              </div>
+            {/* Cantidad */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Cantidad Comprada <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={cantidad}
+                onChange={(e) => setCantidad(e.target.value)}
+                placeholder="Ej: 100"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                required
+                disabled={loading}
+              />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

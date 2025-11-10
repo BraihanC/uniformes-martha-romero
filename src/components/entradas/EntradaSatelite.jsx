@@ -25,7 +25,6 @@ const EntradaSatelite = () => {
   const [cantidad, setCantidad] = useState('');
   const [sateliteId, setSateliteId] = useState('');
   const [notas, setNotas] = useState('');
-  const [costo, setCosto] = useState('');
 
   // Lista de satélites y productos
   const [satelites, setSatelites] = useState([]);
@@ -94,16 +93,14 @@ const EntradaSatelite = () => {
     setCantidad('');
     setSateliteId('');
     setNotas('');
-    setCosto('');
   };
 
-  // Guardar entrada de stock (Versión Atómica con Costo)
+  // Guardar entrada de stock (Versión Atómica con Costo Automático)
   const handleSaveEntrada = async (e) => {
     e.preventDefault();
 
     // Validaciones
     const numCantidad = Number(cantidad);
-    const numCosto = Number(costo);
 
     if (!numCantidad || numCantidad <= 0) {
       alert('Por favor, ingresa una cantidad válida mayor a 0.');
@@ -113,20 +110,18 @@ const EntradaSatelite = () => {
       alert('Por favor, selecciona un satélite.');
       return;
     }
-    if (numCosto < 0) {
-      alert('Por favor, ingresa un costo válido.');
-      return;
-    }
+
+    // Obtener el costo del satélite del producto (configurado en Gestión de Costos)
+    const costoSatelite = selectedProduct.costoSatelite || 0;
 
     setLoading(true);
     try {
       const batch = writeBatch(db);
 
-      // 1. Actualizar el stockTotal y el Costo del producto
+      // 1. Actualizar el stockTotal del producto
       const productRef = doc(db, 'products', selectedProduct.id);
       batch.update(productRef, {
         stockTotal: increment(numCantidad),
-        costo: numCosto,
         updatedAt: serverTimestamp()
       });
 
@@ -139,11 +134,12 @@ const EntradaSatelite = () => {
         nombre: selectedProduct.nombre,
         talla: selectedProduct.talla || 'Única',
         cantidad: numCantidad,
-        costoUnitario: numCosto,
-        costoTotal: numCosto * numCantidad,
+        costoUnitario: costoSatelite,
+        costoTotal: costoSatelite * numCantidad,
         sateliteId: sateliteId,
         userId: currentUser.uid,
         notas: notas.trim() || '',
+        pagado: false, // Para tracking de cuentas por pagar
         createdAt: serverTimestamp()
       });
 
@@ -171,7 +167,6 @@ const EntradaSatelite = () => {
     setCantidad('');
     setSateliteId('');
     setNotas('');
-    setCosto('');
     setSearchTerm('');
     setSearchResults([]);
   };
@@ -278,23 +273,6 @@ const EntradaSatelite = () => {
                 value={cantidad}
                 onChange={(e) => setCantidad(e.target.value)}
                 placeholder="Ej: 50"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                required
-                disabled={loading}
-              />
-            </div>
-
-            {/* Costo Unitario */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Costo de Producción (Unidad) <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="number"
-                min="0"
-                value={costo}
-                onChange={(e) => setCosto(e.target.value)}
-                placeholder="Ej: 15000"
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
                 required
                 disabled={loading}

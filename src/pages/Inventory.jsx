@@ -11,6 +11,7 @@ const Inventory = () => {
   const [editingProduct, setEditingProduct] = useState(null);
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef(null);
+  const priceUpdateInputRef = useRef(null);
 
   // Estados para búsqueda y filtros
   const [searchTerm, setSearchTerm] = useState('');
@@ -30,7 +31,6 @@ const Inventory = () => {
     talla: '',
     tipo: 'diario',
     precio: 0,
-    costo: 0,
     stockTotal: 0
   });
 
@@ -125,7 +125,6 @@ const Inventory = () => {
       talla: '',
       tipo: 'diario',
       precio: 0,
-      costo: 0,
       stockTotal: 0
     });
     setIsModalOpen(true);
@@ -141,7 +140,6 @@ const Inventory = () => {
       talla: product.talla,
       tipo: product.tipo,
       precio: product.precio,
-      costo: product.costo || 0,
       stockTotal: product.stockTotal
     });
     setIsModalOpen(true);
@@ -158,7 +156,6 @@ const Inventory = () => {
       talla: '',
       tipo: 'diario',
       precio: 0,
-      costo: 0,
       stockTotal: 0
     });
   };
@@ -192,7 +189,6 @@ const Inventory = () => {
           talla: formData.talla.trim(),
           tipo: formData.tipo,
           precio: Number(formData.precio),
-          costo: Number(formData.costo),
           stockTotal: Number(formData.stockTotal),
           updatedAt: serverTimestamp()
         });
@@ -214,7 +210,6 @@ const Inventory = () => {
           talla: formData.talla.trim(),
           tipo: formData.tipo,
           precio: Number(formData.precio),
-          costo: Number(formData.costo),
           stockTotal: Number(formData.stockTotal),
           stockReservadoPedidos: 0,
           stockReservadoApartados: 0,
@@ -257,6 +252,111 @@ const Inventory = () => {
   // Activar input de archivo
   const handleImportClick = () => {
     fileInputRef.current?.click();
+  };
+
+  // Activar input de archivo para actualización de precios
+  const handlePriceUpdateClick = () => {
+    priceUpdateInputRef.current?.click();
+  };
+
+  // Actualización masiva de precios desde Excel
+  const handlePriceUpdate = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validar extensión
+    const fileName = file.name.toLowerCase();
+    if (!fileName.endsWith('.xlsx') && !fileName.endsWith('.csv')) {
+      alert('Por favor, selecciona un archivo .xlsx o .csv');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      // Leer el archivo Excel
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const jsonData = XLSX.utils.sheet_to_json(worksheet);
+
+      if (jsonData.length === 0) {
+        alert('El archivo está vacío o no tiene el formato correcto.');
+        setLoading(false);
+        return;
+      }
+
+      // Obtener todos los productos existentes
+      const existingProductsSnapshot = await getDocs(collection(db, 'products'));
+      const productosMap = new Map();
+      existingProductsSnapshot.docs.forEach(doc => {
+        const data = doc.data();
+        if (data.referencia) {
+          productosMap.set(String(data.referencia), { id: doc.id, ...data });
+        }
+      });
+
+      // Preparar batch y contadores
+      const batch = writeBatch(db);
+      let actualizados = 0;
+      let noEncontrados = 0;
+      let sinDatos = 0;
+
+      // Procesar cada fila del Excel
+      jsonData.forEach((row) => {
+        const referencia = String(row.REFERENCIA || '').trim();
+        const nuevoPrecio = row.PRECIO;
+
+        // Validar que tenga referencia y precio
+        if (!referencia || nuevoPrecio === undefined || nuevoPrecio === null || nuevoPrecio === '') {
+          sinDatos++;
+          return;
+        }
+
+        // Buscar el producto existente
+        const productoExistente = productosMap.get(referencia);
+        if (!productoExistente) {
+          noEncontrados++;
+          return;
+        }
+
+        // Actualizar el precio del producto
+        const productRef = doc(db, 'products', productoExistente.id);
+        batch.update(productRef, {
+          precio: Number(nuevoPrecio),
+          updatedAt: serverTimestamp()
+        });
+
+        actualizados++;
+      });
+
+      // Ejecutar el batch
+      if (actualizados > 0) {
+        await batch.commit();
+      }
+
+      // Recargar la lista de productos
+      await fetchProducts();
+
+      // Mostrar resultado detallado
+      alert(
+        `Actualización de precios completada:\n` +
+        `- Productos actualizados: ${actualizados}\n` +
+        `- Referencias no encontradas: ${noEncontrados}\n` +
+        `- Filas sin datos válidos: ${sinDatos}`
+      );
+
+      // Limpiar el input file
+      if (priceUpdateInputRef.current) {
+        priceUpdateInputRef.current.value = '';
+      }
+    } catch (error) {
+      console.error('Error al actualizar precios:', error);
+      alert('Error al actualizar los precios. Verifica el formato y los datos.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Importación masiva desde Excel
@@ -403,6 +503,15 @@ const Inventory = () => {
         </div>
         <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
           <button
+            onClick={handlePriceUpdateClick}
+            disabled={loading}
+            style={{ backgroundColor: '#C5D6EF', color: '#1F2937' }}
+            className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span className="hidden sm:inline">Actualizar Precios</span>
+            <span className="sm:hidden">Precios</span>
+          </button>
+          <button
             onClick={handleImportClick}
             disabled={loading}
             style={{ backgroundColor: '#EA5C2E' }}
@@ -428,6 +537,15 @@ const Inventory = () => {
         type="file"
         accept=".xlsx,.csv"
         onChange={handleFileImport}
+        style={{ display: 'none' }}
+      />
+
+      {/* Input file oculto para actualizar precios */}
+      <input
+        ref={priceUpdateInputRef}
+        type="file"
+        accept=".xlsx,.csv"
+        onChange={handlePriceUpdate}
         style={{ display: 'none' }}
       />
 
@@ -576,10 +694,6 @@ const Inventory = () => {
                           <span className="text-gray-500">Precio:</span>
                           <p className="font-semibold text-gray-900">{formatPrice(product.precio)}</p>
                         </div>
-                        <div>
-                          <span className="text-gray-500">Costo:</span>
-                          <p className="font-medium text-blue-600">{formatPrice(product.costo || 0)}</p>
-                        </div>
                       </div>
 
                       {/* Stock */}
@@ -655,9 +769,6 @@ const Inventory = () => {
                       Precio
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Costo
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Stock Disp.
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -708,9 +819,6 @@ const Inventory = () => {
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 font-medium">
                         {formatPrice(product.precio)}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-blue-600 font-medium">
-                        {formatPrice(product.costo || 0)}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm">
                         <span className={`font-semibold ${
@@ -898,23 +1006,6 @@ const Inventory = () => {
                     value={formData.precio}
                     onChange={(e) => setFormData({ ...formData, precio: e.target.value })}
                     placeholder="Ej: 50000"
-                    min="0"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    disabled={loading}
-                    required
-                  />
-                </div>
-
-                {/* Costo */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Costo <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.costo}
-                    onChange={(e) => setFormData({ ...formData, costo: e.target.value })}
-                    placeholder="Ej: 25000"
                     min="0"
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
                     disabled={loading}

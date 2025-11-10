@@ -17,6 +17,8 @@ import ReportesLayout from './pages/Reportes';
 import CierreCaja from './components/reportes/CierreCaja';
 import BuscadorFacturas from './components/reportes/BuscadorFacturas';
 import ReporteCorte from './components/reportes/ReporteCorte';
+import CuentasPorPagar from './components/reportes/CuentasPorPagar';
+import ReporteUtilidad from './components/reportes/ReporteUtilidad';
 import Config from './pages/Config';
 import Perfil from './pages/Perfil';
 
@@ -80,6 +82,8 @@ function App() {
               <Route path="cierre" element={<CierreCaja />} />
               <Route path="facturas" element={<BuscadorFacturas />} />
               <Route path="corte" element={<ReporteCorte />} />
+              <Route path="cuentas-por-pagar" element={<CuentasPorPagar />} />
+              <Route path="utilidad" element={<ReporteUtilidad />} />
             </Route>
             <Route
               path="config"
