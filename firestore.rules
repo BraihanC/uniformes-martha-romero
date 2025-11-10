@@ -2,87 +2,10 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper function: Check if user is authenticated
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-
-    // Helper function: Check if user is admin
-    function isAdmin() {
-      return isAuthenticated() &&
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
-    }
-
-    // Users collection - users can read/update their own profile, admins can read all
-    match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
-    }
-
-    // Products collection - authenticated users can read, only admins can write
-    match /products/{productId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    // Sales collection - authenticated users can read and create, admins can delete
-    match /sales/{saleId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-
-    // Stock Entries - authenticated users can read and create, admins can update/delete
-    match /stockEntries/{entryId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-
-    // Clients collection - authenticated users can read and create
-    match /clients/{clientId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-
-    // Pedidos (Orders) - authenticated users can read and create
-    match /pedidos/{pedidoId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-
-    // Apartados (Reservations) - authenticated users can read and create
-    match /apartados/{apartadoId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-
-    // Devoluciones (Returns) - authenticated users can read and create
-    match /devoluciones/{devolucionId} {
-      allow read, create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-
-    // Satelites (Satellite workshops) - authenticated users can read, only admins can write
-    match /satelites/{sateliteId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    // Proveedores (Suppliers) - authenticated users can read, only admins can write
-    match /proveedores/{proveedorId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    // Cajas (Cash registers) - only admins can access
-    match /cajas/{cajaId} {
-      allow read, write: if isAdmin();
-    }
-
-    // Config collection - only admins can access
-    match /config/{document=**} {
-      allow read, write: if isAdmin();
+    // Permitir lectura y escritura a todos los usuarios autenticados
+    // en todas las colecciones
+    match /{document=**} {
+      allow read, write: if request.auth != null;
     }
   }
 }
