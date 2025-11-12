@@ -8,7 +8,8 @@ import {
   serverTimestamp,
   query,
   where,
-  orderBy
+  orderBy,
+  arrayUnion
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
@@ -245,9 +246,28 @@ const Devoluciones = () => {
       // Actualizar stock
       for (const item of itemsDevueltos) {
         const productoRef = doc(db, 'products', item.productoId || item.product?.id);
-        batch.update(productoRef, {
-          stockTotal: increment(item.cantidad) // Usa la cantidad devuelta
-        });
+
+        // Si es defecto de fabricación, va a stock defectuoso
+        if (item.razon === 'Defecto de fabricación') {
+          batch.update(productoRef, {
+            stockDefectuoso: increment(item.cantidad),
+            historialDefectos: arrayUnion({
+              fecha: new Date().toISOString(),
+              cantidad: item.cantidad,
+              razon: item.razon,
+              ventaId: facturaEncontrada.id,
+              numeroFactura: facturaEncontrada.numeroFactura,
+              cliente: facturaEncontrada.clienteNombre,
+              talla: item.talla,
+              estado: 'pendiente' // pendiente, reparado, baja
+            })
+          });
+        } else {
+          // Si no es defecto, vuelve al stock normal
+          batch.update(productoRef, {
+            stockTotal: increment(item.cantidad)
+          });
+        }
       }
 
       // Registrar devolución
@@ -431,9 +451,28 @@ const Devoluciones = () => {
       // Actualizar stock devuelto (aumentar)
       for (const item of itemsDevueltos) {
         const productoRef = doc(db, 'products', item.productoId || item.product?.id);
-        batch.update(productoRef, {
-          stockTotal: increment(item.cantidad) // Usa la cantidad devuelta
-        });
+
+        // Si es defecto de fabricación, va a stock defectuoso
+        if (item.razon === 'Defecto de fabricación') {
+          batch.update(productoRef, {
+            stockDefectuoso: increment(item.cantidad),
+            historialDefectos: arrayUnion({
+              fecha: new Date().toISOString(),
+              cantidad: item.cantidad,
+              razon: item.razon,
+              ventaId: facturaEncontrada.id,
+              numeroFactura: facturaEncontrada.numeroFactura,
+              cliente: facturaEncontrada.clienteNombre,
+              talla: item.talla,
+              estado: 'pendiente'
+            })
+          });
+        } else {
+          // Si no es defecto, vuelve al stock normal
+          batch.update(productoRef, {
+            stockTotal: increment(item.cantidad)
+          });
+        }
       }
 
       // Actualizar stock nuevo (disminuir)
@@ -1326,7 +1365,7 @@ const Devoluciones = () => {
                 </h2>
               </div>
 
-              <div className="p-6">
+              <div className="p-6 max-h-[70vh] overflow-y-auto">
                 <div id="tirilla-print" className="bg-white p-4">
                   {/* Header */}
                   <div className="text-center mb-4 pb-3 border-b-2 border-dashed border-gray-400">
@@ -1525,7 +1564,7 @@ const Devoluciones = () => {
             /* Posicionar el recibo */
             #tirilla-print {
               position: absolute !important;
-              left: 0 !important;
+              left: 4mm !important;
               top: 0 !important;
               width: 72mm !important;
               margin: 0 !important;

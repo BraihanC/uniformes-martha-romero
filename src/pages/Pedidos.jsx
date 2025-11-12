@@ -2006,7 +2006,7 @@ const Pedidos = () => {
           /* Posicionar el recibo */
           #receipt-print {
             position: absolute !important;
-            left: 0 !important;
+            left: 4mm !important;
             top: 0 !important;
             width: 72mm !important;
             margin: 0 !important;

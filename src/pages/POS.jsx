@@ -199,11 +199,6 @@ const POS = () => {
       }]);
     }
 
-    // Auto-switch to cart tab on mobile when adding product
-    if (window.innerWidth < 1024) {
-      setActiveTab('carrito');
-    }
-
     // Return focus to search input
     searchInputRef.current?.focus();
   };
@@ -821,69 +816,83 @@ const POS = () => {
           </div>
 
           {/* Cart Items */}
-          <div className="flex-1 overflow-auto p-4 border-b">
-            <h3 className="font-semibold text-gray-800 mb-3">Carrito</h3>
+          <div className="flex-1 overflow-auto p-4 border-b relative">
+            {/* Header con contador de productos */}
+            <div className="flex justify-between items-center mb-3 sticky top-0 bg-white pb-2 z-10">
+              <h3 className="font-semibold text-gray-800">
+                Carrito
+                {cartItems.length > 0 && (
+                  <span className="text-sm font-normal text-gray-600 ml-2">
+                    ({cartItems.length} {cartItems.length === 1 ? 'producto' : 'productos'} - {cartItems.reduce((sum, item) => sum + item.cantidad, 0)} {cartItems.reduce((sum, item) => sum + item.cantidad, 0) === 1 ? 'unidad' : 'unidades'})
+                  </span>
+                )}
+              </h3>
+            </div>
 
             {cartItems.length === 0 ? (
               <div className="text-center text-gray-500 py-8">
                 Carrito vacío
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {cartItems.map(item => {
                   const itemTotal = item.product.precio * item.cantidad;
                   const itemDiscount = calculateItemDiscount(item);
                   const itemFinal = itemTotal - itemDiscount;
 
                   return (
-                    <div key={item.product.id} className="border rounded-lg p-3 bg-gray-50">
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="flex-1">
-                          <h4 className="font-medium text-sm">{item.product.nombre}</h4>
+                    <div key={item.product.id} className="border rounded-lg p-2 bg-gray-50">
+                      {/* Header compacto con nombre y botón eliminar */}
+                      <div className="flex justify-between items-start mb-1">
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium text-sm truncate">{item.product.nombre}</h4>
                           <p className="text-xs text-gray-500">{item.product.referencia}</p>
                         </div>
                         <button
                           onClick={() => handleRemoveFromCart(item.product.id)}
-                          className="text-red-600 hover:text-red-800 font-bold ml-2"
+                          className="text-red-600 hover:text-red-800 font-bold ml-2 text-lg leading-none"
                         >
                           ×
                         </button>
                       </div>
 
-                      {/* Quantity Controls */}
-                      <div className="flex items-center gap-2 mb-2">
+                      {/* Cantidad y precio en una sola línea */}
+                      <div className="flex items-center gap-2 mb-1">
                         <button
                           onClick={() => handleQuantityChange(item.product.id, item.cantidad - 1)}
-                          className="w-8 h-8 bg-gray-200 hover:bg-gray-300 rounded font-bold"
+                          className="w-7 h-7 bg-gray-200 hover:bg-gray-300 rounded font-bold text-sm"
                         >
                           -
                         </button>
-                        <span className="w-12 text-center font-medium">{item.cantidad}</span>
+                        <span className="w-10 text-center font-medium text-sm">{item.cantidad}</span>
                         <button
                           onClick={() => handleQuantityChange(item.product.id, item.cantidad + 1)}
-                          className="w-8 h-8 bg-gray-200 hover:bg-gray-300 rounded font-bold"
+                          className="w-7 h-7 bg-gray-200 hover:bg-gray-300 rounded font-bold text-sm"
                         >
                           +
                         </button>
-                        <span className="ml-auto text-sm font-medium">
+                        <span className="text-xs text-gray-600">
                           ${item.product.precio.toLocaleString('es-CO')}
+                        </span>
+                        <span className="ml-auto text-sm font-bold text-orange-600">
+                          ${itemFinal.toLocaleString('es-CO')}
                         </span>
                       </div>
 
-                      {/* Discount */}
-                      <div className="flex items-center gap-2">
+                      {/* Descuento compacto */}
+                      <div className="flex items-center gap-1.5">
                         <label className="text-xs text-gray-600">Desc:</label>
                         <input
                           type="number"
                           min="0"
                           value={item.descuento}
                           onChange={(e) => handleDiscountChange(item.product.id, e.target.value)}
-                          className="w-16 px-2 py-1 border border-gray-300 rounded text-sm"
+                          className="w-14 px-1.5 py-0.5 border border-gray-300 rounded text-xs"
                         />
-                        <div className="flex border border-gray-300 rounded">
+                        <div className="flex border border-gray-300 rounded overflow-hidden">
                           <button
                             onClick={() => handleDiscountTypeChange(item.product.id, '%')}
-                            className={`px-2 py-1 text-xs font-medium ${
+                            className={`px-1.5 py-0.5 text-xs font-medium ${
                               item.tipoDescuento === '%'
                                 ? 'bg-orange-500 text-white'
                                 : 'bg-white text-gray-700'
@@ -893,7 +902,7 @@ const POS = () => {
                           </button>
                           <button
                             onClick={() => handleDiscountTypeChange(item.product.id, '$')}
-                            className={`px-2 py-1 text-xs font-medium ${
+                            className={`px-1.5 py-0.5 text-xs font-medium ${
                               item.tipoDescuento === '$'
                                 ? 'bg-orange-500 text-white'
                                 : 'bg-white text-gray-700'
@@ -902,14 +911,16 @@ const POS = () => {
                             $
                           </button>
                         </div>
-                        <span className="ml-auto text-sm font-bold text-orange-600">
-                          ${itemFinal.toLocaleString('es-CO')}
-                        </span>
                       </div>
                     </div>
                   );
                 })}
               </div>
+            )}
+
+            {/* Indicador visual de más contenido abajo */}
+            {cartItems.length > 4 && (
+              <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-white to-transparent pointer-events-none"></div>
             )}
           </div>
 
@@ -1422,7 +1433,7 @@ const POS = () => {
           /* Posicionar el recibo */
           #receipt-print {
             position: absolute !important;
-            left: 0 !important;
+            left: 4mm !important;
             top: 0 !important;
             width: 72mm !important;
             margin: 0 !important;

@@ -792,52 +792,7 @@ const Apartados = () => {
 
   // Imprimir tirilla
   const handlePrint = () => {
-    const receiptElement = document.getElementById('receipt-print');
-    if (!receiptElement) {
-      alert('No se pudo encontrar el contenido de la tirilla');
-      return;
-    }
-
-    const printWindow = window.open('', '_blank', 'width=800,height=700');
-
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>Tirilla de Apartado</title>
-        <style>
-          @page { size: 80mm auto; margin: 0; }
-          * { box-sizing: border-box; }
-          body {
-            margin: 0;
-            padding: 0;
-            font-family: Arial, sans-serif;
-            display: flex;
-            justify-content: center;
-            background: #f0f0f0;
-          }
-          #receipt-container {
-            width: 80mm;
-            max-width: 80mm;
-            background: white;
-            margin: 0;
-          }
-        </style>
-      </head>
-      <body>
-        <div id="receipt-container">${receiptElement.innerHTML}</div>
-      </body>
-      </html>
-    `);
-
-    printWindow.document.close();
-    printWindow.onload = () => {
-      setTimeout(() => {
-        printWindow.print();
-        printWindow.close();
-      }, 250);
-    };
+    window.print();
   };
 
   // Imprimir recibo de abono
@@ -1959,147 +1914,106 @@ const Apartados = () => {
             </div>
 
             <div className="p-6">
-              {/* Contenido de la tirilla */}
-              <div id="receipt-print" style={{
-                maxWidth: '300px',
-                margin: '0 auto',
-                padding: '16px',
-                backgroundColor: '#fff',
-                border: '1px solid #ccc',
-                fontFamily: 'Arial, sans-serif'
-              }}>
-                {/* Encabezado */}
-                <div style={{ textAlign: 'center', marginBottom: '16px' }}>
-                  <h3 style={{ fontWeight: 'bold', fontSize: '18px', margin: '10px 0 8px 0' }}>
-                    {companyConfig?.nombre || 'MARTHA ROMERO UNIFORMES'}
-                  </h3>
-                  {companyConfig?.direccion && (
-                    <p style={{ fontSize: '12px', margin: '4px 0', color: '#666' }}>
-                      {companyConfig.direccion}
-                    </p>
-                  )}
-                  {companyConfig?.telefono && (
-                    <p style={{ fontSize: '12px', margin: '4px 0', color: '#666' }}>
-                      Tel: {companyConfig.telefono}
-                    </p>
-                  )}
-                  {companyConfig?.nit && (
-                    <p style={{ fontSize: '12px', margin: '4px 0', color: '#666' }}>
-                      NIT: {companyConfig.nit}
-                    </p>
-                  )}
+              {/* Receipt Preview (80mm width ≈ 300px) */}
+              <div id="receipt-print" className="border p-4 bg-white" style={{ maxWidth: '300px', margin: '0 auto' }}>
+
+              {/* Company Info */}
+              <div className="text-center mb-4">
+                <h3 className="font-bold text-lg">{companyConfig?.nombre || 'MARTHA ROMERO'}</h3>
+                {companyConfig?.nit && <p className="text-xs">NIT: {companyConfig.nit}</p>}
+                {companyConfig?.direccion && <p className="text-xs">{companyConfig.direccion}</p>}
+                {companyConfig?.telefono && <p className="text-xs">Tel: {companyConfig.telefono}</p>}
+                <p className="font-bold text-sm mt-2" style={{ letterSpacing: '1px' }}>APARTADO</p>
+                {selectedApartado.numeroApartado && (
+                  <p className="font-bold text-sm">#{selectedApartado.numeroApartado}</p>
+                )}
+              </div>
+
+              {/* Order Info */}
+              <div className="border-t border-b border-dashed py-2 mb-2">
+                <div className="flex justify-between text-sm">
+                  <span className="font-medium">Cliente:</span>
+                  <span className="text-right">{selectedApartado.clienteNombre}</span>
                 </div>
-
-                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
-
-                {/* Tipo de documento */}
-                <div style={{ textAlign: 'center', marginBottom: '12px' }}>
-                  <h4 style={{ fontWeight: 'bold', fontSize: '16px', margin: '0' }}>
-                    APARTADO
-                  </h4>
-                  {selectedApartado.numeroApartado && (
-                    <p style={{ fontSize: '14px', margin: '4px 0', fontWeight: 'bold' }}>
-                      #{selectedApartado.numeroApartado}
-                    </p>
-                  )}
+                {selectedApartado.clienteTelefono && (
+                  <div className="flex justify-between text-sm">
+                    <span className="font-medium">Teléfono:</span>
+                    <span>{selectedApartado.clienteTelefono}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm">
+                  <span className="font-medium">Fecha:</span>
+                  <span>{selectedApartado.createdAt?.toDate?.()?.toLocaleDateString('es-CO') || 'N/A'}</span>
                 </div>
-
-                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
-
-                {/* Información del cliente */}
-                <div style={{ marginBottom: '12px', fontSize: '12px' }}>
-                  <p style={{ margin: '4px 0' }}>
-                    <strong>Cliente:</strong> {selectedApartado.clienteNombre}
-                  </p>
-                  {selectedApartado.clienteTelefono && (
-                    <p style={{ margin: '4px 0' }}>
-                      <strong>Teléfono:</strong> {selectedApartado.clienteTelefono}
-                    </p>
-                  )}
-                  <p style={{ margin: '4px 0' }}>
-                    <strong>Fecha:</strong> {selectedApartado.createdAt?.toDate?.()?.toLocaleDateString('es-CO') || 'N/A'}
-                  </p>
-                  <p style={{ margin: '4px 0' }}>
-                    <strong>Fecha Límite:</strong> {selectedApartado.fechaLimite?.toDate?.()?.toLocaleDateString('es-CO') || 'N/A'}
-                  </p>
-                  {(() => {
-                    const dias = calcularDiasRestantes(selectedApartado.fechaLimite);
-                    return dias !== null && (
-                      <p style={{ margin: '4px 0', color: dias < 0 ? '#dc2626' : (dias <= 5 ? '#ea580c' : '#16a34a') }}>
-                        <strong>Días Restantes:</strong> {dias < 0 ? `Vencido hace ${Math.abs(dias)} días` : `${dias} día${dias !== 1 ? 's' : ''}`}
-                      </p>
-                    );
-                  })()}
+                <div className="flex justify-between text-sm">
+                  <span className="font-medium">Fecha Límite:</span>
+                  <span>{selectedApartado.fechaLimite?.toDate?.()?.toLocaleDateString('es-CO') || 'N/A'}</span>
                 </div>
+                {(() => {
+                  const dias = calcularDiasRestantes(selectedApartado.fechaLimite);
+                  return dias !== null && (
+                    <div className="flex justify-between text-sm">
+                      <span className="font-medium">Días Restantes:</span>
+                      <span className={dias < 0 ? 'text-red-600' : (dias <= 5 ? 'text-orange-600' : 'text-green-600')}>
+                        {dias < 0 ? `Vencido hace ${Math.abs(dias)} días` : `${dias} día${dias !== 1 ? 's' : ''}`}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
 
-                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
-
-                {/* Productos */}
-                <div style={{ marginBottom: '12px' }}>
-                  <table style={{ width: '100%', fontSize: '11px', borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: 'left', paddingBottom: '8px', borderBottom: '1px solid #000' }}>Producto</th>
-                        <th style={{ textAlign: 'center', paddingBottom: '8px', borderBottom: '1px solid #000' }}>Cant</th>
-                        <th style={{ textAlign: 'right', paddingBottom: '8px', borderBottom: '1px solid #000' }}>Total</th>
+              {/* Items */}
+              <div className="border-b border-dashed py-2 mb-2">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-1">Producto</th>
+                      <th className="text-center">Cant</th>
+                      <th className="text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedApartado.items?.map((item, index) => (
+                      <tr key={index}>
+                        <td className="py-1">
+                          <div className="font-medium">{item.nombre}</div>
+                          <div className="text-gray-600 text-[10px]">
+                            {item.talla && `Talla: ${item.talla} | `}
+                            ${(item.precioUnitario || 0).toLocaleString('es-CO')}
+                          </div>
+                        </td>
+                        <td className="text-center">{item.cantidad}</td>
+                        <td className="text-right">${(item.subtotal || 0).toLocaleString('es-CO')}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {selectedApartado.items?.map((item, index) => (
-                        <tr key={index}>
-                          <td style={{ paddingTop: '8px', paddingBottom: '4px' }}>
-                            <div style={{ fontWeight: '600' }}>{item.nombre}</div>
-                            <div style={{ fontSize: '10px', color: '#666' }}>
-                              Ref: {item.referencia} | Talla: {item.talla}
-                            </div>
-                            <div style={{ fontSize: '10px', color: '#666' }}>
-                              ${item.precioUnitario?.toLocaleString()} c/u
-                            </div>
-                          </td>
-                          <td style={{ textAlign: 'center', paddingTop: '8px', verticalAlign: 'top' }}>
-                            {item.cantidad}
-                          </td>
-                          <td style={{ textAlign: 'right', paddingTop: '8px', verticalAlign: 'top' }}>
-                            ${item.subtotal?.toLocaleString()}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Totals */}
+              <div className="space-y-1 text-sm mb-2">
+                <div className="flex justify-between">
+                  <span>Total Apartado:</span>
+                  <span>${(selectedApartado.totalApartado || 0).toLocaleString('es-CO')}</span>
                 </div>
-
-                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
-
-                {/* Totales */}
-                <div style={{ fontSize: '13px', marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0' }}>
-                    <strong>TOTAL APARTADO:</strong>
-                    <strong>${selectedApartado.totalApartado?.toLocaleString()}</strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', color: '#16a34a' }}>
-                    <strong>Total Abonado:</strong>
-                    <strong>${selectedApartado.totalAbonado?.toLocaleString()}</strong>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', margin: '6px 0', color: '#dc2626' }}>
-                    <strong>SALDO PENDIENTE:</strong>
-                    <strong>${selectedApartado.saldoPendiente?.toLocaleString()}</strong>
-                  </div>
+                <div className="flex justify-between text-green-600">
+                  <span>Total Abonado:</span>
+                  <span>${(selectedApartado.totalAbonado || 0).toLocaleString('es-CO')}</span>
                 </div>
-
-                <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
-
-                {/* Información adicional */}
-                <div style={{ fontSize: '10px', textAlign: 'center', color: '#666', marginTop: '12px' }}>
-                  <p style={{ margin: '4px 0' }}>Estado: {selectedApartado.estadoGeneral}</p>
-                  {selectedApartado.notas && (
-                    <p style={{ margin: '8px 0', fontStyle: 'italic' }}>
-                      Notas: {selectedApartado.notas}
-                    </p>
-                  )}
-                  <p style={{ margin: '12px 0 4px 0' }}>
-                    Gracias por su preferencia
-                  </p>
+                <div className="flex justify-between font-bold text-base border-t pt-1">
+                  <span>SALDO PENDIENTE:</span>
+                  <span className="text-red-600">${(selectedApartado.saldoPendiente || 0).toLocaleString('es-CO')}</span>
                 </div>
+              </div>
+
+              {/* Footer */}
+              <div className="text-center mt-4 text-xs border-t pt-2">
+                <p>Estado: {selectedApartado.estadoGeneral}</p>
+                {selectedApartado.notas && (
+                  <p className="italic">Notas: {selectedApartado.notas}</p>
+                )}
+                <p>¡Gracias por su preferencia!</p>
+              </div>
               </div>
             </div>
 
@@ -2632,6 +2546,106 @@ const Apartados = () => {
       )}
         </>
       )}
+
+      {/* Print Styles */}
+      <style>{`
+        @media print {
+          /* Configuración de página para impresora térmica */
+          @page {
+            size: 80mm auto;
+            margin: 0;
+          }
+
+          html, body {
+            width: 80mm !important;
+            height: auto !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: white !important;
+            overflow: visible !important;
+          }
+
+          /* Ocultar todo el contenido excepto el ticket */
+          body * {
+            visibility: hidden !important;
+          }
+
+          /* Mostrar solo el recibo y sus hijos */
+          #receipt-print,
+          #receipt-print * {
+            visibility: visible !important;
+          }
+
+          /* Posicionar el recibo */
+          #receipt-print {
+            position: absolute !important;
+            left: 4mm !important;
+            top: 0 !important;
+            width: 72mm !important;
+            margin: 0 !important;
+            padding: 2mm 4mm !important;
+            border: none !important;
+            box-shadow: none !important;
+            background: white !important;
+            font-size: 11pt !important;
+            line-height: 1.4 !important;
+            color: black !important;
+          }
+
+          /* Asegurar que todo el contenido sea visible */
+          #receipt-print * {
+            max-width: 100% !important;
+            color: black !important;
+          }
+
+          /* Optimizar colores para impresión */
+          #receipt-print {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            color-adjust: exact !important;
+          }
+
+          /* Asegurar que las tablas se vean bien */
+          #receipt-print table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+          }
+
+          #receipt-print table td,
+          #receipt-print table th {
+            padding: 1mm 0 !important;
+            font-size: 10pt !important;
+          }
+
+          /* Líneas divisoras */
+          #receipt-print .border-dashed {
+            border-style: dashed !important;
+            border-color: #000 !important;
+          }
+
+          #receipt-print .border-t {
+            border-top-width: 1px !important;
+          }
+
+          #receipt-print .border-b {
+            border-bottom-width: 1px !important;
+          }
+
+          /* Evitar saltos de página */
+          #receipt-print {
+            page-break-inside: avoid !important;
+          }
+
+          #receipt-print table {
+            page-break-inside: auto !important;
+          }
+
+          #receipt-print tr {
+            page-break-inside: avoid !important;
+            page-break-after: auto !important;
+          }
+        }
+      `}</style>
     </div>
   );
 };

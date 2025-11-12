@@ -158,24 +158,10 @@ const BuscadorFacturas = () => {
   };
 
   /**
-   * Llama a la impresión del navegador con instrucciones
+   * Llama a la impresión del navegador
    */
   const handlePrint = () => {
-    // Mostrar instrucciones antes de imprimir
-    const confirmar = window.confirm(
-      '📋 CONFIGURACIÓN DE IMPRESIÓN:\n\n' +
-      '1. Destino: Selecciona tu impresora POS-80\n' +
-      '2. Diseño: Vertical (Portrait)\n' +
-      '3. Más ajustes:\n' +
-      '   • Márgenes: Ninguno\n' +
-      '   • Desactivar "Encabezados y pies de página"\n' +
-      '   • Activar "Gráficos de fondo"\n\n' +
-      '¿Continuar con la impresión?'
-    );
-
-    if (confirmar) {
-      window.print();
-    }
+    window.print();
   };
 
   /**
@@ -677,7 +663,7 @@ const BuscadorFacturas = () => {
           /* Posicionar el recibo */
           #receipt-print {
             position: absolute !important;
-            left: 0 !important;
+            left: 4mm !important;
             top: 0 !important;
             width: 72mm !important;
             margin: 0 !important;
