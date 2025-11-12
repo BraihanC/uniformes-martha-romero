@@ -118,6 +118,8 @@ const CierreCaja = () => { // <--- Nombre cambiado
       let totalEgresos = 0;
       const porMetodo = {};
       const porTipo = {};
+      const egresosPorCategoria = {};
+      const egresosPorMetodo = {};
 
       transactions.forEach(t => {
         const monto = t.monto;
@@ -141,6 +143,22 @@ const CierreCaja = () => { // <--- Nombre cambiado
         if (!porTipo[tipo]) porTipo[tipo] = { total: 0, count: 0 };
         porTipo[tipo].total += monto;
         porTipo[tipo].count += 1;
+
+        // Agrupar egresos por categoría y método
+        if (tipo === 'egreso') {
+          const categoria = t.categoria || 'Sin categoría';
+          if (!egresosPorCategoria[categoria]) {
+            egresosPorCategoria[categoria] = { total: 0, count: 0 };
+          }
+          egresosPorCategoria[categoria].total += Math.abs(monto);
+          egresosPorCategoria[categoria].count += 1;
+
+          // Egresos por método de pago
+          if (!egresosPorMetodo[metodo]) {
+            egresosPorMetodo[metodo] = 0;
+          }
+          egresosPorMetodo[metodo] += Math.abs(monto);
+        }
       });
 
       const saldoNeto = totalIngresos + totalEgresos;
@@ -153,6 +171,8 @@ const CierreCaja = () => { // <--- Nombre cambiado
         saldoNeto,
         porMetodo,
         porTipo,
+        egresosPorCategoria,
+        egresosPorMetodo,
       });
 
     } catch (error) {
@@ -375,6 +395,64 @@ const CierreCaja = () => { // <--- Nombre cambiado
               </div>
             </div>
 
+            {/* --- Detalle de Egresos (si hay) --- */}
+            {Object.keys(reportData.egresosPorCategoria).length > 0 && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Egresos por Categoría */}
+                <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                  <div className="p-4 border-b flex items-center gap-2" style={{backgroundColor: '#FFF1F1'}}>
+                    <ArrowDownCircle size={20} className="text-red-600" />
+                    <h2 className="text-lg font-semibold text-gray-800">Egresos por Categoría</h2>
+                  </div>
+                  <div className="divide-y divide-gray-100">
+                    {Object.keys(reportData.egresosPorCategoria).sort().map(categoria => (
+                      <div key={categoria} className="p-3 hover:bg-gray-50">
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <span className="font-medium text-gray-700">{categoria}</span>
+                            <span className="text-sm text-gray-500 ml-2">
+                              ({reportData.egresosPorCategoria[categoria].count} {reportData.egresosPorCategoria[categoria].count === 1 ? 'egreso' : 'egresos'})
+                            </span>
+                          </div>
+                          <span className="font-bold text-red-600">
+                            ${reportData.egresosPorCategoria[categoria].total.toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="p-3 bg-red-50 font-semibold">
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-800">Total Egresos:</span>
+                        <span className="text-red-700 text-lg">
+                          {formatCurrency(Math.abs(reportData.totalEgresos))}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Egresos por Método de Pago */}
+                <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                  <div className="p-4 border-b flex items-center gap-2" style={{backgroundColor: '#FFF1F1'}}>
+                    <Wallet size={20} className="text-red-600" />
+                    <h2 className="text-lg font-semibold text-gray-800">Egresos por Método de Pago</h2>
+                  </div>
+                  <div className="divide-y divide-gray-100">
+                    {Object.keys(reportData.egresosPorMetodo).sort().map(metodo => (
+                      <div key={metodo} className="p-3 hover:bg-gray-50">
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium text-gray-700">{metodo}</span>
+                          <span className="font-bold text-red-600">
+                            ${reportData.egresosPorMetodo[metodo].toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* --- Detalle de Transacciones --- */}
             <div className="bg-white rounded-lg shadow-md overflow-hidden">
               <div className="p-4 border-b">
@@ -395,7 +473,12 @@ const CierreCaja = () => { // <--- Nombre cambiado
                         {formatCurrency(t.monto)}
                       </span>
                     </div>
-                    <p className="text-sm text-gray-700 mb-2">{t.descripcion}</p>
+                    <p className="text-sm text-gray-700 mb-2">
+                      {t.tipo === 'egreso' && t.concepto ? t.concepto : t.descripcion}
+                    </p>
+                    {t.tipo === 'egreso' && t.categoria && (
+                      <p className="text-xs text-gray-500 mb-1">Categoría: {t.categoria}</p>
+                    )}
                     <div className="flex justify-between items-center text-xs text-gray-600">
                       <span>{t.metodoPago}</span>
                       <span>{t.fecha.toLocaleString('es-CO', {
@@ -435,7 +518,16 @@ const CierreCaja = () => { // <--- Nombre cambiado
                             {t.tipo.replace('_', ' ')}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-sm text-gray-700">{t.descripcion}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700">
+                          <div>
+                            {t.tipo === 'egreso' && t.concepto ? t.concepto : t.descripcion}
+                          </div>
+                          {t.tipo === 'egreso' && t.categoria && (
+                            <div className="text-xs text-gray-500 mt-1">
+                              {t.categoria}
+                            </div>
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-sm text-gray-700">{t.metodoPago}</td>
                         <td className={`px-4 py-3 text-right font-medium ${t.monto >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                           {formatCurrency(t.monto)}

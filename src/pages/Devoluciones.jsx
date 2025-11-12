@@ -1496,65 +1496,99 @@ const Devoluciones = () => {
       <style>
         {`
           @media print {
+            /* Configuración de página para impresora térmica */
             @page {
               size: 80mm auto;
               margin: 0;
             }
 
-            body * {
-              visibility: hidden;
+            html, body {
+              width: 80mm !important;
+              height: auto !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              background: white !important;
+              overflow: visible !important;
             }
 
+            /* Ocultar todo el contenido excepto el ticket */
+            body * {
+              visibility: hidden !important;
+            }
+
+            /* Mostrar solo el recibo y sus hijos */
             #tirilla-print,
             #tirilla-print * {
-              visibility: visible;
+              visibility: visible !important;
             }
 
+            /* Posicionar el recibo */
             #tirilla-print {
-              position: absolute;
-              left: 0;
-              top: 0;
-              width: 80mm;
-              background: white;
-              padding: 8px;
-              font-family: 'Courier New', monospace;
-              font-size: 11px;
-              line-height: 1.4;
+              position: absolute !important;
+              left: 0 !important;
+              top: 0 !important;
+              width: 72mm !important;
+              margin: 0 !important;
+              padding: 2mm 4mm !important;
+              border: none !important;
+              box-shadow: none !important;
+              background: white !important;
+              font-size: 11pt !important;
+              line-height: 1.4 !important;
+              color: black !important;
             }
 
-            #tirilla-print h2 {
-              font-size: 14px;
-              margin: 0 0 4px 0;
+            /* Asegurar que todo el contenido sea visible */
+            #tirilla-print * {
+              max-width: 100% !important;
+              color: black !important;
             }
 
-            #tirilla-print h3 {
-              font-size: 13px;
-              margin: 8px 0 4px 0;
+            /* Optimizar colores para impresión */
+            #tirilla-print {
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+              color-adjust: exact !important;
             }
 
-            #tirilla-print h4 {
-              font-size: 11px;
-              margin: 8px 0 4px 0;
+            /* Asegurar que las tablas se vean bien */
+            #tirilla-print table {
+              width: 100% !important;
+              border-collapse: collapse !important;
             }
 
-            #tirilla-print p {
-              margin: 2px 0;
+            #tirilla-print table td,
+            #tirilla-print table th {
+              padding: 1mm 0 !important;
+              font-size: 10pt !important;
             }
 
-            #tirilla-print .text-xs {
-              font-size: 9px;
+            /* Líneas divisoras */
+            #tirilla-print .border-dashed {
+              border-style: dashed !important;
+              border-color: #000 !important;
             }
 
-            #tirilla-print .text-sm {
-              font-size: 10px;
+            #tirilla-print .border-t {
+              border-top-width: 1px !important;
             }
 
-            #tirilla-print .text-lg {
-              font-size: 12px;
+            #tirilla-print .border-b {
+              border-bottom-width: 1px !important;
             }
 
-            #tirilla-print .text-xl {
-              font-size: 14px;
+            /* Evitar saltos de página */
+            #tirilla-print {
+              page-break-inside: avoid !important;
+            }
+
+            #tirilla-print table {
+              page-break-inside: auto !important;
+            }
+
+            #tirilla-print tr {
+              page-break-inside: avoid !important;
+              page-break-after: auto !important;
             }
           }
         `}

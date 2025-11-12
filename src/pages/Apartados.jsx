@@ -8,7 +8,8 @@ import {
   query,
   orderBy,
   writeBatch,
-  increment
+  increment,
+  limit
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../services/firebase';
@@ -50,12 +51,15 @@ const Apartados = () => {
   const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [showAbonoReceiptModal, setShowAbonoReceiptModal] = useState(false);
   const [showFacturaModal, setShowFacturaModal] = useState(false);
+  const [showMetodoPagoModal, setShowMetodoPagoModal] = useState(false);
   const [selectedApartado, setSelectedApartado] = useState(null);
   const [lastAbono, setLastAbono] = useState(null);
   const [facturaData, setFacturaData] = useState(null);
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [emailRecipient, setEmailRecipient] = useState('');
   const [sendingEmail, setSendingEmail] = useState(false);
+  const [montoPagoFactura, setMontoPagoFactura] = useState(0);
+  const [metodoPagoFactura, setMetodoPagoFactura] = useState('Efectivo');
 
   // Estados para crear apartado
   const [selectedClienteId, setSelectedClienteId] = useState('');
@@ -71,12 +75,12 @@ const Apartados = () => {
   // Estados para gestión de apartado
   const [nuevoAbono, setNuevoAbono] = useState('');
   const [notasAbono, setNotasAbono] = useState('');
+  const [metodoPagoAbono, setMetodoPagoAbono] = useState('Efectivo');
 
   // Cargar datos iniciales
   useEffect(() => {
     const loadData = async () => {
       if (currentUser) {
-        console.log('✅ Usuario autenticado detectado:', currentUser.uid);
         setLoading(true);
         setAuthError(null);
 
@@ -89,7 +93,6 @@ const Apartados = () => {
 
         setLoading(false);
       } else {
-        console.log('⚠️ No hay usuario autenticado');
         setAuthError('No hay usuario autenticado. Por favor inicia sesión.');
         setLoading(false);
       }
@@ -129,22 +132,17 @@ const Apartados = () => {
 
   const fetchApartados = async () => {
     try {
-      console.log('🔄 Intentando cargar apartados...');
       const q = query(collection(db, 'apartados'), orderBy('createdAt', 'desc'));
       const snapshot = await getDocs(q);
-      console.log('📦 Apartados recibidos:', snapshot.size);
 
       const apartadosData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      console.log('✅ Apartados cargados:', apartadosData.length);
 
       setApartados(apartadosData);
     } catch (error) {
-      console.error('❌ Error al cargar apartados:', error);
-      console.error('❌ Código del error:', error.code);
-      console.error('❌ Mensaje del error:', error.message);
+      console.error('Error al cargar apartados:', error.code);
 
       if (error.code === 'permission-denied') {
         setAuthError('Error de permisos en Firebase. Verifica las reglas de seguridad en Firestore.');
@@ -154,29 +152,17 @@ const Apartados = () => {
 
   const fetchProductos = async () => {
     try {
-      console.log('🔄 Intentando cargar productos...');
-      console.log('👤 Usuario actual:', currentUser?.uid);
-
       const productosRef = collection(db, 'products');
-      console.log('📂 Referencia de colección creada:', productosRef.path);
-
       const snapshot = await getDocs(productosRef);
-      console.log('📦 Productos recibidos:', snapshot.size);
 
       const productosData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      console.log('✅ Productos cargados:', productosData.length);
-      console.log('📊 Productos con stock:', productosData.filter(p => (p.stockTotal || 0) > 0).length);
-      console.log('📊 Datos de ejemplo:', productosData[0]);
 
       setProductos(productosData);
     } catch (error) {
-      console.error('❌ Error al cargar productos:', error);
-      console.error('❌ Código del error:', error.code);
-      console.error('❌ Mensaje del error:', error.message);
-      console.error('❌ Stack completo:', error.stack);
+      console.error('Error al cargar productos:', error.code);
 
       if (error.code === 'permission-denied') {
         setAuthError('Error de permisos en Firebase. Verifica las reglas de seguridad en Firestore.');
@@ -186,33 +172,17 @@ const Apartados = () => {
 
   const fetchClientes = async () => {
     try {
-      console.log('🔄 Intentando cargar clientes...');
-      console.log('👤 Usuario actual:', currentUser);
-      console.log('🔐 UID del usuario:', currentUser?.uid);
-      console.log('📧 Email del usuario:', currentUser?.email);
-
       const clientesRef = collection(db, 'clients');
-      console.log('📂 Referencia de colección creada:', clientesRef.path);
-
       const snapshot = await getDocs(clientesRef);
-      console.log('📦 Documentos recibidos:', snapshot.size);
 
       const clientesData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
-      console.log('✅ Clientes cargados:', clientesData.length);
-      if (clientesData.length > 0) {
-        console.log('📊 Datos de ejemplo del primer cliente:', clientesData[0]);
-        console.log('🔍 Campos del cliente:', Object.keys(clientesData[0]));
-      }
 
       setClientes(clientesData);
     } catch (error) {
-      console.error('❌ Error al cargar clientes:', error);
-      console.error('❌ Código del error:', error.code);
-      console.error('❌ Mensaje del error:', error.message);
-      console.error('❌ Stack completo:', error.stack);
+      console.error('Error al cargar clientes:', error.code);
 
       if (error.code === 'permission-denied') {
         setAuthError('Error de permisos en Firebase. Verifica las reglas de seguridad en Firestore.');
@@ -222,22 +192,15 @@ const Apartados = () => {
 
   const fetchCompanyConfig = async () => {
     try {
-      console.log('🔄 Intentando cargar configuración...');
       const snapshot = await getDocs(collection(db, 'config'));
-      console.log('📦 Documentos de configuración recibidos:', snapshot.size);
 
       if (!snapshot.empty) {
         const config = snapshot.docs[0].data();
-        console.log('✅ Configuración cargada:', config);
         setCompanyConfig(config);
-      } else {
-        console.log('⚠️ No se encontró configuración de la empresa');
       }
     } catch (error) {
-      console.error('❌ Error al cargar configuración:', error);
-      console.error('❌ Código del error:', error.code);
-      console.error('❌ Mensaje del error:', error.message);
-      // No mostramos error crítico si falla la configuración, solo en consola
+      console.error('Error al cargar configuración:', error.code);
+      // No mostramos error crítico si falla la configuración
     }
   };
 
@@ -389,7 +352,16 @@ const Apartados = () => {
         metodoPago: metodoPago
       }] : [];
 
+      // Obtener el siguiente número consecutivo
+      const apartadosSnapshot = await getDocs(query(collection(db, 'apartados'), orderBy('numeroApartado', 'desc'), limit(1)));
+      let siguienteNumero = 1;
+      if (!apartadosSnapshot.empty) {
+        const ultimoApartado = apartadosSnapshot.docs[0].data();
+        siguienteNumero = (ultimoApartado.numeroApartado || 0) + 1;
+      }
+
       const nuevoApartado = {
+        numeroApartado: siguienteNumero,
         clienteId: selectedClienteId,
         clienteNombre: cliente.nombreCompleto || cliente.nombre || 'Sin nombre',
         clienteTelefono: cliente.telefono || '',
@@ -439,7 +411,8 @@ const Apartados = () => {
           monto: abono,
           metodoPago: metodoPago,
           apartadoId: apartadoRef.id,
-          descripcion: `Abono inicial Apartado (nuevo)`,
+          numeroApartado: siguienteNumero,
+          descripcion: `Abono inicial Apartado #${siguienteNumero}`,
           clienteId: selectedClienteId,
           clienteNombre: cliente.nombreCompleto || cliente.nombre,
           fecha: serverTimestamp(),
@@ -500,7 +473,7 @@ const Apartados = () => {
         fecha: new Date().toISOString(), // Usar ISO string para historial
         monto: monto,
         notas: notasAbono || '',
-        metodoPago: 'Efectivo' // TODO: Permitir seleccionar método de pago
+        metodoPago: metodoPagoAbono
       };
 
       const updatedHistorial = [...(selectedApartado.historialAbonos || []), nuevoHistorial];
@@ -519,9 +492,10 @@ const Apartados = () => {
       batch.set(transactionRef, {
         tipo: 'abono_apartado',
         monto: monto,
-        metodoPago: 'Efectivo', // TODO: Usar el método de pago seleccionado
+        metodoPago: metodoPagoAbono,
         apartadoId: selectedApartado.id,
-        descripcion: `Abono Apartado #${selectedApartado.id.substring(0, 5)}`,
+        numeroApartado: selectedApartado.numeroApartado,
+        descripcion: `Abono Apartado #${selectedApartado.numeroApartado || selectedApartado.id.substring(0, 5)}`,
         clienteId: selectedApartado.clienteId,
         clienteNombre: selectedApartado.clienteNombre,
         fecha: serverTimestamp(),
@@ -577,6 +551,7 @@ const Apartados = () => {
 
       setNuevoAbono('');
       setNotasAbono('');
+      setMetodoPagoAbono('Efectivo');
       fetchApartados(); // Refrescar lista
       if(estaCompletado) {
         fetchProductos(); // Refrescar stock si se completó
@@ -685,49 +660,41 @@ const Apartados = () => {
     }
   };
 
-  // Facturar apartado
-  const handleFacturarApartado = async () => {
+  // Abrir modal de facturación
+  const handleFacturarApartado = () => {
     if (!selectedApartado) return;
 
     const saldoPendiente = selectedApartado.saldoPendiente || 0;
+    setMontoPagoFactura(saldoPendiente);
+    setMetodoPagoFactura('Efectivo');
+    setShowMetodoPagoModal(true);
+  };
 
-    // Paso 1: Preguntar datos de pago final
-    const montoPagadoHoyStr = window.prompt(
-      `Facturación de Apartado\n\n` +
-      `Cliente: ${selectedApartado.clienteNombre}\n` +
-      `Total del apartado: $${selectedApartado.totalApartado.toLocaleString()}\n` +
-      `Ya abonado: $${selectedApartado.totalAbonado.toLocaleString()}\n` +
-      `Saldo pendiente: $${saldoPendiente.toLocaleString()}\n\n` +
-      `Ingresa el monto que paga el cliente HOY:`,
-      saldoPendiente.toString()
-    );
+  // Procesar facturación del apartado
+  const procesarFacturacionApartado = async () => {
+    if (!selectedApartado) return;
 
-    if (!montoPagadoHoyStr) return; // Usuario canceló
-
-    const montoPagadoHoy = parseFloat(montoPagadoHoyStr) || 0;
+    const saldoPendiente = selectedApartado.saldoPendiente || 0;
+    const montoPagadoHoy = parseFloat(montoPagoFactura) || 0;
 
     if (montoPagadoHoy < saldoPendiente) {
       alert(`El monto debe ser al menos $${saldoPendiente.toLocaleString()} (el saldo pendiente)`);
       return;
     }
 
-    const metodoPagoFinal = window.prompt(
-      `Método de pago\n\nOpciones: Efectivo, Transferencia, Datafono, Nequi\n\nIngresa el método:`,
-      'Efectivo'
-    );
-
-    if (!metodoPagoFinal) return;
-
     const confirmar = window.confirm(
       `¿Confirmar facturación?\n\n` +
       `Monto a pagar ahora: $${montoPagadoHoy.toLocaleString()}\n` +
-      `Método: ${metodoPagoFinal}\n\n` +
+      `Método: ${metodoPagoFactura}\n\n` +
       `Se generará una factura y el apartado quedará completado.`
     );
 
     if (!confirmar) return;
 
     try {
+      // Cerrar el modal
+      setShowMetodoPagoModal(false);
+
       // Paso 2: Obtener siguiente número de factura
       const salesSnapshot = await getDocs(query(collection(db, 'sales'), orderBy('numeroFactura', 'desc')));
       let siguienteNumero = 1;
@@ -746,7 +713,7 @@ const Apartados = () => {
         items: selectedApartado.items,
         subtotal: selectedApartado.totalApartado,
         totalVenta: selectedApartado.totalApartado,
-        metodoPago: metodoPagoFinal,
+        metodoPago: metodoPagoFactura,
         montoPagado: montoPagadoHoy,
         cambio: montoPagadoHoy - saldoPendiente,
         apartadoId: selectedApartado.id,
@@ -791,7 +758,7 @@ const Apartados = () => {
         batch.set(transactionRef, {
           tipo: 'abono_apartado', // Se registra como abono
           monto: montoPagadoHoy,
-          metodoPago: metodoPagoFinal,
+          metodoPago: metodoPagoFactura,
           apartadoId: selectedApartado.id,
           ventaId: ventaRef.id, // Referencia a la factura que genera
           descripcion: `Pago final Apartado -> Factura #${siguienteNumero}`,
@@ -962,7 +929,6 @@ const Apartados = () => {
             await updateDoc(doc(db, 'clients', selectedApartado.clienteId), {
               email: emailRecipient.trim()
             });
-            console.log('Email del cliente actualizado en la base de datos');
 
             // Actualizar el cliente en el estado local
             setClientes(prevClientes =>
@@ -1108,6 +1074,11 @@ const Apartados = () => {
                     {/* Header de la tarjeta */}
                     <div className="flex justify-between items-start mb-3">
                       <div className="flex-1">
+                        {apartado.numeroApartado && (
+                          <p className="text-xs font-semibold text-gray-500 mb-1">
+                            Apartado #{apartado.numeroApartado}
+                          </p>
+                        )}
                         <p className="font-semibold text-gray-900">{apartado.clienteNombre}</p>
                         {apartado.clienteTelefono && (
                           <a
@@ -1200,6 +1171,9 @@ const Apartados = () => {
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                    #
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
                     Cliente
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
@@ -1225,7 +1199,7 @@ const Apartados = () => {
               <tbody className="divide-y divide-gray-200">
                 {apartadosActuales.length === 0 ? (
                   <tr>
-                    <td colSpan="7" className="px-6 py-8 text-center text-gray-500">
+                    <td colSpan="8" className="px-6 py-8 text-center text-gray-500">
                       No se encontraron apartados
                     </td>
                   </tr>
@@ -1234,6 +1208,11 @@ const Apartados = () => {
                     const diasRestantes = calcularDiasRestantes(apartado.fechaLimite);
                     return (
                       <tr key={apartado.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4">
+                          <p className="text-sm font-semibold text-gray-600">
+                            {apartado.numeroApartado ? `#${apartado.numeroApartado}` : '-'}
+                          </p>
+                        </td>
                         <td className="px-6 py-4">
                           <div>
                             <p className="font-medium text-gray-800">{apartado.clienteNombre}</p>
@@ -1659,7 +1638,7 @@ const Apartados = () => {
             <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10 rounded-t-xl">
               <div>
                 <h2 className="text-2xl font-bold text-gray-800">
-                  Gestión de Apartado
+                  Gestión de Apartado {selectedApartado.numeroApartado && `#${selectedApartado.numeroApartado}`}
                 </h2>
                 <p className="text-sm text-gray-600 mt-1">
                   Cliente: {selectedApartado.clienteNombre}
@@ -1683,6 +1662,7 @@ const Apartados = () => {
                     setSelectedApartado(null);
                     setNuevoAbono('');
                     setNotasAbono('');
+                    setMetodoPagoAbono('Efectivo');
                   }}
                   className="text-gray-500 hover:text-gray-700 text-2xl"
                 >
@@ -1828,6 +1808,22 @@ const Apartados = () => {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Método de Pago
+                      </label>
+                      <select
+                        value={metodoPagoAbono}
+                        onChange={(e) => setMetodoPagoAbono(e.target.value)}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                      >
+                        <option>Efectivo</option>
+                        <option>Nequi</option>
+                        <option>Daviplata</option>
+                        <option>Nu</option>
+                        <option>Tarjeta</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
                         Notas del Abono (opcional)
                       </label>
                       <input
@@ -1861,6 +1857,7 @@ const Apartados = () => {
                         <tr>
                           <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700">Fecha</th>
                           <th className="px-4 py-2 text-right text-sm font-semibold text-gray-700">Monto</th>
+                          <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700">Método</th>
                           <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700">Notas</th>
                         </tr>
                       </thead>
@@ -1872,6 +1869,9 @@ const Apartados = () => {
                             </td>
                             <td className="px-4 py-2 text-right text-sm font-semibold text-green-600">
                               ${abono.monto?.toLocaleString()}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-gray-600">
+                              {abono.metodoPago || 'Efectivo'}
                             </td>
                             <td className="px-4 py-2 text-sm text-gray-600">
                               {abono.notas || '-'}
@@ -1928,6 +1928,7 @@ const Apartados = () => {
                   setSelectedApartado(null);
                   setNuevoAbono('');
                   setNotasAbono('');
+                  setMetodoPagoAbono('Efectivo');
                 }}
                 className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 font-medium"
               >
@@ -1996,6 +1997,11 @@ const Apartados = () => {
                   <h4 style={{ fontWeight: 'bold', fontSize: '16px', margin: '0' }}>
                     APARTADO
                   </h4>
+                  {selectedApartado.numeroApartado && (
+                    <p style={{ fontSize: '14px', margin: '4px 0', fontWeight: 'bold' }}>
+                      #{selectedApartado.numeroApartado}
+                    </p>
+                  )}
                 </div>
 
                 <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
@@ -2187,6 +2193,11 @@ const Apartados = () => {
                   <h4 style={{ fontWeight: 'bold', fontSize: '16px', margin: '0' }}>
                     RECIBO DE ABONO
                   </h4>
+                  {lastAbono.apartado.numeroApartado && (
+                    <p style={{ fontSize: '14px', margin: '4px 0', fontWeight: 'bold' }}>
+                      Apartado #{lastAbono.apartado.numeroApartado}
+                    </p>
+                  )}
                 </div>
 
                 <div style={{ borderTop: '2px dashed #000', margin: '12px 0' }}></div>
@@ -2541,6 +2552,77 @@ const Apartados = () => {
                 onClick={() => setShowEmailModal(false)}
                 disabled={sendingEmail}
                 className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Método de Pago para Facturación */}
+      {showMetodoPagoModal && selectedApartado && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h2 className="text-xl font-bold mb-4 text-gray-800">Facturación de Apartado</h2>
+
+            <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+              <p className="text-sm text-gray-600 mb-1">
+                <strong>Cliente:</strong> {selectedApartado.clienteNombre}
+              </p>
+              <p className="text-sm text-gray-600 mb-1">
+                <strong>Total del apartado:</strong> ${selectedApartado.totalApartado.toLocaleString()}
+              </p>
+              <p className="text-sm text-gray-600 mb-1">
+                <strong>Ya abonado:</strong> ${selectedApartado.totalAbonado.toLocaleString()}
+              </p>
+              <p className="text-sm text-green-600 font-semibold">
+                <strong>Saldo pendiente:</strong> ${(selectedApartado.saldoPendiente || 0).toLocaleString()}
+              </p>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Monto a Pagar Hoy
+              </label>
+              <input
+                type="number"
+                value={montoPagoFactura}
+                onChange={(e) => setMontoPagoFactura(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                min={selectedApartado.saldoPendiente || 0}
+                step="100"
+              />
+            </div>
+
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Método de Pago
+              </label>
+              <select
+                value={metodoPagoFactura}
+                onChange={(e) => setMetodoPagoFactura(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              >
+                <option>Efectivo</option>
+                <option>Nequi</option>
+                <option>Daviplata</option>
+                <option>Nu</option>
+                <option>Tarjeta</option>
+              </select>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={procesarFacturacionApartado}
+                className="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition-opacity"
+                style={{ backgroundColor: '#D50565' }}
+              >
+                Confirmar Facturación
+              </button>
+              <button
+                onClick={() => setShowMetodoPagoModal(false)}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
               >
                 Cancelar
               </button>

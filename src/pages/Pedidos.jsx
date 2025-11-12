@@ -750,7 +750,6 @@ const Pedidos = () => {
             await updateDoc(doc(db, 'clients', reciboDatos.clienteId), {
               email: emailRecipient.trim()
             });
-            console.log('Email del cliente actualizado en la base de datos');
 
             // Actualizar el cliente en el estado local
             setAllClients(prevClients =>
@@ -1978,41 +1977,99 @@ const Pedidos = () => {
       {/* Print Styles */}
       <style>{`
         @media print {
-          /* --- 1. Reglas para la PÁGINA --- */
+          /* Configuración de página para impresora térmica */
           @page {
-            size: 80mm auto; /* 80mm de ancho, alto automático */
-            margin: 0mm;     /* ¡Crítico! Elimina márgenes del navegador */
-          }
-
-          /* --- 2. Resetear el HTML y el BODY --- */
-          html, body {
-            width: 80mm;
-            height: auto;
+            size: 80mm auto;
             margin: 0;
-            padding: 0;
-            background: #fff; /* Fondo blanco por si acaso */
           }
 
-          /* --- 3. Ocultar TODO por defecto --- */
+          html, body {
+            width: 80mm !important;
+            height: auto !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: white !important;
+            overflow: visible !important;
+          }
+
+          /* Ocultar todo el contenido excepto el ticket */
           body * {
-            visibility: hidden;
-            box-shadow: none !important; /* Quita sombras */
+            visibility: hidden !important;
           }
 
-          /* --- 4. Mostrar SÓLO la tirilla y su contenido --- */
-          #receipt-print, #receipt-print * {
-            visibility: visible;
+          /* Mostrar solo el recibo y sus hijos */
+          #receipt-print,
+          #receipt-print * {
+            visibility: visible !important;
           }
 
-          /* --- 5. Asegurar que la tirilla ocupe el espacio y esté centrada --- */
+          /* Posicionar el recibo */
           #receipt-print {
-            position: absolute;
-            top: 10mm; /* Exactamente a 10mm desde arriba */
-            left: 50%; /* Centrado horizontal */
-            transform: translateX(-50%); /* Ajuste para centrar */
-            width: 80mm;
-            height: auto;
-            border: none; /* Quita cualquier borde de pantalla */
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 72mm !important;
+            margin: 0 !important;
+            padding: 2mm 4mm !important;
+            border: none !important;
+            box-shadow: none !important;
+            background: white !important;
+            font-size: 11pt !important;
+            line-height: 1.4 !important;
+            color: black !important;
+          }
+
+          /* Asegurar que todo el contenido sea visible */
+          #receipt-print * {
+            max-width: 100% !important;
+            color: black !important;
+          }
+
+          /* Optimizar colores para impresión */
+          #receipt-print {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            color-adjust: exact !important;
+          }
+
+          /* Asegurar que las tablas se vean bien */
+          #receipt-print table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+          }
+
+          #receipt-print table td,
+          #receipt-print table th {
+            padding: 1mm 0 !important;
+            font-size: 10pt !important;
+          }
+
+          /* Líneas divisoras */
+          #receipt-print .border-dashed {
+            border-style: dashed !important;
+            border-color: #000 !important;
+          }
+
+          #receipt-print .border-t {
+            border-top-width: 1px !important;
+          }
+
+          #receipt-print .border-b {
+            border-bottom-width: 1px !important;
+          }
+
+          /* Evitar saltos de página */
+          #receipt-print {
+            page-break-inside: avoid !important;
+          }
+
+          #receipt-print table {
+            page-break-inside: auto !important;
+          }
+
+          #receipt-print tr {
+            page-break-inside: avoid !important;
+            page-break-after: auto !important;
           }
         }
       `}</style>

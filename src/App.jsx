@@ -10,6 +10,7 @@ import Clients from './pages/Clients';
 import Pedidos from './pages/Pedidos';
 import Apartados from './pages/Apartados';
 import Devoluciones from './pages/Devoluciones';
+import Egresos from './pages/Egresos';
 import EntradasLayout from './pages/Entradas';
 import EntradaSatelite from './components/entradas/EntradaSatelite';
 import EntradaProveedor from './components/entradas/EntradaProveedor';
@@ -46,6 +47,7 @@ function App() {
             <Route path="pedidos" element={<Pedidos />} />
             <Route path="apartados" element={<Apartados />} />
             <Route path="devoluciones" element={<Devoluciones />} />
+            <Route path="egresos" element={<Egresos />} />
             <Route path="perfil" element={<Perfil />} />
 
             {/* Entradas con sub-rutas */}
