@@ -143,7 +143,30 @@ const EntradaSatelite = () => {
         createdAt: serverTimestamp()
       });
 
-      // 3. Commit atómico
+      // 3. Registrar transacción de egreso (costo de entrada)
+      const costoTotal = costoSatelite * numCantidad;
+      if (costoTotal > 0) {
+        const sateliteSeleccionado = satelites.find(s => s.id === sateliteId);
+        const transactionRef = doc(collection(db, 'transactions'));
+        batch.set(transactionRef, {
+          tipo: 'entrada_satelite',
+          monto: -costoTotal, // Negativo porque es un egreso/costo
+          metodoPago: 'Pendiente', // Se registrará cuando se pague
+          entradaId: entryRef.id,
+          descripcion: `Entrada de satélite: ${selectedProduct.nombre} (${numCantidad} uds) - ${sateliteSeleccionado?.nombre || 'Satélite'}`,
+          productId: selectedProduct.id,
+          productoNombre: selectedProduct.nombre,
+          sateliteId: sateliteId,
+          sateliteNombre: sateliteSeleccionado?.nombre || '',
+          cantidad: numCantidad,
+          costoUnitario: costoSatelite,
+          userId: currentUser.uid,
+          fecha: serverTimestamp(),
+          createdAt: serverTimestamp()
+        });
+      }
+
+      // 4. Commit atómico
       await batch.commit();
 
       alert('¡Stock actualizado correctamente!');

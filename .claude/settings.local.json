@@ -19,7 +19,8 @@
       "Bash(cat:*)",
       "Bash(tasklist:*)",
       "Bash(firebase functions:secrets:set:*)",
-      "Bash(firebase functions:log:*)"
+      "Bash(firebase functions:log:*)",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []

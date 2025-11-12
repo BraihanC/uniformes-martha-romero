@@ -71,23 +71,41 @@ function App() {
                 </PrivateRoute>
               }
             />
-            <Route
-              path="reportes"
-              element={
-                <PrivateRoute requireAdmin>
-                  <ReportesLayout />
-                </PrivateRoute>
-              }
-            >
+
+            {/* Reportes - Accesible para vendedor (Cierre y Facturas) y admin (todos) */}
+            <Route path="reportes" element={<ReportesLayout />}>
               {/* Ruta por defecto (cuando entras a /reportes) */}
               <Route index element={<CierreCaja />} />
 
-              {/* Rutas de cada pestaña */}
+              {/* Rutas accesibles para vendedor y admin */}
               <Route path="cierre" element={<CierreCaja />} />
               <Route path="facturas" element={<BuscadorFacturas />} />
-              <Route path="corte" element={<ReporteCorte />} />
-              <Route path="cuentas-por-pagar" element={<CuentasPorPagar />} />
-              <Route path="utilidad" element={<ReporteUtilidad />} />
+
+              {/* Rutas solo para admin */}
+              <Route
+                path="corte"
+                element={
+                  <PrivateRoute requireAdmin>
+                    <ReporteCorte />
+                  </PrivateRoute>
+                }
+              />
+              <Route
+                path="cuentas-por-pagar"
+                element={
+                  <PrivateRoute requireAdmin>
+                    <CuentasPorPagar />
+                  </PrivateRoute>
+                }
+              />
+              <Route
+                path="utilidad"
+                element={
+                  <PrivateRoute requireAdmin>
+                    <ReporteUtilidad />
+                  </PrivateRoute>
+                }
+              />
             </Route>
             <Route
               path="config"

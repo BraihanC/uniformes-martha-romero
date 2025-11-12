@@ -143,7 +143,31 @@ const EntradaProveedor = () => {
         createdAt: serverTimestamp()
       });
 
-      // 3. Commit atómico
+      // 3. Registrar transacción de egreso (costo de compra)
+      const costoTotal = costoCompra * numCantidad;
+      if (costoTotal > 0) {
+        const proveedorSeleccionado = proveedores.find(p => p.id === proveedorId);
+        const transactionRef = doc(collection(db, 'transactions'));
+        batch.set(transactionRef, {
+          tipo: 'entrada_proveedor',
+          monto: -costoTotal, // Negativo porque es un egreso/costo
+          metodoPago: 'Pendiente', // Se registrará cuando se pague
+          entradaId: entryRef.id,
+          descripcion: `Compra a proveedor: ${selectedProduct.nombre} (${numCantidad} uds) - ${proveedorSeleccionado?.nombre || 'Proveedor'}${facturaProveedor ? ` - Factura: ${facturaProveedor}` : ''}`,
+          productId: selectedProduct.id,
+          productoNombre: selectedProduct.nombre,
+          proveedorId: proveedorId,
+          proveedorNombre: proveedorSeleccionado?.nombre || '',
+          facturaProveedor: facturaProveedor.trim() || '',
+          cantidad: numCantidad,
+          costoUnitario: costoCompra,
+          userId: currentUser.uid,
+          fecha: serverTimestamp(),
+          createdAt: serverTimestamp()
+        });
+      }
+
+      // 4. Commit atómico
       await batch.commit();
 
       alert('¡Compra registrada y stock actualizado!');
