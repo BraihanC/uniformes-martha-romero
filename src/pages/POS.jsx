@@ -121,6 +121,36 @@ const POS = () => {
     filterProducts();
   }, [selectedColegio, selectedTipo, searchQuery, products]);
 
+  // Función para ordenar productos por talla
+  const sortByTalla = (products) => {
+    // Orden de tallas personalizado
+    const tallaOrder = {
+      '4': 1, '6': 2, '8': 3, '10': 4, '12': 5, '14': 6, '16': 7,
+      'XS': 8, 'S': 9, 'M': 10, 'L': 11, 'XL': 12, 'XXL': 13,
+      'GRANDE': 14, 'PEQUEÑA': 15
+    };
+
+    return [...products].sort((a, b) => {
+      const tallaA = (a.talla || '').toUpperCase().trim();
+      const tallaB = (b.talla || '').toUpperCase().trim();
+
+      const orderA = tallaOrder[tallaA] || 999;
+      const orderB = tallaOrder[tallaB] || 999;
+
+      // Si ambos tienen orden definido, compararlos
+      if (orderA !== 999 && orderB !== 999) {
+        return orderA - orderB;
+      }
+
+      // Si uno tiene orden y el otro no, el que tiene orden va primero
+      if (orderA !== 999) return -1;
+      if (orderB !== 999) return 1;
+
+      // Si ninguno tiene orden, ordenar alfabéticamente
+      return tallaA.localeCompare(tallaB);
+    });
+  };
+
   const filterProducts = () => {
     let filtered = [...products];
 
@@ -129,9 +159,22 @@ const POS = () => {
       filtered = filtered.filter(p => p.colegio === selectedColegio);
     }
 
-    // Filter by tipo
+    // Filter by tipo (reconoce "dia"/"diario" y "dep"/"deportivo")
     if (selectedTipo !== 'Todos') {
-      filtered = filtered.filter(p => p.tipo?.toLowerCase() === selectedTipo.toLowerCase());
+      filtered = filtered.filter(p => {
+        const productoTipo = p.tipo?.toLowerCase() || '';
+        const filtroTipo = selectedTipo.toLowerCase();
+
+        // Si el filtro es "diario", acepta "diario" o "dia"
+        if (filtroTipo === 'diario') {
+          return productoTipo === 'diario' || productoTipo === 'dia';
+        }
+        // Si el filtro es "deportivo", acepta "deportivo" o "dep"
+        if (filtroTipo === 'deportivo') {
+          return productoTipo === 'deportivo' || productoTipo === 'dep';
+        }
+        return productoTipo === filtroTipo;
+      });
     }
 
     // Filter by search query (nombre or referencia)
@@ -142,6 +185,9 @@ const POS = () => {
         p.referencia?.toLowerCase().includes(query)
       );
     }
+
+    // Ordenar por talla
+    filtered = sortByTalla(filtered);
 
     setFilteredProducts(filtered);
   };
@@ -319,6 +365,11 @@ const POS = () => {
     setSelectedClient(client);
     setClientSearchQuery(client.nombreCompleto);
     setShowClientSuggestions(false);
+  };
+
+  const handleRemoveClient = () => {
+    setSelectedClient(null);
+    setClientSearchQuery('');
   };
 
   // ====== CREATE QUICK CLIENT ======
@@ -784,7 +835,7 @@ const POS = () => {
 
                 {/* Client Suggestions */}
                 {showClientSuggestions && clientSearchQuery && filteredClients.length > 0 && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-48 overflow-auto">
+                  <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-48 overflow-auto">
                     {filteredClients.slice(0, 5).map(client => (
                       <div
                         key={client.id}
@@ -808,9 +859,18 @@ const POS = () => {
             </div>
 
             {selectedClient && (
-              <div className="text-sm bg-green-50 border border-green-200 rounded-md p-2">
-                <div className="font-medium">{selectedClient.nombreCompleto}</div>
-                <div className="text-gray-600 text-xs">{selectedClient.numeroDocumento}</div>
+              <div className="text-sm bg-green-50 border border-green-200 rounded-md p-2 flex items-start justify-between gap-2">
+                <div className="flex-1">
+                  <div className="font-medium">{selectedClient.nombreCompleto}</div>
+                  <div className="text-gray-600 text-xs">{selectedClient.numeroDocumento}</div>
+                </div>
+                <button
+                  onClick={handleRemoveClient}
+                  className="text-red-600 hover:text-red-800 font-bold text-lg leading-none flex-shrink-0"
+                  title="Remover cliente"
+                >
+                  ×
+                </button>
               </div>
             )}
           </div>

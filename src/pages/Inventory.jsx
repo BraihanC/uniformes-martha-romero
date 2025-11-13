@@ -63,9 +63,22 @@ const Inventory = () => {
       filtered = filtered.filter(product => product.colegio === filterColegio);
     }
 
-    // Filtro por tipo
+    // Filtro por tipo (reconoce "dia"/"diario" y "dep"/"deportivo")
     if (filterTipo) {
-      filtered = filtered.filter(product => product.tipo?.toLowerCase() === filterTipo.toLowerCase());
+      filtered = filtered.filter(product => {
+        const productoTipo = product.tipo?.toLowerCase() || '';
+        const filtroTipo = filterTipo.toLowerCase();
+
+        // Si el filtro es "diario", acepta "diario" o "dia"
+        if (filtroTipo === 'diario') {
+          return productoTipo === 'diario' || productoTipo === 'dia';
+        }
+        // Si el filtro es "deportivo", acepta "deportivo" o "dep"
+        if (filtroTipo === 'deportivo') {
+          return productoTipo === 'deportivo' || productoTipo === 'dep';
+        }
+        return productoTipo === filtroTipo;
+      });
     }
 
     // Filtro por stock
@@ -672,7 +685,7 @@ const Inventory = () => {
                           <p className="text-sm text-gray-500 font-mono">Ref: {product.referencia}</p>
                         </div>
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          product.tipo === 'diario'
+                          product.tipo === 'diario' || product.tipo === 'dia'
                             ? 'bg-blue-100 text-blue-800'
                             : 'bg-green-100 text-green-800'
                         }`}>
@@ -810,7 +823,7 @@ const Inventory = () => {
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm">
                         <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          product.tipo === 'diario'
+                          product.tipo === 'diario' || product.tipo === 'dia'
                             ? 'bg-blue-100 text-blue-800'
                             : 'bg-green-100 text-green-800'
                         }`}>

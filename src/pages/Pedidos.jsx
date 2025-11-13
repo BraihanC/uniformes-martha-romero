@@ -11,7 +11,8 @@ import {
   serverTimestamp,
   query,
   orderBy,
-  limit
+  limit,
+  addDoc
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../context/AuthContext';
@@ -35,6 +36,27 @@ const Pedidos = () => {
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [emailRecipient, setEmailRecipient] = useState('');
   const [sendingEmail, setSendingEmail] = useState(false);
+  const [showClientModal, setShowClientModal] = useState(false);
+
+  // Estados para nuevo cliente
+  const [newClientData, setNewClientData] = useState({
+    nombreCompleto: '',
+    tipoDocumento: 'Cédula de Ciudadanía',
+    numeroDocumento: '',
+    telefono: '',
+    email: '',
+    direccion: '',
+    ciudad: '',
+    colegioId: ''
+  });
+
+  // Tipos de documento disponibles
+  const tiposDocumento = [
+    'Cédula de Ciudadanía',
+    'NIT',
+    'Cédula de Extranjería',
+    'Tarjeta de Identidad'
+  ];
 
   // Estados para el formulario de creación
   const [selectedClient, setSelectedClient] = useState(null);
@@ -188,6 +210,63 @@ const Pedidos = () => {
     setSelectedClient(client);
     setClientSearchTerm('');
     setClientSearchResults([]);
+  };
+
+  const handleCreateClient = async () => {
+    // Validar campos requeridos
+    if (!newClientData.nombreCompleto.trim()) {
+      alert('Por favor, ingresa el nombre completo del cliente.');
+      return;
+    }
+    if (!newClientData.numeroDocumento.trim()) {
+      alert('Por favor, ingresa el número de documento del cliente.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const newClient = {
+        nombreCompleto: newClientData.nombreCompleto.trim(),
+        tipoDocumento: newClientData.tipoDocumento,
+        numeroDocumento: newClientData.numeroDocumento.trim(),
+        telefono: newClientData.telefono.trim(),
+        email: newClientData.email.trim(),
+        direccion: newClientData.direccion.trim(),
+        ciudad: newClientData.ciudad.trim(),
+        colegioId: newClientData.colegioId || null,
+        createdAt: serverTimestamp()
+      };
+
+      const docRef = await addDoc(collection(db, 'clients'), newClient);
+      const clientWithId = { id: docRef.id, ...newClient };
+
+      // Actualizar lista de clientes
+      setAllClients([...allClients, clientWithId]);
+
+      // Seleccionar el cliente recién creado
+      setSelectedClient(clientWithId);
+      setClientSearchTerm(clientWithId.nombreCompleto);
+
+      // Cerrar modal y limpiar formulario
+      setShowClientModal(false);
+      setNewClientData({
+        nombreCompleto: '',
+        tipoDocumento: 'Cédula de Ciudadanía',
+        numeroDocumento: '',
+        telefono: '',
+        email: '',
+        direccion: '',
+        ciudad: '',
+        colegioId: ''
+      });
+
+      alert('Cliente creado exitosamente');
+    } catch (error) {
+      console.error('Error al crear cliente:', error);
+      alert('Error al crear el cliente. Por favor, intenta de nuevo.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleAddProduct = (product) => {
@@ -1128,8 +1207,16 @@ const Pedidos = () => {
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto print:hidden">
           <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
               <h2 className="text-2xl font-semibold text-gray-800">Crear Nuevo Pedido</h2>
+              <button
+                type="button"
+                onClick={() => setShowClientModal(true)}
+                style={{ backgroundColor: '#D50565' }}
+                className="px-4 py-2 text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+              >
+                + Crear Cliente
+              </button>
             </div>
 
             <form onSubmit={handleSavePedido} className="p-6 space-y-6">
@@ -1628,17 +1715,20 @@ const Pedidos = () => {
                     >
                       {loading ? 'Procesando...' : showAbonoForm ? 'Confirmar Entrega' :
                         (() => {
-                          // 1. Verificar si TODOS los items del pedido (sin excepción) están listos
-                          const allItemsReady = selectedPedido.items.every(
-                            item => item.estadoItem === 'Listo para Entrega'
-                          );
-                          // 2. Verificar si TODOS los items del pedido están seleccionados
-                          const allItemsSelected = selectedItemsForDelivery.length === selectedPedido.items.length;
+                          // Verificar si después de esta entrega, TODOS los items estarán entregados
+                          const itemsQueQuedaranPendientes = selectedPedido.items.filter((item, index) => {
+                            // Si este item ya está entregado, no cuenta como pendiente
+                            if (item.estadoItem === 'Entregado') return false;
+                            // Si este item está seleccionado para entrega ahora, no quedará pendiente
+                            if (selectedItemsForDelivery.includes(index)) return false;
+                            // Si llegamos aquí, este item quedará pendiente después de la entrega
+                            return true;
+                          });
 
-                          // Solo mostrar "Facturar Pedido" si AMBAS condiciones son verdaderas
-                          const showFacturarButton = allItemsReady && allItemsSelected;
+                          // Si no quedarán items pendientes, es la entrega final (facturar)
+                          const esEntregaFinal = itemsQueQuedaranPendientes.length === 0;
 
-                          return showFacturarButton ? 'Facturar Pedido' : 'Registrar Entrega Parcial';
+                          return esEntregaFinal ? 'Facturar Pedido' : 'Registrar Entrega Parcial';
                         })()
                       }
                     </button>
@@ -1968,6 +2058,198 @@ const Pedidos = () => {
                 className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CREACIÓN DE CLIENTE */}
+      {showClientModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+              <h2 className="text-2xl font-semibold text-gray-800">
+                Crear Cliente
+              </h2>
+              <button
+                onClick={() => {
+                  setShowClientModal(false);
+                  setNewClientData({
+                    nombreCompleto: '',
+                    tipoDocumento: 'Cédula de Ciudadanía',
+                    numeroDocumento: '',
+                    telefono: '',
+                    email: '',
+                    direccion: '',
+                    ciudad: '',
+                    colegioId: ''
+                  });
+                }}
+                className="text-gray-400 hover:text-gray-600 text-2xl"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="px-6 py-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Nombre Completo */}
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Nombre Completo <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newClientData.nombreCompleto}
+                    onChange={(e) => setNewClientData({ ...newClientData, nombreCompleto: e.target.value })}
+                    placeholder="Ej: Juan Pérez García"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Tipo de Documento */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Tipo de Documento <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={newClientData.tipoDocumento}
+                    onChange={(e) => setNewClientData({ ...newClientData, tipoDocumento: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  >
+                    {tiposDocumento.map((tipo) => (
+                      <option key={tipo} value={tipo}>
+                        {tipo}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Número de Documento */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Número de Documento <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newClientData.numeroDocumento}
+                    onChange={(e) => setNewClientData({ ...newClientData, numeroDocumento: e.target.value })}
+                    placeholder="Ej: 123456789"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Teléfono */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Teléfono
+                  </label>
+                  <input
+                    type="text"
+                    value={newClientData.telefono}
+                    onChange={(e) => setNewClientData({ ...newClientData, telefono: e.target.value })}
+                    placeholder="Ej: 3001234567"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Email */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={newClientData.email}
+                    onChange={(e) => setNewClientData({ ...newClientData, email: e.target.value })}
+                    placeholder="Ej: cliente@ejemplo.com"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Dirección */}
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Dirección
+                  </label>
+                  <input
+                    type="text"
+                    value={newClientData.direccion}
+                    onChange={(e) => setNewClientData({ ...newClientData, direccion: e.target.value })}
+                    placeholder="Ej: Calle 123 # 45-67"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Ciudad */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Ciudad
+                  </label>
+                  <input
+                    type="text"
+                    value={newClientData.ciudad}
+                    onChange={(e) => setNewClientData({ ...newClientData, ciudad: e.target.value })}
+                    placeholder="Ej: Bogotá"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Colegio */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Colegio (Opcional)
+                  </label>
+                  <select
+                    value={newClientData.colegioId}
+                    onChange={(e) => setNewClientData({ ...newClientData, colegioId: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  >
+                    <option value="">Sin colegio asignado</option>
+                    {allColegios.map(colegio => (
+                      <option key={colegio.id} value={colegio.id}>
+                        {colegio.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowClientModal(false);
+                  setNewClientData({
+                    nombreCompleto: '',
+                    tipoDocumento: 'Cédula de Ciudadanía',
+                    numeroDocumento: '',
+                    telefono: '',
+                    email: '',
+                    direccion: '',
+                    ciudad: '',
+                    colegioId: ''
+                  });
+                }}
+                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCreateClient}
+                style={{ backgroundColor: '#D50565' }}
+                className="px-4 py-2 text-white rounded-lg hover:opacity-90 transition-opacity"
+              >
+                Crear Cliente
               </button>
             </div>
           </div>

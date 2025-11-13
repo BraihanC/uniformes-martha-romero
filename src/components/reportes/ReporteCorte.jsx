@@ -207,7 +207,11 @@ const ReporteCorte = () => {
             <input
               type="date"
               value={formatDateForInput(startDate)}
-              onChange={(e) => setStartDate(new Date(e.target.value))}
+              onChange={(e) => {
+                // Crear fecha en zona horaria local evitando el problema de UTC
+                const [year, month, day] = e.target.value.split('-');
+                setStartDate(new Date(year, month - 1, day));
+              }}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 text-sm sm:text-base"
             />
           </div>
@@ -218,7 +222,11 @@ const ReporteCorte = () => {
             <input
               type="date"
               value={formatDateForInput(endDate)}
-              onChange={(e) => setEndDate(new Date(e.target.value))}
+              onChange={(e) => {
+                // Crear fecha en zona horaria local evitando el problema de UTC
+                const [year, month, day] = e.target.value.split('-');
+                setEndDate(new Date(year, month - 1, day));
+              }}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 text-sm sm:text-base"
             />
           </div>
