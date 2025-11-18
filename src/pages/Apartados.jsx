@@ -9,7 +9,9 @@ import {
   orderBy,
   writeBatch,
   increment,
-  limit
+  limit,
+  deleteDoc,
+  where
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../services/firebase';
@@ -25,7 +27,8 @@ import {
   CheckCircle,
   AlertTriangle,
   Clock,
-  Phone
+  Phone,
+  Trash2
 } from 'lucide-react';
 
 const Apartados = () => {
@@ -657,6 +660,77 @@ const Apartados = () => {
     } catch (error) {
       console.error('Error al cancelar apartado:', error);
       alert('Error al cancelar apartado');
+    }
+  };
+
+  // Eliminar apartado completamente (incluye transacciones)
+  const handleEliminarApartado = async () => {
+    if (!selectedApartado) return;
+
+    const confirmar = window.confirm(
+      `⚠️ ELIMINAR PERMANENTEMENTE\n\n` +
+      `¿Estás seguro de ELIMINAR este apartado?\n\n` +
+      `Cliente: ${selectedApartado.clienteNombre}\n` +
+      `Total: $${selectedApartado.totalApartado.toLocaleString()}\n` +
+      `Abonado: $${selectedApartado.totalAbonado.toLocaleString()}\n\n` +
+      `Esta acción:\n` +
+      `• Eliminará el apartado de la base de datos\n` +
+      `• Eliminará todas las transacciones de abonos asociadas\n` +
+      `• Liberará el inventario reservado\n\n` +
+      `Esta acción NO se puede deshacer.`
+    );
+
+    if (!confirmar) return;
+
+    setLoading(true);
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Buscar y eliminar transacciones asociadas
+      const transactionsQuery = query(
+        collection(db, 'transactions'),
+        where('apartadoId', '==', selectedApartado.id)
+      );
+      const transactionsSnapshot = await getDocs(transactionsQuery);
+
+      let transaccionesEliminadas = 0;
+      transactionsSnapshot.docs.forEach(transactionDoc => {
+        batch.delete(transactionDoc.ref);
+        transaccionesEliminadas++;
+      });
+
+      // 2. Liberar inventario reservado (si el apartado no estaba completado o cancelado)
+      if (selectedApartado.estadoGeneral === 'Activo' || selectedApartado.estadoGeneral === 'Vencido') {
+        for (const item of selectedApartado.items) {
+          const productoRef = doc(db, 'products', item.productoId);
+          batch.update(productoRef, {
+            stockReservadoApartados: increment(-item.cantidad)
+          });
+        }
+      }
+
+      // 3. Eliminar el documento del apartado
+      const apartadoRef = doc(db, 'apartados', selectedApartado.id);
+      batch.delete(apartadoRef);
+
+      await batch.commit();
+
+      alert(
+        `Apartado eliminado exitosamente.\n\n` +
+        `• ${transaccionesEliminadas} transacción(es) eliminada(s)\n` +
+        `• Inventario liberado`
+      );
+
+      setShowManageModal(false);
+      setSelectedApartado(null);
+      fetchApartados();
+      fetchProductos();
+
+    } catch (error) {
+      console.error('Error al eliminar apartado:', error);
+      alert('Error al eliminar apartado: ' + error.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1864,6 +1938,20 @@ const Apartados = () => {
                   </p>
                 </div>
               )}
+
+              {/* Botón eliminar apartado permanentemente */}
+              <div className="border-t border-gray-200 pt-4 mt-4">
+                <button
+                  onClick={handleEliminarApartado}
+                  className="w-full px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900 font-medium flex items-center justify-center gap-2"
+                >
+                  <Trash2 size={18} />
+                  Eliminar Permanentemente
+                </button>
+                <p className="text-xs text-red-500 text-center mt-2">
+                  ⚠️ Elimina el apartado y todas sus transacciones de la base de datos
+                </p>
+              </div>
             </div>
 
             <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-3 rounded-b-xl">
