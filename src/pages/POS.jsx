@@ -125,9 +125,14 @@ const POS = () => {
   const sortByTalla = (products) => {
     // Orden de tallas personalizado
     const tallaOrder = {
+      // Tallas numéricas
       '4': 1, '6': 2, '8': 3, '10': 4, '12': 5, '14': 6, '16': 7,
+      // Rangos de medias
+      '4-6': 1.5, '6-8': 2.5, '8-10': 3.5, '10-12': 4.5, '12-14': 5.5,
+      // Tallas con letras
       'XS': 8, 'S': 9, 'M': 10, 'L': 11, 'XL': 12, 'XXL': 13,
-      'GRANDE': 14, 'PEQUEÑA': 15
+      // Tallas genéricas
+      'PEQUEÑA': 14, 'MEDIANA': 15, 'GRANDE': 16
     };
 
     return [...products].sort((a, b) => {

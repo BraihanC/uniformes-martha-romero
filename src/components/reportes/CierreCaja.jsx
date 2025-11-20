@@ -6,7 +6,10 @@ import {
   where,
   orderBy,
   getDocs,
-  Timestamp
+  Timestamp,
+  doc,
+  setDoc,
+  getDoc
 } from 'firebase/firestore';
 import {
   CalendarDays,
@@ -15,7 +18,9 @@ import {
   ArrowDownCircle,
   Printer,
   BarChart2,
-  Wallet
+  Wallet,
+  Edit2,
+  Save
 } from 'lucide-react';
 
 // --- Helper Functions ---
@@ -53,12 +58,76 @@ const CierreCaja = () => { // <--- Nombre cambiado
   const [loading, setLoading] = useState(false);
   const [reportData, setReportData] = useState(null);
 
+  // Estados para base inicial de caja
+  const [baseInicial, setBaseInicial] = useState(0);
+  const [editandoBase, setEditandoBase] = useState(false);
+  const [baseInputValue, setBaseInputValue] = useState('0');
+
   /**
    * Carga el reporte de "Hoy" la primera vez que el componente se monta.
    */
   useEffect(() => {
     handleFetchReport();
+    loadBaseInicial();
   }, []);
+
+  /**
+   * Carga la base inicial cuando cambian las fechas
+   */
+  useEffect(() => {
+    loadBaseInicial();
+  }, [startDate, endDate]);
+
+  /**
+   * Carga la base inicial del día desde Firebase
+   */
+  const loadBaseInicial = async () => {
+    try {
+      // Usar la fecha de inicio como referencia
+      const dateKey = formatDateForInput(startDate);
+      const baseDocRef = doc(db, 'bases_caja', dateKey);
+      const baseDoc = await getDoc(baseDocRef);
+
+      if (baseDoc.exists()) {
+        const base = baseDoc.data().monto || 0;
+        setBaseInicial(base);
+        setBaseInputValue(base.toString());
+      } else {
+        // Si no existe, inicializar en 0
+        setBaseInicial(0);
+        setBaseInputValue('0');
+      }
+    } catch (error) {
+      console.error('Error al cargar base inicial:', error);
+      setBaseInicial(0);
+      setBaseInputValue('0');
+    }
+  };
+
+  /**
+   * Guarda la base inicial del día en Firebase
+   */
+  const handleSaveBaseInicial = async () => {
+    const monto = parseFloat(baseInputValue) || 0;
+
+    try {
+      const dateKey = formatDateForInput(startDate);
+      const baseDocRef = doc(db, 'bases_caja', dateKey);
+
+      await setDoc(baseDocRef, {
+        fecha: startDate,
+        monto: monto,
+        updatedAt: new Date()
+      });
+
+      setBaseInicial(monto);
+      setEditandoBase(false);
+      alert('✅ Base inicial guardada correctamente');
+    } catch (error) {
+      console.error('Error al guardar base inicial:', error);
+      alert('❌ Error al guardar base inicial: ' + error.message);
+    }
+  };
 
   /**
    * Define los rangos de fecha preestablecidos.
@@ -274,6 +343,61 @@ const CierreCaja = () => { // <--- Nombre cambiado
             {loading ? 'Generando...' : 'Generar Reporte'}
           </button>
         </div>
+
+        {/* Base Inicial de Caja */}
+        <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Wallet size={20} className="text-blue-600" />
+              <div>
+                <h3 className="text-sm font-semibold text-gray-800">Base Inicial de Caja</h3>
+                <p className="text-xs text-gray-600">Dinero con el que inicia el día</p>
+              </div>
+            </div>
+
+            {!editandoBase ? (
+              <div className="flex items-center gap-3">
+                <span className="text-2xl font-bold text-blue-600">
+                  {formatCurrency(baseInicial)}
+                </span>
+                <button
+                  onClick={() => setEditandoBase(true)}
+                  className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg"
+                  title="Editar base inicial"
+                >
+                  <Edit2 size={18} />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={baseInputValue}
+                  onChange={(e) => setBaseInputValue(e.target.value)}
+                  className="w-32 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  placeholder="0"
+                />
+                <button
+                  onClick={handleSaveBaseInicial}
+                  className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  title="Guardar"
+                >
+                  <Save size={18} />
+                </button>
+                <button
+                  onClick={() => {
+                    setEditandoBase(false);
+                    setBaseInputValue(baseInicial.toString());
+                  }}
+                  className="p-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                  title="Cancelar"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* --- Contenido del Reporte (Sección Imprimible) --- */}
@@ -319,7 +443,18 @@ const CierreCaja = () => { // <--- Nombre cambiado
             </div>
 
             {/* --- Resumen de Totales --- */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className="flex items-center gap-3">
+                  <Wallet className="text-blue-600" size={32} />
+                  <div>
+                    <p className="text-sm text-blue-700 font-medium">Base Inicial</p>
+                    <p className="text-2xl font-bold text-blue-700">
+                      {formatCurrency(baseInicial)}
+                    </p>
+                  </div>
+                </div>
+              </div>
               <div className="bg-green-100 border border-green-200 rounded-lg p-4">
                 <div className="flex items-center gap-3">
                   <ArrowUpCircle className="text-green-600" size={32} />
@@ -349,6 +484,17 @@ const CierreCaja = () => { // <--- Nombre cambiado
                     <p className="text-sm font-medium" style={{color: '#EA5C2E'}}>Saldo Neto</p>
                     <p className="text-2xl font-bold" style={{color: '#EA5C2E'}}>
                       {formatCurrency(reportData.saldoNeto)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                <div className="flex items-center gap-3">
+                  <DollarSign className="text-purple-600" size={32} />
+                  <div>
+                    <p className="text-sm text-purple-700 font-medium">Efectivo Esperado</p>
+                    <p className="text-2xl font-bold text-purple-700">
+                      {formatCurrency(baseInicial + reportData.saldoNeto)}
                     </p>
                   </div>
                 </div>

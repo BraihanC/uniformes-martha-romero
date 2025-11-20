@@ -45,6 +45,41 @@ const Inventory = () => {
     return (product.stockTotal || 0) - (product.stockReservadoPedidos || 0) - (product.stockReservadoApartados || 0);
   };
 
+  // Función para ordenar productos por talla
+  const sortByTalla = (products) => {
+    // Orden de tallas personalizado
+    const tallaOrder = {
+      // Tallas numéricas
+      '4': 1, '6': 2, '8': 3, '10': 4, '12': 5, '14': 6, '16': 7,
+      // Rangos de medias
+      '4-6': 1.5, '6-8': 2.5, '8-10': 3.5, '10-12': 4.5, '12-14': 5.5,
+      // Tallas con letras
+      'XS': 8, 'S': 9, 'M': 10, 'L': 11, 'XL': 12, 'XXL': 13,
+      // Tallas genéricas
+      'PEQUEÑA': 14, 'MEDIANA': 15, 'GRANDE': 16
+    };
+
+    return [...products].sort((a, b) => {
+      const tallaA = (a.talla || '').toUpperCase().trim();
+      const tallaB = (b.talla || '').toUpperCase().trim();
+
+      const orderA = tallaOrder[tallaA] || 999;
+      const orderB = tallaOrder[tallaB] || 999;
+
+      // Si ambos tienen orden definido, compararlos
+      if (orderA !== 999 && orderB !== 999) {
+        return orderA - orderB;
+      }
+
+      // Si uno tiene orden y el otro no, el que tiene orden va primero
+      if (orderA !== 999) return -1;
+      if (orderB !== 999) return 1;
+
+      // Si ninguno tiene orden, ordenar alfabéticamente
+      return tallaA.localeCompare(tallaB);
+    });
+  };
+
   // Filtrar productos cuando cambian los filtros o la búsqueda
   useEffect(() => {
     let filtered = [...products];
@@ -90,6 +125,9 @@ const Inventory = () => {
     } else if (filterStock === 'agotado') {
       filtered = filtered.filter(product => calcularStockDisponible(product) <= 0);
     }
+
+    // Ordenar por talla
+    filtered = sortByTalla(filtered);
 
     setFilteredProducts(filtered);
     setPaginaActual(1); // Reiniciar a página 1 cuando se filtra
