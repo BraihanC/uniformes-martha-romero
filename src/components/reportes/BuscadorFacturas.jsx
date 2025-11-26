@@ -13,7 +13,7 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { Search, Printer, FileText, Edit2, X } from 'lucide-react';
+import { Search, Printer, FileText, Edit2, X, CreditCard } from 'lucide-react';
 
 // (Copia de la función de POS.jsx)
 const formatCurrency = (value) => {
@@ -51,6 +51,12 @@ const BuscadorFacturas = () => {
   const [productoNuevoSeleccionado, setProductoNuevoSeleccionado] = useState(null);
   const [notasCorreccion, setNotasCorreccion] = useState('');
   const [corrigiendo, setCorrigiendo] = useState(false);
+
+  // Estados para corrección de método de pago
+  const [showMetodoPagoModal, setShowMetodoPagoModal] = useState(false);
+  const [nuevoMetodoPago, setNuevoMetodoPago] = useState('');
+  const [notasMetodoPago, setNotasMetodoPago] = useState('');
+  const [cambiandoMetodoPago, setCambiandoMetodoPago] = useState(false);
 
   // Paginación
   const [paginaActual, setPaginaActual] = useState(1);
@@ -437,6 +443,132 @@ const BuscadorFacturas = () => {
     }
   };
 
+  /**
+   * Abre el modal para cambiar el método de pago
+   */
+  const handleOpenMetodoPagoModal = () => {
+    setNuevoMetodoPago(facturaSeleccionada.metodoPago || 'Efectivo');
+    setNotasMetodoPago('');
+    setShowMetodoPagoModal(true);
+  };
+
+  /**
+   * Cierra el modal de método de pago
+   */
+  const handleCloseMetodoPagoModal = () => {
+    setShowMetodoPagoModal(false);
+    setNuevoMetodoPago('');
+    setNotasMetodoPago('');
+  };
+
+  /**
+   * Cambia el método de pago de la factura
+   */
+  const handleCambiarMetodoPago = async () => {
+    if (!nuevoMetodoPago) {
+      alert('Selecciona el nuevo método de pago');
+      return;
+    }
+
+    if (!notasMetodoPago.trim()) {
+      alert('Ingresa una nota explicando el cambio');
+      return;
+    }
+
+    if (nuevoMetodoPago === facturaSeleccionada.metodoPago) {
+      alert('El método de pago es el mismo que el actual');
+      return;
+    }
+
+    const confirmar = window.confirm(
+      `⚠️ CAMBIAR MÉTODO DE PAGO\n\n` +
+      `Factura #${facturaSeleccionada.numeroFactura}\n\n` +
+      `Método actual: ${facturaSeleccionada.metodoPago}\n` +
+      `Nuevo método: ${nuevoMetodoPago}\n\n` +
+      `Esta acción:\n` +
+      `• Modificará la factura original\n` +
+      `• Actualizará la transacción\n` +
+      `• Registrará el cambio\n\n` +
+      `¿Continuar?`
+    );
+
+    if (!confirmar) return;
+
+    setCambiandoMetodoPago(true);
+    try {
+      const batch = writeBatch(db);
+      const facturaRef = doc(db, 'sales', facturaSeleccionada.id);
+
+      // 1. Actualizar la factura
+      batch.update(facturaRef, {
+        metodoPago: nuevoMetodoPago,
+        correccionMetodoPago: {
+          fecha: serverTimestamp(),
+          metodoPagoAnterior: facturaSeleccionada.metodoPago,
+          metodoPagoNuevo: nuevoMetodoPago,
+          notas: notasMetodoPago
+        },
+        updatedAt: serverTimestamp()
+      });
+
+      // 2. Buscar y actualizar la transacción asociada
+      const transactionsQuery = query(
+        collection(db, 'transactions'),
+        where('ventaId', '==', facturaSeleccionada.id)
+      );
+      const transactionsSnapshot = await getDocs(transactionsQuery);
+
+      transactionsSnapshot.docs.forEach(transactionDoc => {
+        batch.update(transactionDoc.ref, {
+          metodoPago: nuevoMetodoPago,
+          correccionMetodoPago: {
+            fecha: serverTimestamp(),
+            metodoPagoAnterior: facturaSeleccionada.metodoPago,
+            metodoPagoNuevo: nuevoMetodoPago,
+            notas: notasMetodoPago
+          }
+        });
+      });
+
+      await batch.commit();
+
+      alert(
+        `✅ Método de pago actualizado\n\n` +
+        `Anterior: ${facturaSeleccionada.metodoPago}\n` +
+        `Nuevo: ${nuevoMetodoPago}`
+      );
+
+      // Refrescar facturas
+      const querySnapshot = await getDocs(collection(db, 'sales'));
+      const facturas = querySnapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      }));
+      facturas.sort((a, b) => (b.numeroFactura || 0) - (a.numeroFactura || 0));
+      setTodasFacturas(facturas);
+
+      // Actualizar factura seleccionada
+      const facturaActualizada = facturas.find(f => f.id === facturaSeleccionada.id);
+      if (facturaActualizada) {
+        const fechaLegible = facturaActualizada.createdAt?.toDate?.()
+          ? facturaActualizada.createdAt.toDate().toLocaleDateString('es-CO')
+          : new Date().toLocaleDateString('es-CO');
+        setFacturaSeleccionada({
+          ...facturaActualizada,
+          fecha: fechaLegible
+        });
+      }
+
+      handleCloseMetodoPagoModal();
+
+    } catch (error) {
+      console.error('Error al cambiar método de pago:', error);
+      alert('❌ Error al cambiar método de pago: ' + error.message);
+    } finally {
+      setCambiandoMetodoPago(false);
+    }
+  };
+
   return (
     <div>
       {/* --- Barra de Búsqueda y Filtros --- */}
@@ -786,6 +918,13 @@ const BuscadorFacturas = () => {
                 </button>
               </div>
               <button
+                onClick={handleOpenMetodoPagoModal}
+                className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center justify-center gap-2"
+              >
+                <CreditCard size={16} />
+                Cambiar Método de Pago
+              </button>
+              <button
                 onClick={handleClosePrintModal}
                 className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
               >
@@ -965,6 +1104,81 @@ const BuscadorFacturas = () => {
               <button
                 onClick={handleCloseCorreccionModal}
                 disabled={corrigiendo}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CAMBIO DE MÉTODO DE PAGO */}
+      {showMetodoPagoModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-gray-800">Cambiar Método de Pago</h2>
+              <button
+                onClick={handleCloseMetodoPagoModal}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                <X size={24} />
+              </button>
+            </div>
+
+            {/* Método actual */}
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+              <h3 className="font-semibold text-yellow-800 mb-2">Método de Pago Actual:</h3>
+              <p className="text-gray-800 text-lg font-bold">{facturaSeleccionada.metodoPago}</p>
+            </div>
+
+            {/* Selector de nuevo método */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Nuevo Método de Pago:
+              </label>
+              <select
+                value={nuevoMetodoPago}
+                onChange={(e) => setNuevoMetodoPago(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="Efectivo">Efectivo</option>
+                <option value="Nequi">Nequi</option>
+                <option value="Daviplata">Daviplata</option>
+                <option value="Nu">Nu</option>
+                <option value="Tarjeta">Tarjeta</option>
+                <option value="Transferencia">Transferencia</option>
+                <option value="Mixto">Mixto</option>
+              </select>
+            </div>
+
+            {/* Notas de corrección */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Notas (obligatorio):
+              </label>
+              <textarea
+                value={notasMetodoPago}
+                onChange={(e) => setNotasMetodoPago(e.target.value)}
+                placeholder="Ej: La cajera se confundió al registrar el método de pago..."
+                rows={3}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-2">
+              <button
+                onClick={handleCambiarMetodoPago}
+                disabled={cambiandoMetodoPago || !notasMetodoPago.trim() || nuevoMetodoPago === facturaSeleccionada.metodoPago}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cambiandoMetodoPago ? '⏳ Cambiando...' : '✓ Cambiar Método'}
+              </button>
+              <button
+                onClick={handleCloseMetodoPagoModal}
+                disabled={cambiandoMetodoPago}
                 className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancelar
