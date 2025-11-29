@@ -94,6 +94,14 @@ const Pedidos = () => {
 
   const [loading, setLoading] = useState(false);
 
+  // Estados para corrección de productos en pedidos
+  const [showCorreccionProductoModal, setShowCorreccionProductoModal] = useState(false);
+  const [itemIndexToCorrect, setItemIndexToCorrect] = useState(null);
+  const [searchProductoCorreccion, setSearchProductoCorreccion] = useState('');
+  const [productoNuevoSeleccionado, setProductoNuevoSeleccionado] = useState(null);
+  const [notasCorreccion, setNotasCorreccion] = useState('');
+  const [corrigiendoProducto, setCorrigiendoProducto] = useState(false);
+
   // Cargar datos al iniciar
   useEffect(() => {
     fetchClients();
@@ -389,15 +397,9 @@ const Pedidos = () => {
 
       batch.set(pedidoRef, pedidoData);
 
-      // Paso B: Actualizar inventario de cada producto
-      cartItems.forEach(item => {
-        const productRef = doc(db, 'products', item.product.id);
-        batch.update(productRef, {
-          stockTotal: increment(item.cantidad),
-          stockReservadoPedidos: increment(item.cantidad),
-          updatedAt: serverTimestamp()
-        });
-      });
+      // Paso B: NO actualizar stockTotal (las prendas no existen aún)
+      // Solo se registra el pedido con items en estado "En Producción"
+      // El stock se asignará automáticamente cuando llegue la entrada de satélite/proveedor
 
       // 5. (NUEVO) Registrar Transacción de Abono Inicial (si existe)
       if (abonoInicial > 0) {
@@ -629,15 +631,46 @@ const Pedidos = () => {
       });
 
       // 2. Actualizar Inventario (reducir stock)
-      selectedItemsForDelivery.forEach(index => {
+      // Primero verificar que todos los productos existan
+      const productosNoEncontrados = [];
+      for (const index of selectedItemsForDelivery) {
         const item = selectedPedido.items[index];
         const productRef = doc(db, 'products', item.productoId);
-        batch.update(productRef, {
-          stockTotal: increment(-item.cantidad),
-          stockReservadoPedidos: increment(-item.cantidad),
-          updatedAt: serverTimestamp()
-        });
-      });
+        const productSnap = await getDoc(productRef);
+
+        if (!productSnap.exists()) {
+          productosNoEncontrados.push({
+            nombre: item.productoNombre,
+            ref: item.productoRef,
+            talla: item.talla
+          });
+        } else {
+          // Solo actualizar si el producto existe
+          batch.update(productRef, {
+            stockTotal: increment(-item.cantidad),
+            stockReservadoPedidos: increment(-item.cantidad),
+            updatedAt: serverTimestamp()
+          });
+        }
+      }
+
+      // Si hay productos no encontrados, advertir pero continuar
+      if (productosNoEncontrados.length > 0) {
+        const listaProductos = productosNoEncontrados
+          .map(p => `- ${p.nombre} (Ref: ${p.ref}, Talla: ${p.talla})`)
+          .join('\n');
+
+        const continuar = window.confirm(
+          `⚠️ ADVERTENCIA: Los siguientes productos ya no existen en el inventario:\n\n${listaProductos}\n\n` +
+          `El pedido se facturará correctamente, pero no se ajustará el inventario de estos productos.\n\n` +
+          `¿Deseas continuar?`
+        );
+
+        if (!continuar) {
+          setLoading(false);
+          return;
+        }
+      }
 
       // 3. (NUEVO) Registrar Transacción de Abono (si existe)
       if (abonoNuevo > 0) {
@@ -752,6 +785,148 @@ const Pedidos = () => {
       alert('Error al registrar el abono. Intenta de nuevo.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Funciones para corrección de productos en pedidos
+  const handleOpenCorreccionProducto = (itemIndex) => {
+    setItemIndexToCorrect(itemIndex);
+    setShowCorreccionProductoModal(true);
+    setSearchProductoCorreccion('');
+    setProductoNuevoSeleccionado(null);
+    setNotasCorreccion('');
+  };
+
+  const handleCloseCorreccionProducto = () => {
+    setShowCorreccionProductoModal(false);
+    setItemIndexToCorrect(null);
+    setSearchProductoCorreccion('');
+    setProductoNuevoSeleccionado(null);
+    setNotasCorreccion('');
+  };
+
+  const handleCorregirProductoPedido = async () => {
+    if (!selectedPedido || itemIndexToCorrect === null || !productoNuevoSeleccionado) {
+      alert('Por favor, selecciona un producto nuevo.');
+      return;
+    }
+
+    if (!notasCorreccion.trim()) {
+      alert('Por favor, ingresa las notas explicando el motivo de la corrección.');
+      return;
+    }
+
+    const itemActual = selectedPedido.items[itemIndexToCorrect];
+
+    // Validar que no sea el mismo producto
+    if (itemActual.productoId === productoNuevoSeleccionado.id) {
+      alert('El producto seleccionado es el mismo que el actual.');
+      return;
+    }
+
+    const confirmar = window.confirm(
+      `¿Confirmas que deseas corregir este producto?\n\n` +
+      `Producto Actual:\n` +
+      `- ${itemActual.nombre || itemActual.productoNombre}\n` +
+      `- Ref: ${itemActual.referencia}\n` +
+      `- Talla: ${itemActual.talla}\n\n` +
+      `Producto Nuevo:\n` +
+      `- ${productoNuevoSeleccionado.nombre}\n` +
+      `- Ref: ${productoNuevoSeleccionado.referencia}\n` +
+      `- Talla: ${productoNuevoSeleccionado.talla}\n\n` +
+      `Notas: ${notasCorreccion}`
+    );
+
+    if (!confirmar) return;
+
+    setCorrigiendoProducto(true);
+    try {
+      const batch = writeBatch(db);
+      const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
+
+      // Crear copia de items actualizada
+      const updatedItems = [...selectedPedido.items];
+      const cantidadItem = itemActual.cantidad;
+
+      // Actualizar el item con el nuevo producto (mantener cantidad y estado)
+      updatedItems[itemIndexToCorrect] = {
+        ...updatedItems[itemIndexToCorrect],
+        productoId: productoNuevoSeleccionado.id,
+        productoNombre: productoNuevoSeleccionado.nombre,
+        nombre: productoNuevoSeleccionado.nombre,
+        productoRef: productoNuevoSeleccionado.referencia,
+        referencia: productoNuevoSeleccionado.referencia,
+        talla: productoNuevoSeleccionado.talla,
+        precio: productoNuevoSeleccionado.precio,
+        subtotal: productoNuevoSeleccionado.precio * cantidadItem,
+        categoria: productoNuevoSeleccionado.categoria || ''
+      };
+
+      // Recalcular total del pedido
+      const nuevoTotal = updatedItems.reduce((sum, item) => sum + item.subtotal, 0);
+      const nuevoSaldoPendiente = nuevoTotal - (selectedPedido.totalAbonado || 0);
+
+      // 1. Actualizar inventario del producto anterior (liberar stock reservado)
+      const productoAnteriorRef = doc(db, 'products', itemActual.productoId);
+      const productoAnteriorSnap = await getDoc(productoAnteriorRef);
+
+      if (productoAnteriorSnap.exists()) {
+        batch.update(productoAnteriorRef, {
+          stockReservadoPedidos: increment(-cantidadItem),
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      // 2. Actualizar inventario del producto nuevo (reservar stock)
+      const productoNuevoRef = doc(db, 'products', productoNuevoSeleccionado.id);
+      batch.update(productoNuevoRef, {
+        stockReservadoPedidos: increment(cantidadItem),
+        updatedAt: serverTimestamp()
+      });
+
+      // 3. Actualizar el pedido
+      batch.update(pedidoRef, {
+        items: updatedItems,
+        total: nuevoTotal,
+        saldoPendiente: nuevoSaldoPendiente,
+        correccionProducto: {
+          fecha: serverTimestamp(),
+          usuario: currentUser.uid,
+          itemIndex: itemIndexToCorrect,
+          productoAnterior: {
+            id: itemActual.productoId,
+            nombre: itemActual.nombre || itemActual.productoNombre,
+            ref: itemActual.referencia,
+            talla: itemActual.talla,
+            precio: itemActual.precio
+          },
+          productoNuevo: {
+            id: productoNuevoSeleccionado.id,
+            nombre: productoNuevoSeleccionado.nombre,
+            ref: productoNuevoSeleccionado.referencia,
+            talla: productoNuevoSeleccionado.talla,
+            precio: productoNuevoSeleccionado.precio
+          },
+          notas: notasCorreccion
+        },
+        updatedAt: serverTimestamp()
+      });
+
+      await batch.commit();
+
+      alert('✅ Producto corregido exitosamente.');
+
+      // Recargar pedido
+      const pedidoSnap = await getDoc(pedidoRef);
+      setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
+      fetchPedidos();
+      handleCloseCorreccionProducto();
+
+    } catch (error) {
+      console.error('Error al corregir producto:', error);
+      alert('❌ Error al corregir producto: ' + error.message);
+    } finally {
+      setCorrigiendoProducto(false);
     }
   };
 
@@ -1408,7 +1583,7 @@ const Pedidos = () => {
                     <option value="Efectivo">Efectivo</option>
                     <option value="Nequi">Nequi</option>
                     <option value="Daviplata">Daviplata</option>
-                    <option value="Transferencia">Transferencia</option>
+                    <option value="Nu">Nu</option>
                     <option value="Tarjeta">Tarjeta</option>
                   </select>
                 </div>
@@ -1536,6 +1711,62 @@ const Pedidos = () => {
             </div>
 
             <div className="p-6 space-y-6">
+              {/* Lista de Productos del Pedido */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                  Productos del Pedido
+                </h3>
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
+                        <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Cantidad</th>
+                        <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Precio</th>
+                        <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Subtotal</th>
+                        <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Estado</th>
+                        <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {selectedPedido.items.map((item, index) => (
+                        <tr key={index}>
+                          <td className="px-4 py-3">
+                            <p className="font-medium text-gray-800">{item.nombre || item.productoNombre}</p>
+                            <p className="text-sm text-gray-600">Ref: {item.referencia} | Talla: {item.talla}</p>
+                          </td>
+                          <td className="px-4 py-3 text-center">{item.cantidad}</td>
+                          <td className="px-4 py-3 text-center">${item.precio?.toLocaleString('es-CO')}</td>
+                          <td className="px-4 py-3 text-center font-medium">${item.subtotal?.toLocaleString('es-CO')}</td>
+                          <td className="px-4 py-3 text-center">
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                              item.estadoItem === 'En Producción'
+                                ? 'bg-blue-100 text-blue-800'
+                                : item.estadoItem === 'Listo para Entrega'
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : 'bg-green-100 text-green-800'
+                            }`}>
+                              {item.estadoItem}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            {item.estadoItem !== 'Entregado' && (
+                              <button
+                                onClick={() => handleOpenCorreccionProducto(index)}
+                                className="px-3 py-1 bg-orange-500 text-white text-xs rounded hover:bg-orange-600 transition-colors"
+                                title="Corregir Producto"
+                              >
+                                Corregir
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
               {/* Sub-Módulo 1: Estado de Taller */}
               <div>
                 <h3 className="text-lg font-semibold text-gray-800 mb-3">
@@ -1699,7 +1930,7 @@ const Pedidos = () => {
                               <option value="Efectivo">Efectivo</option>
                               <option value="Nequi">Nequi</option>
                               <option value="Daviplata">Daviplata</option>
-                              <option value="Transferencia">Transferencia</option>
+                              <option value="Nu">Nu</option>
                               <option value="Tarjeta">Tarjeta</option>
                             </select>
                           </div>
@@ -1831,7 +2062,7 @@ const Pedidos = () => {
                         <option value="Efectivo">Efectivo</option>
                         <option value="Nequi">Nequi</option>
                         <option value="Daviplata">Daviplata</option>
-                        <option value="Transferencia">Transferencia</option>
+                        <option value="Nu">Nu</option>
                         <option value="Tarjeta">Tarjeta</option>
                       </select>
                     </div>
@@ -1891,20 +2122,26 @@ const Pedidos = () => {
 
       {/* PRINT MODAL */}
       {reciboDatos && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md">
-            <div className="mb-4 flex justify-between items-center">
-              <h2 className="text-xl font-bold">Pedido Generado</h2>
-              <button
-                onClick={() => setReciboDatos(null)}
-                className="text-gray-500 hover:text-gray-700 text-2xl"
-              >
-                ×
-              </button>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg w-full flex flex-col" style={{ maxWidth: '400px', maxHeight: '90vh' }}>
+
+            {/* Header - Fijo arriba */}
+            <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold">Pedido Generado</h2>
+                <button
+                  onClick={() => setReciboDatos(null)}
+                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                >
+                  ×
+                </button>
+              </div>
             </div>
 
-            {/* Receipt Preview (80mm width ≈ 300px) */}
-            <div id="receipt-print" className="bg-white" style={{ maxWidth: '300px', margin: '0 auto', padding: '8px' }}>
+            {/* Receipt Preview - Con scroll si es necesario */}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <div className="flex justify-center">
+                <div id="receipt-print" className="bg-white" style={{ maxWidth: '300px', padding: '8px' }}>
               {/* Company Info */}
               <div className="text-center mb-4">
                 <h3 className="font-bold text-lg">{companyConfig?.nombre || 'MARTHA ROMERO UNIFORMES'}</h3>
@@ -1992,10 +2229,13 @@ const Pedidos = () => {
                 <p>¡Gracias por su pedido!</p>
                 <p>Este es un comprobante de pedido</p>
               </div>
+                </div>
+              </div>
             </div>
 
-            {/* Action Buttons */}
-            <div className="flex flex-col gap-2 mt-4">
+            {/* Action Buttons - Fijos abajo */}
+            <div className="flex-shrink-0 px-6 py-4 border-t border-gray-200 bg-gray-50">
+              <div className="flex flex-col gap-2">
               <div className="flex gap-2">
                 <button
                   onClick={handlePrint}
@@ -2012,12 +2252,13 @@ const Pedidos = () => {
                   📧 Enviar por Correo
                 </button>
               </div>
-              <button
-                onClick={() => setReciboDatos(null)}
-                className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
-              >
-                Cerrar
-              </button>
+                <button
+                  onClick={() => setReciboDatos(null)}
+                  className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
+                >
+                  Cerrar
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2355,6 +2596,134 @@ const Pedidos = () => {
           }
         }
       `}</style>
+
+      {/* Modal de Corrección de Producto */}
+      {showCorreccionProductoModal && selectedPedido && itemIndexToCorrect !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-semibold text-gray-800">Corregir Producto en Pedido</h3>
+              <button
+                onClick={handleCloseCorreccionProducto}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Producto Actual */}
+            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <h4 className="font-semibold text-red-800 mb-2">Producto Actual (a reemplazar)</h4>
+              <div className="text-sm text-gray-700">
+                <p><strong>Nombre:</strong> {selectedPedido.items[itemIndexToCorrect].nombre || selectedPedido.items[itemIndexToCorrect].productoNombre}</p>
+                <p><strong>Ref:</strong> {selectedPedido.items[itemIndexToCorrect].referencia}</p>
+                <p><strong>Talla:</strong> {selectedPedido.items[itemIndexToCorrect].talla}</p>
+                <p><strong>Cantidad:</strong> {selectedPedido.items[itemIndexToCorrect].cantidad}</p>
+                <p><strong>Precio:</strong> ${selectedPedido.items[itemIndexToCorrect].precio?.toLocaleString('es-CO')}</p>
+                <p><strong>Subtotal:</strong> ${selectedPedido.items[itemIndexToCorrect].subtotal?.toLocaleString('es-CO')}</p>
+              </div>
+            </div>
+
+            {/* Buscador de Producto Nuevo */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Buscar Producto Nuevo
+              </label>
+              <input
+                type="text"
+                placeholder="Buscar por nombre, referencia o talla..."
+                value={searchProductoCorreccion}
+                onChange={(e) => setSearchProductoCorreccion(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+              />
+            </div>
+
+            {/* Lista de Productos */}
+            <div className="mb-4 max-h-60 overflow-y-auto border border-gray-200 rounded-lg">
+              {allProducts
+                .filter(p => {
+                  const searchLower = searchProductoCorreccion.toLowerCase();
+                  return (
+                    p.nombre?.toLowerCase().includes(searchLower) ||
+                    p.referencia?.toLowerCase().includes(searchLower) ||
+                    p.talla?.toLowerCase().includes(searchLower)
+                  );
+                })
+                .slice(0, 20)
+                .map(producto => (
+                  <div
+                    key={producto.id}
+                    onClick={() => setProductoNuevoSeleccionado(producto)}
+                    className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${
+                      productoNuevoSeleccionado?.id === producto.id ? 'bg-blue-50' : ''
+                    }`}
+                  >
+                    <p className="font-medium text-gray-800">{producto.nombre}</p>
+                    <p className="text-sm text-gray-600">
+                      Ref: {producto.referencia} | Talla: {producto.talla} | Precio: ${producto.precio?.toLocaleString('es-CO')}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      Stock: {producto.stockTotal || 0} | Categoría: {producto.categoria || 'N/A'}
+                    </p>
+                  </div>
+                ))}
+            </div>
+
+            {/* Producto Seleccionado */}
+            {productoNuevoSeleccionado && (
+              <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                <h4 className="font-semibold text-green-800 mb-2">Producto Nuevo Seleccionado</h4>
+                <div className="text-sm text-gray-700">
+                  <p><strong>Nombre:</strong> {productoNuevoSeleccionado.nombre}</p>
+                  <p><strong>Ref:</strong> {productoNuevoSeleccionado.referencia}</p>
+                  <p><strong>Talla:</strong> {productoNuevoSeleccionado.talla}</p>
+                  <p><strong>Precio:</strong> ${productoNuevoSeleccionado.precio?.toLocaleString('es-CO')}</p>
+                  <p><strong>Nuevo Subtotal:</strong> ${(productoNuevoSeleccionado.precio * selectedPedido.items[itemIndexToCorrect].cantidad)?.toLocaleString('es-CO')}</p>
+                  <p className="mt-2 text-orange-700">
+                    <strong>Diferencia:</strong> ${Math.abs((productoNuevoSeleccionado.precio * selectedPedido.items[itemIndexToCorrect].cantidad) - selectedPedido.items[itemIndexToCorrect].subtotal)?.toLocaleString('es-CO')}
+                    {(productoNuevoSeleccionado.precio * selectedPedido.items[itemIndexToCorrect].cantidad) > selectedPedido.items[itemIndexToCorrect].subtotal ? ' (aumenta)' : ' (disminuye)'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Notas de Corrección */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Notas de Corrección <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={notasCorreccion}
+                onChange={(e) => setNotasCorreccion(e.target.value)}
+                placeholder="Explica el motivo de la corrección..."
+                rows={3}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+              />
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-3">
+              <button
+                onClick={handleCorregirProductoPedido}
+                disabled={corrigiendoProducto || !productoNuevoSeleccionado || !notasCorreccion.trim()}
+                style={{ backgroundColor: '#D50565' }}
+                className="flex-1 px-6 py-3 text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {corrigiendoProducto ? 'Corrigiendo...' : 'Corregir Producto'}
+              </button>
+              <button
+                onClick={handleCloseCorreccionProducto}
+                disabled={corrigiendoProducto}
+                className="px-6 py-3 bg-gray-500 text-white font-medium rounded-lg hover:bg-gray-600 transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

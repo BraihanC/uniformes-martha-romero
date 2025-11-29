@@ -4,9 +4,9 @@ import {
   getDocs,
   doc,
   updateDoc,
+  deleteDoc,
   increment,
-  query,
-  where
+  serverTimestamp
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
@@ -17,43 +17,49 @@ import {
   XCircle,
   AlertTriangle,
   TrendingUp,
-  Calendar,
-  User
+  User,
+  Factory,
+  Users
 } from 'lucide-react';
 
 const ProductosReparacion = () => {
   const { currentUser } = useAuth();
-  const [productosDefectuosos, setProductosDefectuosos] = useState([]);
+  const [productosReparacion, setProductosReparacion] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedProducto, setSelectedProducto] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [accion, setAccion] = useState(null); // 'reparar' o 'baja'
   const [observaciones, setObservaciones] = useState('');
+  const [activeTab, setActiveTab] = useState('clientes'); // 'clientes' o 'satelites'
 
-  // Cargar productos con defectos
+  // Cargar productos en reparación
   useEffect(() => {
-    fetchProductosDefectuosos();
+    fetchProductosReparacion();
   }, []);
 
-  const fetchProductosDefectuosos = async () => {
+  const fetchProductosReparacion = async () => {
     setLoading(true);
     try {
-      const productosSnapshot = await getDocs(collection(db, 'products'));
-      const productos = productosSnapshot.docs
+      const reparacionSnapshot = await getDocs(collection(db, 'productosReparacion'));
+      const productos = reparacionSnapshot.docs
         .map(doc => ({
           id: doc.id,
           ...doc.data()
         }))
-        .filter(p => (p.stockDefectuoso || 0) > 0);
+        .filter(p => p.estado === 'Pendiente'); // Solo pendientes
 
-      setProductosDefectuosos(productos);
+      setProductosReparacion(productos);
     } catch (error) {
-      console.error('Error al cargar productos defectuosos:', error);
-      alert('Error al cargar productos defectuosos');
+      console.error('Error al cargar productos en reparación:', error);
+      alert('Error al cargar productos en reparación');
     } finally {
       setLoading(false);
     }
   };
+
+  // Filtrar por origen
+  const productosClientes = productosReparacion.filter(p => p.origen !== 'satelite');
+  const productosSatelites = productosReparacion.filter(p => p.origen === 'satelite');
 
   const handleOpenModal = (producto, tipoAccion) => {
     setSelectedProducto(producto);
@@ -66,78 +72,77 @@ const ProductosReparacion = () => {
     if (!selectedProducto) return;
 
     try {
-      const productoRef = doc(db, 'products', selectedProducto.id);
-
-      // Actualizar historial de defectos: marcar todos como reparados
-      const historialActualizado = (selectedProducto.historialDefectos || []).map(defecto => ({
-        ...defecto,
-        estado: 'reparado',
-        fechaReparacion: new Date().toISOString(),
-        observaciones: observaciones
-      }));
-
-      // Devolver el stock defectuoso al stock total
-      await updateDoc(productoRef, {
-        stockTotal: increment(selectedProducto.stockDefectuoso),
-        stockDefectuoso: 0,
-        historialDefectos: historialActualizado
+      // 1. Actualizar estado del documento en productosReparacion
+      const reparacionRef = doc(db, 'productosReparacion', selectedProducto.id);
+      await updateDoc(reparacionRef, {
+        estado: 'Reparado',
+        fechaReparacion: serverTimestamp(),
+        observacionesReparacion: observaciones,
+        reparadoPor: currentUser.uid
       });
 
-      alert(`✅ ${selectedProducto.stockDefectuoso} unidades de "${selectedProducto.nombre}" fueron marcadas como reparadas y devueltas al inventario`);
+      // 2. Devolver las unidades al stock total del producto
+      const productoRef = doc(db, 'products', selectedProducto.productId);
+      await updateDoc(productoRef, {
+        stockTotal: increment(selectedProducto.cantidad),
+        updatedAt: serverTimestamp()
+      });
+
+      alert(`✅ ${selectedProducto.cantidad} unidades de "${selectedProducto.nombre}" fueron marcadas como reparadas y devueltas al inventario`);
       setShowModal(false);
-      fetchProductosDefectuosos();
+      fetchProductosReparacion();
     } catch (error) {
       console.error('Error al marcar como reparado:', error);
-      alert('Error al marcar como reparado');
+      alert('Error al marcar como reparado: ' + error.message);
     }
   };
 
   const handleDarDeBaja = async () => {
     if (!selectedProducto) return;
 
+    if (!observaciones.trim()) {
+      alert('Por favor, ingresa las observaciones sobre el motivo de la baja.');
+      return;
+    }
+
     const confirmar = window.confirm(
-      `¿Estás seguro de dar de baja ${selectedProducto.stockDefectuoso} unidades de "${selectedProducto.nombre}"?\n\nEsta acción eliminará estas unidades del inventario permanentemente.`
+      `¿Estás seguro de dar de baja ${selectedProducto.cantidad} unidades de "${selectedProducto.nombre}"?\n\nEsta acción eliminará estas unidades del inventario permanentemente.`
     );
 
     if (!confirmar) return;
 
     try {
-      const productoRef = doc(db, 'products', selectedProducto.id);
-
-      // Actualizar historial: marcar como dado de baja
-      const historialActualizado = (selectedProducto.historialDefectos || []).map(defecto => ({
-        ...defecto,
-        estado: 'baja',
-        fechaBaja: new Date().toISOString(),
-        observaciones: observaciones
-      }));
-
-      // Eliminar del stock defectuoso (no lo devuelve al stock total)
-      await updateDoc(productoRef, {
-        stockDefectuoso: 0,
-        historialDefectos: historialActualizado
+      // 1. Actualizar estado del documento en productosReparacion
+      const reparacionRef = doc(db, 'productosReparacion', selectedProducto.id);
+      await updateDoc(reparacionRef, {
+        estado: 'Baja',
+        fechaBaja: serverTimestamp(),
+        observacionesBaja: observaciones,
+        bajaPor: currentUser.uid
       });
 
-      alert(`❌ ${selectedProducto.stockDefectuoso} unidades de "${selectedProducto.nombre}" fueron dadas de baja del inventario`);
+      alert(`❌ ${selectedProducto.cantidad} unidades de "${selectedProducto.nombre}" fueron dadas de baja del inventario`);
       setShowModal(false);
-      fetchProductosDefectuosos();
+      fetchProductosReparacion();
     } catch (error) {
       console.error('Error al dar de baja:', error);
-      alert('Error al dar de baja');
+      alert('Error al dar de baja: ' + error.message);
     }
   };
 
-  const calcularEstadisticas = () => {
-    const totalUnidades = productosDefectuosos.reduce((sum, p) => sum + (p.stockDefectuoso || 0), 0);
-    const totalProductos = productosDefectuosos.length;
-    const valorEstimado = productosDefectuosos.reduce((sum, p) =>
-      sum + ((p.stockDefectuoso || 0) * (p.precioVenta || 0)), 0
-    );
+  const calcularEstadisticas = (productos) => {
+    const totalUnidades = productos.reduce((sum, p) => sum + (p.cantidad || 0), 0);
+    const totalProductos = productos.length;
 
-    return { totalUnidades, totalProductos, valorEstimado };
+    return { totalUnidades, totalProductos };
   };
 
-  const stats = calcularEstadisticas();
+  const statsClientes = calcularEstadisticas(productosClientes);
+  const statsSatelites = calcularEstadisticas(productosSatelites);
+  const statsTotal = {
+    totalUnidades: statsClientes.totalUnidades + statsSatelites.totalUnidades,
+    totalProductos: statsClientes.totalProductos + statsSatelites.totalProductos
+  };
 
   if (loading) {
     return (
@@ -150,6 +155,110 @@ const ProductosReparacion = () => {
     );
   }
 
+  const ProductoCard = ({ producto }) => (
+    <tr className="hover:bg-gray-50">
+      <td className="px-4 py-3">
+        <div>
+          <p className="font-medium text-gray-800">{producto.nombre}</p>
+          <p className="text-xs text-gray-500">Ref: {producto.referencia}</p>
+          {producto.talla && <p className="text-xs text-gray-500">Talla: {producto.talla}</p>}
+        </div>
+      </td>
+      <td className="px-4 py-3 text-center">
+        <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
+          {producto.cantidad || 0}
+        </span>
+      </td>
+      <td className="px-4 py-3">
+        <div className="text-sm text-gray-600">
+          {producto.origen === 'satelite' ? (
+            <>
+              <p className="font-medium text-orange-600">Satélite: {producto.sateliteNombre}</p>
+              <p className="text-xs">Defectos de fábrica</p>
+            </>
+          ) : (
+            <>
+              {producto.facturaId && <p>Factura: #{producto.numeroFactura}</p>}
+              {producto.cliente && <p>Cliente: {producto.cliente}</p>}
+              {producto.razon && <p className="text-xs">Razón: {producto.razon}</p>}
+            </>
+          )}
+        </div>
+      </td>
+      <td className="px-4 py-3 text-center">
+        <p className="text-xs text-gray-500">
+          {producto.fechaIngreso && new Date(producto.fechaIngreso.toDate()).toLocaleDateString('es-CO')}
+        </p>
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex gap-2 justify-center">
+          <button
+            onClick={() => handleOpenModal(producto, 'reparar')}
+            className="px-3 py-1 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm flex items-center gap-1"
+          >
+            <CheckCircle size={14} />
+            Reparado
+          </button>
+          <button
+            onClick={() => handleOpenModal(producto, 'baja')}
+            className="px-3 py-1 bg-red-500 text-white rounded-lg hover:bg-red-600 text-sm flex items-center gap-1"
+          >
+            <XCircle size={14} />
+            Dar de Baja
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+
+  const ProductoCardMobile = ({ producto }) => (
+    <div className="p-4 border-b border-gray-200">
+      <div className="flex justify-between items-start mb-2">
+        <div className="flex-1">
+          <p className="font-medium text-gray-800">{producto.nombre}</p>
+          <p className="text-xs text-gray-500">Ref: {producto.referencia}</p>
+          {producto.talla && <p className="text-xs text-gray-500">Talla: {producto.talla}</p>}
+        </div>
+        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+          {producto.cantidad}
+        </span>
+      </div>
+      <div className="text-xs text-gray-600 mb-3">
+        {producto.origen === 'satelite' ? (
+          <>
+            <p className="font-medium text-orange-600">Satélite: {producto.sateliteNombre}</p>
+            <p>Defectos de fábrica</p>
+          </>
+        ) : (
+          <>
+            {producto.facturaId && <p>Factura: #{producto.numeroFactura}</p>}
+            {producto.cliente && <p>Cliente: {producto.cliente}</p>}
+            {producto.razon && <p>Razón: {producto.razon}</p>}
+          </>
+        )}
+        <p className="mt-1">
+          Ingreso: {producto.fechaIngreso && new Date(producto.fechaIngreso.toDate()).toLocaleDateString('es-CO')}
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={() => handleOpenModal(producto, 'reparar')}
+          className="flex-1 px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm flex items-center justify-center gap-1"
+        >
+          <CheckCircle size={14} />
+          Reparado
+        </button>
+        <button
+          onClick={() => handleOpenModal(producto, 'baja')}
+          className="flex-1 px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 text-sm flex items-center justify-center gap-1"
+        >
+          <XCircle size={14} />
+          Baja
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -161,13 +270,13 @@ const ProductosReparacion = () => {
         <p className="text-gray-600 mt-1">Gestiona productos con defectos pendientes de reparación</p>
       </div>
 
-      {/* Estadísticas */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      {/* Estadísticas Generales */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg shadow-md p-6 text-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-orange-100 text-sm">Total Unidades</p>
-              <p className="text-3xl font-bold mt-1">{stats.totalUnidades}</p>
+              <p className="text-orange-100 text-sm">Total Unidades en Reparación</p>
+              <p className="text-3xl font-bold mt-1">{statsTotal.totalUnidades}</p>
             </div>
             <Package size={40} className="opacity-80" />
           </div>
@@ -176,149 +285,136 @@ const ProductosReparacion = () => {
         <div className="bg-gradient-to-br from-red-500 to-red-600 rounded-lg shadow-md p-6 text-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-red-100 text-sm">Productos Afectados</p>
-              <p className="text-3xl font-bold mt-1">{stats.totalProductos}</p>
+              <p className="text-red-100 text-sm">Total Casos Pendientes</p>
+              <p className="text-3xl font-bold mt-1">{statsTotal.totalProductos}</p>
             </div>
             <AlertTriangle size={40} className="opacity-80" />
           </div>
         </div>
-
-        <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg shadow-md p-6 text-white">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-purple-100 text-sm">Valor Estimado</p>
-              <p className="text-3xl font-bold mt-1">${stats.valorEstimado.toLocaleString('es-CO')}</p>
-            </div>
-            <TrendingUp size={40} className="opacity-80" />
-          </div>
-        </div>
       </div>
 
-      {/* Lista de productos */}
-      {productosDefectuosos.length === 0 ? (
-        <div className="bg-white rounded-lg shadow-md p-8 text-center">
-          <CheckCircle className="mx-auto text-green-500 mb-4" size={64} />
-          <h3 className="text-xl font-semibold text-gray-800 mb-2">¡No hay productos pendientes!</h3>
-          <p className="text-gray-600">Todos los productos están en buen estado.</p>
+      {/* Tabs */}
+      <div className="bg-white rounded-lg shadow-md overflow-hidden mb-6">
+        <div className="flex border-b border-gray-200">
+          <button
+            onClick={() => setActiveTab('clientes')}
+            className={`flex-1 px-6 py-4 font-medium transition-colors flex items-center justify-center gap-2 ${
+              activeTab === 'clientes'
+                ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Users size={20} />
+            Devoluciones de Clientes
+            <span className={`ml-2 px-2 py-1 rounded-full text-xs font-bold ${
+              activeTab === 'clientes' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
+            }`}>
+              {statsClientes.totalUnidades}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab('satelites')}
+            className={`flex-1 px-6 py-4 font-medium transition-colors flex items-center justify-center gap-2 ${
+              activeTab === 'satelites'
+                ? 'bg-orange-50 text-orange-600 border-b-2 border-orange-600'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Factory size={20} />
+            Defectos de Satélites
+            <span className={`ml-2 px-2 py-1 rounded-full text-xs font-bold ${
+              activeTab === 'satelites' ? 'bg-orange-600 text-white' : 'bg-gray-200 text-gray-600'
+            }`}>
+              {statsSatelites.totalUnidades}
+            </span>
+          </button>
         </div>
-      ) : (
-        <div className="bg-white rounded-lg shadow-md overflow-hidden">
-          {/* Desktop Table */}
-          <div className="hidden md:block overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Unidades Defectuosas</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Stock Disponible</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Defectos Registrados</th>
-                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Acciones</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {productosDefectuosos.map(producto => (
-                  <tr key={producto.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3">
-                      <div>
-                        <p className="font-medium text-gray-800">{producto.nombre}</p>
-                        <p className="text-xs text-gray-500">Ref: {producto.referencia}</p>
-                        <p className="text-xs text-gray-500">Precio: ${producto.precioVenta?.toLocaleString('es-CO')}</p>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
-                        {producto.stockDefectuoso || 0}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span className="text-sm text-gray-600">{producto.stockTotal || 0}</span>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <button
-                        onClick={() => {
-                          setSelectedProducto(producto);
-                          setAccion('ver');
-                          setShowModal(true);
-                        }}
-                        className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-                      >
-                        Ver Historial ({(producto.historialDefectos || []).filter(d => d.estado === 'pendiente').length})
-                      </button>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-2 justify-center">
-                        <button
-                          onClick={() => handleOpenModal(producto, 'reparar')}
-                          className="px-3 py-1 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm flex items-center gap-1"
-                        >
-                          <CheckCircle size={14} />
-                          Reparado
-                        </button>
-                        <button
-                          onClick={() => handleOpenModal(producto, 'baja')}
-                          className="px-3 py-1 bg-red-500 text-white rounded-lg hover:bg-red-600 text-sm flex items-center gap-1"
-                        >
-                          <XCircle size={14} />
-                          Dar de Baja
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
 
-          {/* Mobile Cards */}
-          <div className="md:hidden divide-y divide-gray-200">
-            {productosDefectuosos.map(producto => (
-              <div key={producto.id} className="p-4">
-                <div className="flex justify-between items-start mb-2">
-                  <div className="flex-1">
-                    <p className="font-medium text-gray-800">{producto.nombre}</p>
-                    <p className="text-xs text-gray-500">Ref: {producto.referencia}</p>
+        {/* Contenido de las tabs */}
+        <div className="p-6">
+          {activeTab === 'clientes' && (
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-4">Productos Devueltos por Clientes</h3>
+              {productosClientes.length === 0 ? (
+                <div className="text-center py-8">
+                  <CheckCircle className="mx-auto text-green-500 mb-4" size={48} />
+                  <p className="text-gray-600">No hay devoluciones de clientes pendientes</p>
+                </div>
+              ) : (
+                <>
+                  {/* Desktop Table */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Cantidad</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Detalles</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Fecha Ingreso</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {productosClientes.map(producto => (
+                          <ProductoCard key={producto.id} producto={producto} />
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                  <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                    {producto.stockDefectuoso} defectuosas
-                  </span>
-                </div>
-                <div className="text-xs text-gray-600 mb-3">
-                  <p>Stock disponible: {producto.stockTotal || 0}</p>
-                  <p>Precio: ${producto.precioVenta?.toLocaleString('es-CO')}</p>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <button
-                    onClick={() => {
-                      setSelectedProducto(producto);
-                      setAccion('ver');
-                      setShowModal(true);
-                    }}
-                    className="w-full px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm"
-                  >
-                    Ver Historial
-                  </button>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleOpenModal(producto, 'reparar')}
-                      className="flex-1 px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm flex items-center justify-center gap-1"
-                    >
-                      <CheckCircle size={14} />
-                      Reparado
-                    </button>
-                    <button
-                      onClick={() => handleOpenModal(producto, 'baja')}
-                      className="flex-1 px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 text-sm flex items-center justify-center gap-1"
-                    >
-                      <XCircle size={14} />
-                      Baja
-                    </button>
+
+                  {/* Mobile Cards */}
+                  <div className="md:hidden">
+                    {productosClientes.map(producto => (
+                      <ProductoCardMobile key={producto.id} producto={producto} />
+                    ))}
                   </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'satelites' && (
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-4">Productos con Defectos de Fábrica</h3>
+              {productosSatelites.length === 0 ? (
+                <div className="text-center py-8">
+                  <CheckCircle className="mx-auto text-green-500 mb-4" size={48} />
+                  <p className="text-gray-600">No hay productos con defectos de satélites pendientes</p>
                 </div>
-              </div>
-            ))}
-          </div>
+              ) : (
+                <>
+                  {/* Desktop Table */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Cantidad</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Detalles</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Fecha Ingreso</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {productosSatelites.map(producto => (
+                          <ProductoCard key={producto.id} producto={producto} />
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile Cards */}
+                  <div className="md:hidden">
+                    {productosSatelites.map(producto => (
+                      <ProductoCardMobile key={producto.id} producto={producto} />
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Modal */}
       {showModal && selectedProducto && (
@@ -328,9 +424,10 @@ const ProductosReparacion = () => {
               <div className="flex justify-between items-start">
                 <div>
                   <h2 className="text-2xl font-bold text-gray-800">
-                    {accion === 'ver' ? 'Historial de Defectos' : accion === 'reparar' ? 'Marcar como Reparado' : 'Dar de Baja'}
+                    {accion === 'reparar' ? 'Marcar como Reparado' : 'Dar de Baja'}
                   </h2>
                   <p className="text-gray-600 mt-1">{selectedProducto.nombre}</p>
+                  <p className="text-sm text-gray-500">Ref: {selectedProducto.referencia} • Talla: {selectedProducto.talla}</p>
                 </div>
                 <button
                   onClick={() => setShowModal(false)}
@@ -342,62 +439,71 @@ const ProductosReparacion = () => {
             </div>
 
             <div className="p-6">
-              {accion === 'ver' ? (
-                // Mostrar historial
-                <div>
-                  <p className="text-sm text-gray-600 mb-4">
-                    Total de unidades defectuosas: <span className="font-semibold text-red-600">{selectedProducto.stockDefectuoso}</span>
-                  </p>
-                  <div className="space-y-3">
-                    {(selectedProducto.historialDefectos || [])
-                      .filter(d => d.estado === 'pendiente')
-                      .map((defecto, index) => (
-                        <div key={index} className="border border-gray-200 rounded-lg p-4">
-                          <div className="flex items-start justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <AlertTriangle className="text-red-500" size={20} />
-                              <span className="font-medium text-gray-800">
-                                {defecto.cantidad} unidad{defecto.cantidad > 1 ? 'es' : ''}
-                              </span>
-                            </div>
-                            <span className="text-xs text-gray-500">
-                              <Calendar size={12} className="inline mr-1" />
-                              {new Date(defecto.fecha).toLocaleDateString('es-CO')}
-                            </span>
-                          </div>
-                          <div className="text-sm text-gray-600 space-y-1">
-                            <p><strong>Razón:</strong> {defecto.razon}</p>
-                            <p><strong>Talla:</strong> {defecto.talla}</p>
-                            <p><strong>Factura:</strong> #{defecto.numeroFactura}</p>
-                            <p><strong>Cliente:</strong> {defecto.cliente}</p>
-                          </div>
-                        </div>
-                      ))}
+              {/* Información del producto */}
+              <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-gray-600">Cantidad:</p>
+                    <p className="font-semibold text-red-600">{selectedProducto.cantidad} unidades</p>
                   </div>
-                </div>
-              ) : (
-                // Formulario de acción
-                <div>
-                  <p className="text-sm text-gray-600 mb-4">
-                    {accion === 'reparar'
-                      ? `Vas a marcar ${selectedProducto.stockDefectuoso} unidades como reparadas. Estas unidades volverán al stock disponible.`
-                      : `Vas a dar de baja ${selectedProducto.stockDefectuoso} unidades. Estas unidades serán eliminadas permanentemente del inventario.`
-                    }
-                  </p>
-                  <div className="mb-4">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Observaciones {accion === 'baja' ? '(requerido)' : '(opcional)'}
-                    </label>
-                    <textarea
-                      value={observaciones}
-                      onChange={(e) => setObservaciones(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
-                      rows="3"
-                      placeholder="Agrega observaciones sobre la reparación o el motivo de la baja..."
-                    />
+                  <div>
+                    <p className="text-gray-600">Origen:</p>
+                    <p className="font-semibold">
+                      {selectedProducto.origen === 'satelite'
+                        ? `Satélite: ${selectedProducto.sateliteNombre}`
+                        : 'Devolución de cliente'}
+                    </p>
                   </div>
+                  {selectedProducto.facturaId && (
+                    <div>
+                      <p className="text-gray-600">Factura:</p>
+                      <p className="font-semibold">#{selectedProducto.numeroFactura}</p>
+                    </div>
+                  )}
+                  {selectedProducto.cliente && (
+                    <div>
+                      <p className="text-gray-600">Cliente:</p>
+                      <p className="font-semibold">{selectedProducto.cliente}</p>
+                    </div>
+                  )}
+                  {selectedProducto.razon && (
+                    <div className="col-span-2">
+                      <p className="text-gray-600">Razón del defecto:</p>
+                      <p className="font-semibold">{selectedProducto.razon}</p>
+                    </div>
+                  )}
+                  {selectedProducto.notas && (
+                    <div className="col-span-2">
+                      <p className="text-gray-600">Notas:</p>
+                      <p className="text-sm">{selectedProducto.notas}</p>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
+
+              {/* Formulario de acción */}
+              <div>
+                <p className="text-sm text-gray-600 mb-4">
+                  {accion === 'reparar'
+                    ? `Vas a marcar ${selectedProducto.cantidad} unidades como reparadas. Estas unidades volverán al stock disponible para venta.`
+                    : `Vas a dar de baja ${selectedProducto.cantidad} unidades. Estas unidades serán eliminadas permanentemente del inventario.`
+                  }
+                </p>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Observaciones {accion === 'baja' ? <span className="text-red-500">*</span> : '(opcional)'}
+                  </label>
+                  <textarea
+                    value={observaciones}
+                    onChange={(e) => setObservaciones(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                    rows="3"
+                    placeholder={accion === 'reparar'
+                      ? 'Agrega observaciones sobre la reparación...'
+                      : 'Agrega el motivo de la baja... (requerido)'}
+                  />
+                </div>
+              </div>
             </div>
 
             <div className="p-6 border-t border-gray-200 flex gap-3">
@@ -405,18 +511,16 @@ const ProductosReparacion = () => {
                 onClick={() => setShowModal(false)}
                 className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
               >
-                {accion === 'ver' ? 'Cerrar' : 'Cancelar'}
+                Cancelar
               </button>
-              {accion !== 'ver' && (
-                <button
-                  onClick={accion === 'reparar' ? handleMarcarReparado : handleDarDeBaja}
-                  className={`flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 ${
-                    accion === 'reparar' ? 'bg-green-500' : 'bg-red-500'
-                  }`}
-                >
-                  {accion === 'reparar' ? 'Confirmar Reparación' : 'Confirmar Baja'}
-                </button>
-              )}
+              <button
+                onClick={accion === 'reparar' ? handleMarcarReparado : handleDarDeBaja}
+                className={`flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 ${
+                  accion === 'reparar' ? 'bg-green-500' : 'bg-red-500'
+                }`}
+              >
+                {accion === 'reparar' ? 'Confirmar Reparación' : 'Confirmar Baja'}
+              </button>
             </div>
           </div>
         </div>

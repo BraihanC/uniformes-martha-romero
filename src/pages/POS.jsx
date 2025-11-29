@@ -1294,22 +1294,26 @@ const POS = () => {
 
       {/* PRINT MODAL (CORREGIDO) */}
       {showPrintModal && ventaData && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
-          <div className="bg-white rounded-lg p-6 w-full flex flex-col" style={{ maxWidth: '400px' }}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg w-full flex flex-col" style={{ maxWidth: '400px', maxHeight: '90vh' }}>
 
-            <div className="mb-4 flex justify-between items-center">
-              <h2 className="text-xl font-bold">Factura Generada</h2>
-              <button
-                onClick={handleClosePrintModal}
-                className="text-gray-500 hover:text-gray-700 text-2xl"
-              >
-                &times;
-              </button>
+            {/* Header - Fijo arriba */}
+            <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold">Factura Generada</h2>
+                <button
+                  onClick={handleClosePrintModal}
+                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                >
+                  &times;
+                </button>
+              </div>
             </div>
 
-            {/* Receipt Preview (80mm width ≈ 300px) */}
-            <div className="flex justify-center">
-              <div id="receipt-print" className="border p-4 bg-white" style={{ width: '300px' }}>
+            {/* Receipt Preview - Con scroll si es necesario */}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <div className="flex justify-center">
+                <div id="receipt-print" className="border p-4 bg-white" style={{ width: '300px' }}>
 
               {/* Company Info */}
               <div className="text-center mb-4">
@@ -1393,11 +1397,13 @@ const POS = () => {
                 <p>Método de Pago: {ventaData.metodoPago}</p>
                 <p>¡Gracias por su compra!</p>
               </div>
+                </div>
               </div>
             </div>
 
-            {/* Action Buttons */}
-            <div className="flex flex-col gap-2 mt-4">
+            {/* Action Buttons - Fijos abajo */}
+            <div className="flex-shrink-0 px-6 py-4 border-t border-gray-200 bg-gray-50">
+              <div className="flex flex-col gap-2">
               <div className="flex gap-2">
                 <button
                   onClick={handlePrint}
@@ -1414,12 +1420,13 @@ const POS = () => {
                   📧 Enviar por Correo
                 </button>
               </div>
-              <button
-                onClick={handleClosePrintModal}
-                className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
-              >
-                Cerrar
-              </button>
+                <button
+                  onClick={handleClosePrintModal}
+                  className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
+                >
+                  Cerrar
+                </button>
+              </div>
             </div>
           </div>
         </div>

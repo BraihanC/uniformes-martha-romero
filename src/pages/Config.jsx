@@ -193,8 +193,8 @@ const Config = () => {
   const handleSubmitSatelite = async (e) => {
     e.preventDefault();
 
-    if (!formDataSatelite.nombre.trim() || !formDataSatelite.codigo.trim()) {
-      alert('Por favor, completa al menos el nombre y código.');
+    if (!formDataSatelite.nombre.trim()) {
+      alert('Por favor, completa el nombre del satélite.');
       return;
     }
 
@@ -816,16 +816,19 @@ const Config = () => {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Código
+                  Código (Opcional)
                 </label>
                 <input
                   type="text"
                   value={formDataSatelite.codigo}
                   onChange={(e) => setFormDataSatelite({ ...formDataSatelite, codigo: e.target.value })}
-                  placeholder="Ej: TDA"
+                  placeholder="Ej: TDA (opcional)"
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent uppercase"
                   disabled={loadingSatelite}
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  Identificador corto. Déjalo vacío si el satélite trabaja con varios colegios
+                </p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">

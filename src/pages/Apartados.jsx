@@ -1606,8 +1606,10 @@ const Apartados = () => {
                           className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
                         >
                           <option value="Efectivo">Efectivo</option>
-                          <option value="Transferencia">Transferencia</option>
-                          <option value="Datafono">Datafono</option>
+                          <option value="Nequi">Nequi</option>
+                          <option value="Daviplata">Daviplata</option>
+                          <option value="Nu">Nu</option>
+                          <option value="Tarjeta">Tarjeta</option>
                         </select>
                       </div>
 
@@ -1985,25 +1987,30 @@ const Apartados = () => {
       {/* Modal: Imprimir Tirilla de Apartado - CONTINÚA... */}
       {showReceiptModal && selectedApartado && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10 rounded-t-xl">
-              <h2 className="text-xl font-bold text-gray-800">Vista Previa - Tirilla</h2>
-              <button
-                onClick={() => {
-                  setShowReceiptModal(false);
-                  if (!showManageModal) {
-                    setSelectedApartado(null);
-                  }
-                }}
-                className="text-gray-500 hover:text-gray-700 text-2xl"
-              >
-                &times;
-              </button>
+          <div className="bg-white rounded-xl shadow-xl w-full flex flex-col" style={{ maxWidth: '400px', maxHeight: '90vh' }}>
+
+            {/* Header - Fijo arriba */}
+            <div className="flex-shrink-0 bg-white border-b border-gray-200 px-6 py-4 rounded-t-xl">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold text-gray-800">Vista Previa - Tirilla</h2>
+                <button
+                  onClick={() => {
+                    setShowReceiptModal(false);
+                    if (!showManageModal) {
+                      setSelectedApartado(null);
+                    }
+                  }}
+                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                >
+                  &times;
+                </button>
+              </div>
             </div>
 
-            <div className="p-6">
-              {/* Receipt Preview (80mm width ≈ 300px) */}
-              <div id="receipt-print" className="border p-4 bg-white" style={{ maxWidth: '300px', margin: '0 auto' }}>
+            {/* Receipt Preview - Con scroll si es necesario */}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <div className="flex justify-center">
+                <div id="receipt-print" className="border p-4 bg-white" style={{ maxWidth: '300px' }}>
 
               {/* Company Info */}
               <div className="text-center mb-4">
@@ -2102,10 +2109,12 @@ const Apartados = () => {
                 )}
                 <p>¡Gracias por su preferencia!</p>
               </div>
+                </div>
               </div>
             </div>
 
-            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-3 rounded-b-xl">
+            {/* Botones - Fijos abajo */}
+            <div className="flex-shrink-0 bg-gray-50 border-t border-gray-200 px-6 py-4 rounded-b-xl">
               <div className="flex gap-3">
                 <button
                   onClick={handlePrint}
@@ -2122,18 +2131,18 @@ const Apartados = () => {
                 >
                   📧 Enviar por Correo
                 </button>
+                <button
+                  onClick={() => {
+                    setShowReceiptModal(false);
+                    if (!showManageModal) {
+                      setSelectedApartado(null);
+                    }
+                  }}
+                  className="flex-1 px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 font-medium"
+                >
+                  Cerrar
+                </button>
               </div>
-              <button
-                onClick={() => {
-                  setShowReceiptModal(false);
-                  if (!showManageModal) {
-                    setSelectedApartado(null);
-                  }
-                }}
-                className="w-full px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 font-medium"
-              >
-                Cerrar
-              </button>
             </div>
           </div>
         </div>
@@ -2142,23 +2151,28 @@ const Apartados = () => {
       {/* Modal: Recibo de Abono */}
       {showAbonoReceiptModal && lastAbono && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10 rounded-t-xl">
-              <h2 className="text-xl font-bold text-gray-800">Recibo de Abono</h2>
-              <button
-                onClick={() => {
-                  setShowAbonoReceiptModal(false);
-                  setLastAbono(null);
-                }}
-                className="text-gray-500 hover:text-gray-700 text-2xl"
-              >
-                &times;
-              </button>
+          <div className="bg-white rounded-xl shadow-xl w-full flex flex-col" style={{ maxWidth: '400px', maxHeight: '90vh' }}>
+
+            {/* Header - Fijo arriba */}
+            <div className="flex-shrink-0 bg-white border-b border-gray-200 px-6 py-4 rounded-t-xl">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold text-gray-800">Recibo de Abono</h2>
+                <button
+                  onClick={() => {
+                    setShowAbonoReceiptModal(false);
+                    setLastAbono(null);
+                  }}
+                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                >
+                  &times;
+                </button>
+              </div>
             </div>
 
-            <div className="p-6">
-              {/* Contenido del recibo de abono */}
-              <div id="abono-receipt-print" style={{
+            {/* Receipt Preview - Con scroll si es necesario */}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <div className="flex justify-center">
+                <div id="abono-receipt-print" style={{
                 maxWidth: '300px',
                 margin: '0 auto',
                 padding: '16px',
@@ -2275,10 +2289,13 @@ const Apartados = () => {
                     Gracias por su abono
                   </p>
                 </div>
+                </div>
               </div>
             </div>
 
-            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-3 rounded-b-xl">
+            {/* Botones - Fijos abajo */}
+            <div className="flex-shrink-0 bg-gray-50 border-t border-gray-200 px-6 py-4 rounded-b-xl">
+              <div className="flex gap-3">
               <button
                 onClick={() => {
                   setShowAbonoReceiptModal(false);
@@ -2288,14 +2305,15 @@ const Apartados = () => {
               >
                 Cerrar
               </button>
-              <button
-                onClick={handlePrintAbono}
-                className="px-6 py-2 text-white rounded-lg hover:opacity-90 font-medium flex items-center gap-2"
-                style={{ backgroundColor: '#D50565' }}
-              >
-                <Printer size={18} />
-                Imprimir Recibo
-              </button>
+                <button
+                  onClick={handlePrintAbono}
+                  className="px-6 py-2 text-white rounded-lg hover:opacity-90 font-medium flex items-center gap-2"
+                  style={{ backgroundColor: '#D50565' }}
+                >
+                  <Printer size={18} />
+                  Imprimir Recibo
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2304,22 +2322,28 @@ const Apartados = () => {
       {/* Modal: Imprimir Factura de Apartado */}
       {showFacturaModal && facturaData && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center z-10 rounded-t-xl">
-              <h2 className="text-xl font-bold text-gray-800">Factura de Venta</h2>
-              <button
-                onClick={() => {
-                  setShowFacturaModal(false);
-                  setFacturaData(null);
-                }}
-                className="text-gray-500 hover:text-gray-700 text-2xl"
-              >
-                &times;
-              </button>
+          <div className="bg-white rounded-xl shadow-xl w-full flex flex-col" style={{ maxWidth: '400px', maxHeight: '90vh' }}>
+
+            {/* Header - Fijo arriba */}
+            <div className="flex-shrink-0 bg-white border-b border-gray-200 px-6 py-4 rounded-t-xl">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold text-gray-800">Factura de Venta</h2>
+                <button
+                  onClick={() => {
+                    setShowFacturaModal(false);
+                    setFacturaData(null);
+                  }}
+                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                >
+                  &times;
+                </button>
+              </div>
             </div>
 
-            <div className="p-6">
-              <div id="factura-print" style={{ fontFamily: 'Arial, sans-serif', fontSize: '12px', lineHeight: '1.4' }}>
+            {/* Receipt Preview - Con scroll si es necesario */}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <div className="flex justify-center">
+                <div id="factura-print" style={{ fontFamily: 'Arial, sans-serif', fontSize: '12px', lineHeight: '1.4', maxWidth: '300px' }}>
                 {/* Header */}
                 <div style={{ textAlign: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '2px dashed #000' }}>
                   <h2 style={{ fontSize: '18px', fontWeight: 'bold', margin: '0 0 8px 0' }}>
@@ -2450,11 +2474,14 @@ const Apartados = () => {
                     Este documento es su comprobante de pago
                   </p>
                 </div>
+                </div>
               </div>
             </div>
 
-            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-3 rounded-b-xl">
-              <button
+            {/* Botones - Fijos abajo */}
+            <div className="flex-shrink-0 bg-gray-50 border-t border-gray-200 px-6 py-4 rounded-b-xl">
+              <div className="flex gap-3">
+                <button
                 onClick={() => {
                   setShowFacturaModal(false);
                   setFacturaData(null);
@@ -2513,9 +2540,10 @@ const Apartados = () => {
                 className="px-6 py-2 text-white rounded-lg hover:opacity-90 font-medium flex items-center gap-2"
                 style={{ backgroundColor: '#EA5C2E' }}
               >
-                <Printer size={18} />
-                Imprimir Factura
-              </button>
+                  <Printer size={18} />
+                  Imprimir Factura
+                </button>
+              </div>
             </div>
           </div>
         </div>
