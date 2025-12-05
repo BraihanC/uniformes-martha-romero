@@ -9,7 +9,9 @@ import {
   Timestamp,
   doc,
   setDoc,
-  getDoc
+  getDoc,
+  addDoc,
+  serverTimestamp
 } from 'firebase/firestore';
 import {
   CalendarDays,
@@ -20,8 +22,10 @@ import {
   BarChart2,
   Wallet,
   Edit2,
-  Save
+  Save,
+  HandCoins
 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 
 // --- Helper Functions ---
 
@@ -53,6 +57,7 @@ const formatCurrency = (value) => {
 // --- Componente Principal ---
 
 const CierreCaja = () => { // <--- Nombre cambiado
+  const { currentUser } = useAuth();
   const [startDate, setStartDate] = useState(new Date());
   const [endDate, setEndDate] = useState(new Date());
   const [loading, setLoading] = useState(false);
@@ -62,6 +67,12 @@ const CierreCaja = () => { // <--- Nombre cambiado
   const [baseInicial, setBaseInicial] = useState(0);
   const [editandoBase, setEditandoBase] = useState(false);
   const [baseInputValue, setBaseInputValue] = useState('0');
+
+  // Estados para modal de retiros de caja
+  const [showRetiroModal, setShowRetiroModal] = useState(false);
+  const [retiroMonto, setRetiroMonto] = useState('');
+  const [retiroResponsable, setRetiroResponsable] = useState('Martha Romero');
+  const [retiroNotas, setRetiroNotas] = useState('');
 
   /**
    * Carga el reporte de "Hoy" la primera vez que el componente se monta.
@@ -146,6 +157,66 @@ const CierreCaja = () => { // <--- Nombre cambiado
   };
 
   /**
+   * Registra un retiro de caja
+   */
+  const handleRegistrarRetiro = async () => {
+    const monto = parseFloat(retiroMonto);
+
+    // Validaciones
+    if (!monto || monto <= 0) {
+      alert('Por favor, ingresa un monto válido mayor a 0.');
+      return;
+    }
+
+    if (!retiroResponsable) {
+      alert('Por favor, selecciona quién realiza el retiro.');
+      return;
+    }
+
+    const confirmar = window.confirm(
+      `¿Confirmas el retiro de ${formatCurrency(monto)}?\n\n` +
+      `Retirado por: ${retiroResponsable}\n` +
+      `${retiroNotas ? `Notas: ${retiroNotas}` : ''}`
+    );
+
+    if (!confirmar) return;
+
+    try {
+      setLoading(true);
+
+      // Crear transacción de tipo retiro_caja
+      await addDoc(collection(db, 'transactions'), {
+        tipo: 'retiro_caja',
+        monto: -monto, // Negativo porque sale de caja
+        metodoPago: 'Efectivo', // Los retiros siempre son en efectivo
+        descripcion: `Retiro de caja - ${retiroResponsable}`,
+        responsable: retiroResponsable,
+        notas: retiroNotas.trim() || '',
+        userId: currentUser.uid,
+        fecha: serverTimestamp(),
+        createdAt: serverTimestamp()
+      });
+
+      alert(`✅ Retiro de ${formatCurrency(monto)} registrado correctamente.`);
+
+      // Limpiar formulario y cerrar modal
+      setRetiroMonto('');
+      setRetiroResponsable('Martha Romero');
+      setRetiroNotas('');
+      setShowRetiroModal(false);
+
+      // Recargar el reporte
+      handleFetchReport();
+
+    } catch (error) {
+      console.error('Error al registrar retiro:', error);
+      alert('❌ Error al registrar el retiro: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
    * Función principal que busca y procesa las transacciones.
    */
   const handleFetchReport = async () => {
@@ -185,28 +256,42 @@ const CierreCaja = () => { // <--- Nombre cambiado
       // 5. Procesar los datos
       let totalIngresos = 0;
       let totalEgresos = 0;
+      let totalRetiros = 0;
       const porMetodo = {};
       const porTipo = {};
       const egresosPorCategoria = {};
       const egresosPorMetodo = {};
+      const retirosCaja = []; // Array para detalles de retiros
 
       transactions.forEach(t => {
         const monto = t.monto;
         const metodo = t.metodoPago || 'Indefinido';
         const tipo = t.tipo || 'Indefinido';
 
-        // Sumar a Ingresos o Egresos
-        if (monto > 0) {
+        // Procesar retiros de caja por separado
+        if (tipo === 'retiro_caja') {
+          totalRetiros += Math.abs(monto);
+          retirosCaja.push({
+            fecha: t.fecha,
+            monto: Math.abs(monto),
+            responsable: t.responsable || 'No especificado',
+            notas: t.notas || ''
+          });
+        }
+        // Sumar a Ingresos o Egresos (excluyendo retiros)
+        else if (monto > 0) {
           totalIngresos += monto;
         } else {
           totalEgresos += monto; // monto ya es negativo
         }
 
-        // Agrupar por Método de Pago
-        if (!porMetodo[metodo]) porMetodo[metodo] = { total: 0, ingresos: 0, egresos: 0 };
-        porMetodo[metodo].total += monto;
-        if (monto > 0) porMetodo[metodo].ingresos += monto;
-        else porMetodo[metodo].egresos += monto;
+        // Agrupar por Método de Pago (excluyendo retiros para no duplicar)
+        if (tipo !== 'retiro_caja') {
+          if (!porMetodo[metodo]) porMetodo[metodo] = { total: 0, ingresos: 0, egresos: 0 };
+          porMetodo[metodo].total += monto;
+          if (monto > 0) porMetodo[metodo].ingresos += monto;
+          else porMetodo[metodo].egresos += monto;
+        }
 
         // Agrupar por Tipo de Transacción
         if (!porTipo[tipo]) porTipo[tipo] = { total: 0, count: 0 };
@@ -237,6 +322,8 @@ const CierreCaja = () => { // <--- Nombre cambiado
         transactions,
         totalIngresos,
         totalEgresos,
+        totalRetiros,
+        retirosCaja,
         saldoNeto,
         porMetodo,
         porTipo,
@@ -268,15 +355,26 @@ const CierreCaja = () => { // <--- Nombre cambiado
           <h1 className="text-xl sm:text-2xl font-bold text-gray-800">Cierre de Caja</h1>
           <p className="text-gray-600 mt-1 text-sm sm:text-base">Analiza el flujo de efectivo por rango de fechas.</p>
         </div>
-        <button
-          onClick={handlePrintReport}
-          className="px-3 sm:px-4 py-2 text-sm sm:text-base text-white rounded-lg hover:opacity-90 flex items-center justify-center gap-2"
-          style={{ backgroundColor: '#D50565' }}
-        >
-          <Printer size={16} className="sm:w-[18px] sm:h-[18px]" />
-          <span className="hidden sm:inline">Imprimir Reporte</span>
-          <span className="sm:hidden">Imprimir</span>
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowRetiroModal(true)}
+            className="px-3 sm:px-4 py-2 text-sm sm:text-base text-white rounded-lg hover:opacity-90 flex items-center justify-center gap-2"
+            style={{ backgroundColor: '#EA5C2E' }}
+          >
+            <HandCoins size={16} className="sm:w-[18px] sm:h-[18px]" />
+            <span className="hidden sm:inline">Registrar Retiro</span>
+            <span className="sm:hidden">Retiro</span>
+          </button>
+          <button
+            onClick={handlePrintReport}
+            className="px-3 sm:px-4 py-2 text-sm sm:text-base text-white rounded-lg hover:opacity-90 flex items-center justify-center gap-2"
+            style={{ backgroundColor: '#D50565' }}
+          >
+            <Printer size={16} className="sm:w-[18px] sm:h-[18px]" />
+            <span className="hidden sm:inline">Imprimir Reporte</span>
+            <span className="sm:hidden">Imprimir</span>
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-lg shadow-md p-4 mb-6 print:hidden">
@@ -443,7 +541,7 @@ const CierreCaja = () => { // <--- Nombre cambiado
             </div>
 
             {/* --- Resumen de Totales --- */}
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <div className="flex items-center gap-3">
                   <Wallet className="text-blue-600" size={32} />
@@ -477,6 +575,17 @@ const CierreCaja = () => { // <--- Nombre cambiado
                   </div>
                 </div>
               </div>
+              <div className="bg-orange-50 border border-orange-300 rounded-lg p-4">
+                <div className="flex items-center gap-3">
+                  <HandCoins className="text-orange-600" size={32} />
+                  <div>
+                    <p className="text-sm text-orange-700 font-medium">Retiros de Caja</p>
+                    <p className="text-2xl font-bold text-orange-700">
+                      {formatCurrency(reportData.totalRetiros)}
+                    </p>
+                  </div>
+                </div>
+              </div>
               <div className="bg-blue-100 border border-blue-200 rounded-lg p-4" style={{backgroundColor: '#FFF1E5', borderColor: '#EA5C2E'}}>
                 <div className="flex items-center gap-3">
                   <DollarSign className="text-orange-600" size={32} style={{color: '#EA5C2E'}} />
@@ -494,7 +603,7 @@ const CierreCaja = () => { // <--- Nombre cambiado
                   <div>
                     <p className="text-sm text-purple-700 font-medium">Efectivo Esperado</p>
                     <p className="text-2xl font-bold text-purple-700">
-                      {formatCurrency(baseInicial + reportData.saldoNeto)}
+                      {formatCurrency(baseInicial + reportData.saldoNeto - reportData.totalRetiros)}
                     </p>
                   </div>
                 </div>
@@ -548,6 +657,47 @@ const CierreCaja = () => { // <--- Nombre cambiado
                 </div>
               </div>
             </div>
+
+            {/* --- Detalle de Retiros de Caja (si hay) --- */}
+            {reportData.retirosCaja.length > 0 && (
+              <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                <div className="p-4 border-b flex items-center gap-2" style={{backgroundColor: '#FFF3E0'}}>
+                  <HandCoins size={20} className="text-orange-600" />
+                  <h2 className="text-lg font-semibold text-gray-800">Detalle de Retiros de Caja</h2>
+                </div>
+                <div className="divide-y divide-gray-100">
+                  {reportData.retirosCaja.map((retiro, index) => (
+                    <div key={index} className="p-3 hover:bg-gray-50">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <span className="font-medium text-gray-700">{retiro.responsable}</span>
+                          <span className="text-sm text-gray-500 ml-2">
+                            {retiro.fecha.toLocaleString('es-CO', {
+                              month: 'numeric', day: 'numeric',
+                              hour: '2-digit', minute: '2-digit'
+                            })}
+                          </span>
+                          {retiro.notas && (
+                            <p className="text-xs text-gray-500 mt-1">{retiro.notas}</p>
+                          )}
+                        </div>
+                        <span className="font-bold text-orange-600">
+                          {formatCurrency(retiro.monto)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="p-3 bg-orange-50 font-semibold">
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-800">Total Retirado:</span>
+                      <span className="text-orange-700 text-lg">
+                        {formatCurrency(reportData.totalRetiros)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* --- Detalle de Egresos (si hay) --- */}
             {Object.keys(reportData.egresosPorCategoria).length > 0 && (
@@ -697,6 +847,102 @@ const CierreCaja = () => { // <--- Nombre cambiado
         )}
       </div>
 
+      {/* --- Modal de Retiro de Caja --- */}
+      {showRetiroModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                    <HandCoins className="text-orange-600" size={28} />
+                    Registrar Retiro de Caja
+                  </h2>
+                  <p className="text-gray-600 mt-1 text-sm">Por motivos de seguridad</p>
+                </div>
+                <button
+                  onClick={() => setShowRetiroModal(false)}
+                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                >
+                  &times;
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6">
+              {/* Monto */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Monto a Retirar <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  value={retiroMonto}
+                  onChange={(e) => setRetiroMonto(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-lg"
+                  placeholder="0"
+                  min="0"
+                  step="1000"
+                />
+              </div>
+
+              {/* Responsable */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Retirado por <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={retiroResponsable}
+                  onChange={(e) => setRetiroResponsable(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
+                >
+                  <option value="Martha Romero">Martha Romero</option>
+                  <option value="David Cortés">David Cortés</option>
+                </select>
+              </div>
+
+              {/* Notas */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Notas (opcional)
+                </label>
+                <textarea
+                  value={retiroNotas}
+                  onChange={(e) => setRetiroNotas(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  rows="3"
+                  placeholder="Ej: Retiro por exceso de efectivo en caja"
+                />
+              </div>
+
+              {/* Información */}
+              <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
+                <p className="text-sm text-orange-800">
+                  <strong>Nota:</strong> Este retiro se registrará como una salida de efectivo y afectará el cálculo del efectivo esperado en caja.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-gray-200 flex gap-3">
+              <button
+                onClick={() => setShowRetiroModal(false)}
+                className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleRegistrarRetiro}
+                disabled={loading}
+                className="flex-1 px-4 py-3 text-white rounded-lg hover:opacity-90 font-medium disabled:opacity-50"
+                style={{ backgroundColor: '#EA5C2E' }}
+              >
+                {loading ? 'Registrando...' : 'Registrar Retiro'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* --- Estilos de Impresión --- */}
       <style>{`
         @media print {
@@ -817,6 +1063,10 @@ const CierreCaja = () => { // <--- Nombre cambiado
 
           /* Asegurar que las tarjetas de resumen quepan */
           #reporte-print .grid.md\\:grid-cols-3 {
+            grid-template-columns: repeat(3, 1fr) !important;
+          }
+
+          #reporte-print .grid.lg\\:grid-cols-6 {
             grid-template-columns: repeat(3, 1fr) !important;
           }
 

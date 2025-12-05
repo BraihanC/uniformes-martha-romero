@@ -102,6 +102,13 @@ const Pedidos = () => {
   const [notasCorreccion, setNotasCorreccion] = useState('');
   const [corrigiendoProducto, setCorrigiendoProducto] = useState(false);
 
+  // Estados para cambio de cliente en pedidos
+  const [showCambiarClienteModal, setShowCambiarClienteModal] = useState(false);
+  const [searchNuevoCliente, setSearchNuevoCliente] = useState('');
+  const [nuevoClienteSeleccionado, setNuevoClienteSeleccionado] = useState(null);
+  const [notasCambioCliente, setNotasCambioCliente] = useState('');
+  const [cambiandoCliente, setCambiandoCliente] = useState(false);
+
   // Cargar datos al iniciar
   useEffect(() => {
     fetchClients();
@@ -930,6 +937,88 @@ const Pedidos = () => {
     }
   };
 
+  // Funciones para cambiar cliente del pedido
+  const handleAbrirCambiarCliente = () => {
+    setShowCambiarClienteModal(true);
+    setSearchNuevoCliente('');
+    setNuevoClienteSeleccionado(null);
+    setNotasCambioCliente('');
+  };
+
+  const handleCerrarCambiarCliente = () => {
+    setShowCambiarClienteModal(false);
+    setSearchNuevoCliente('');
+    setNuevoClienteSeleccionado(null);
+    setNotasCambioCliente('');
+  };
+
+  const handleCambiarCliente = async () => {
+    if (!selectedPedido || !nuevoClienteSeleccionado) {
+      alert('Por favor, selecciona un cliente.');
+      return;
+    }
+
+    if (!notasCambioCliente.trim()) {
+      alert('Por favor, ingresa las notas explicando el motivo del cambio de cliente.');
+      return;
+    }
+
+    // Validar que no sea el mismo cliente
+    if (selectedPedido.clienteId === nuevoClienteSeleccionado.id) {
+      alert('El cliente seleccionado es el mismo que el actual.');
+      return;
+    }
+
+    const confirmar = window.confirm(
+      `¿Confirmas que deseas cambiar el cliente de este pedido?\n\n` +
+      `Cliente Actual:\n` +
+      `- ${selectedPedido.clienteNombre}\n\n` +
+      `Cliente Nuevo:\n` +
+      `- ${nuevoClienteSeleccionado.nombreCompleto}\n\n` +
+      `Notas: ${notasCambioCliente}`
+    );
+
+    if (!confirmar) return;
+
+    setCambiandoCliente(true);
+    try {
+      const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
+
+      await updateDoc(pedidoRef, {
+        clienteId: nuevoClienteSeleccionado.id,
+        clienteNombre: nuevoClienteSeleccionado.nombreCompleto,
+        cambioCliente: {
+          fecha: serverTimestamp(),
+          usuario: currentUser.uid,
+          clienteAnterior: {
+            id: selectedPedido.clienteId,
+            nombre: selectedPedido.clienteNombre
+          },
+          clienteNuevo: {
+            id: nuevoClienteSeleccionado.id,
+            nombre: nuevoClienteSeleccionado.nombreCompleto
+          },
+          notas: notasCambioCliente
+        },
+        updatedAt: serverTimestamp()
+      });
+
+      alert('✅ Cliente actualizado exitosamente.');
+
+      // Recargar pedido
+      const pedidoSnap = await getDoc(pedidoRef);
+      setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
+      fetchPedidos();
+      handleCerrarCambiarCliente();
+
+    } catch (error) {
+      console.error('Error al cambiar cliente:', error);
+      alert('❌ Error al cambiar cliente: ' + error.message);
+    } finally {
+      setCambiandoCliente(false);
+    }
+  };
+
   // Imprimir tirilla desde el modal de gestión
   const handleImprimirTirillaGestion = () => {
     if (!selectedPedido) {
@@ -1666,6 +1755,16 @@ const Pedidos = () => {
                   <p className="text-gray-600 mt-1">{selectedPedido.clienteNombre}</p>
                 </div>
                 <div className="flex gap-2">
+                  <button
+                    onClick={handleAbrirCambiarCliente}
+                    style={{ backgroundColor: '#EA5C2E' }}
+                    className="px-4 py-2 text-white rounded-lg hover:opacity-90 transition-opacity flex items-center gap-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    </svg>
+                    Cambiar Cliente
+                  </button>
                   <button
                     onClick={handleImprimirTirillaGestion}
                     style={{ backgroundColor: '#D50565' }}
@@ -2598,6 +2697,131 @@ const Pedidos = () => {
       `}</style>
 
       {/* Modal de Corrección de Producto */}
+      {/* Modal para cambiar cliente */}
+      {showCambiarClienteModal && selectedPedido && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-semibold text-gray-800">Cambiar Cliente del Pedido</h3>
+              <button
+                onClick={handleCerrarCambiarCliente}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Cliente Actual */}
+            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <h4 className="font-semibold text-red-800 mb-2">Cliente Actual</h4>
+              <div className="text-sm text-gray-700">
+                <p><strong>Nombre:</strong> {selectedPedido.clienteNombre}</p>
+                {allClients.find(c => c.id === selectedPedido.clienteId) && (
+                  <>
+                    <p><strong>Documento:</strong> {allClients.find(c => c.id === selectedPedido.clienteId).numeroDocumento}</p>
+                    <p><strong>Teléfono:</strong> {allClients.find(c => c.id === selectedPedido.clienteId).telefono}</p>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Buscador de Cliente Nuevo */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Buscar Cliente Nuevo
+              </label>
+              <input
+                type="text"
+                placeholder="Buscar por nombre, documento o teléfono..."
+                value={searchNuevoCliente}
+                onChange={(e) => setSearchNuevoCliente(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+              />
+            </div>
+
+            {/* Lista de Clientes */}
+            <div className="mb-4 max-h-60 overflow-y-auto border border-gray-200 rounded-lg">
+              {allClients
+                .filter(c => {
+                  if (!searchNuevoCliente.trim()) return true;
+                  const searchLower = searchNuevoCliente.toLowerCase();
+                  return (
+                    c.nombreCompleto?.toLowerCase().includes(searchLower) ||
+                    c.numeroDocumento?.toLowerCase().includes(searchLower) ||
+                    c.telefono?.toLowerCase().includes(searchLower)
+                  );
+                })
+                .slice(0, 20)
+                .map(cliente => (
+                  <div
+                    key={cliente.id}
+                    onClick={() => setNuevoClienteSeleccionado(cliente)}
+                    className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${
+                      nuevoClienteSeleccionado?.id === cliente.id ? 'bg-blue-50' : ''
+                    }`}
+                  >
+                    <p className="font-medium text-gray-800">{cliente.nombreCompleto}</p>
+                    <p className="text-sm text-gray-600">
+                      {cliente.tipoDocumento}: {cliente.numeroDocumento} | Tel: {cliente.telefono || 'N/A'}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {cliente.email || 'Sin email'}
+                    </p>
+                  </div>
+                ))}
+            </div>
+
+            {/* Cliente Seleccionado */}
+            {nuevoClienteSeleccionado && (
+              <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                <h4 className="font-semibold text-green-800 mb-2">Cliente Nuevo Seleccionado</h4>
+                <div className="text-sm text-gray-700">
+                  <p><strong>Nombre:</strong> {nuevoClienteSeleccionado.nombreCompleto}</p>
+                  <p><strong>Documento:</strong> {nuevoClienteSeleccionado.tipoDocumento} {nuevoClienteSeleccionado.numeroDocumento}</p>
+                  <p><strong>Teléfono:</strong> {nuevoClienteSeleccionado.telefono || 'N/A'}</p>
+                  <p><strong>Email:</strong> {nuevoClienteSeleccionado.email || 'N/A'}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Notas de Cambio */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Motivo del Cambio de Cliente <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={notasCambioCliente}
+                onChange={(e) => setNotasCambioCliente(e.target.value)}
+                placeholder="Explica el motivo del cambio de cliente..."
+                rows={3}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+              />
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-3">
+              <button
+                onClick={handleCambiarCliente}
+                disabled={cambiandoCliente || !nuevoClienteSeleccionado || !notasCambioCliente.trim()}
+                style={{ backgroundColor: '#EA5C2E' }}
+                className="flex-1 px-6 py-3 text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cambiandoCliente ? 'Cambiando...' : 'Cambiar Cliente'}
+              </button>
+              <button
+                onClick={handleCerrarCambiarCliente}
+                disabled={cambiandoCliente}
+                className="px-6 py-3 bg-gray-500 text-white font-medium rounded-lg hover:bg-gray-600 transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showCorreccionProductoModal && selectedPedido && itemIndexToCorrect !== null && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
           <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
