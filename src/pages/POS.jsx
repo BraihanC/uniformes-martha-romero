@@ -159,6 +159,9 @@ const POS = () => {
   const filterProducts = () => {
     let filtered = [...products];
 
+    // Filter out B2B-only products (for corporate portal)
+    filtered = filtered.filter(p => !p.esB2B);
+
     // Filter by colegio (using 'colegio' field which contains the colegio code)
     if (selectedColegio) {
       filtered = filtered.filter(p => p.colegio === selectedColegio);

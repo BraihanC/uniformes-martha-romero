@@ -50,7 +50,9 @@ const Login = () => {
       console.error('Login error:', error);
 
       // User-friendly error messages
-      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+      if (error.message && error.message.includes('Portal B2B')) {
+        setError(error.message);
+      } else if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
         setError('Correo o contraseña incorrectos');
       } else if (error.code === 'auth/invalid-email') {
         setError('Correo electrónico inválido');

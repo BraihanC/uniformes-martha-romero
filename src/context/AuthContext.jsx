@@ -4,8 +4,8 @@ import {
   signOut,
   onIdTokenChanged // <-- Importante: Cambiamos onAuthStateChanged por esto
 } from 'firebase/auth';
-// Ya no necesitamos 'db' ni 'firestore' para los roles
-import { auth } from '../services/firebase';
+import { auth, db } from '../services/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 const AuthContext = createContext({});
 
@@ -22,10 +22,21 @@ export const AuthProvider = ({ children }) => {
   const [userRole, setUserRole] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Login function (sin cambios)
+  // Login function
   const login = async (email, password) => {
     try {
+      // Primero autenticar al usuario
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
+
+      // Luego verificar si es cliente corporativo
+      const esB2B = await esClienteCorporativo(email);
+
+      if (esB2B) {
+        // Si es B2B, cerrar la sesión inmediatamente
+        await signOut(auth);
+        throw new Error('Este usuario solo tiene acceso al Portal B2B. Por favor ingresa en /portal/login');
+      }
+
       return userCredential.user;
     } catch (error) {
       throw error;
@@ -43,6 +54,19 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Verificar si el usuario es un cliente corporativo (B2B)
+  const esClienteCorporativo = async (userEmail) => {
+    try {
+      const clientesRef = collection(db, 'clientes_corporativos');
+      const q = query(clientesRef, where('credenciales.email', '==', userEmail));
+      const querySnapshot = await getDocs(q);
+      return !querySnapshot.empty;
+    } catch (error) {
+      console.error('Error verificando cliente corporativo:', error);
+      return false;
+    }
+  };
+
   // ¡Lógica de Roles Mejorada!
   // Ya no necesitamos 'fetchUserRole' desde Firestore.
 
@@ -51,6 +75,19 @@ export const AuthProvider = ({ children }) => {
     // onIdTokenChanged es como onAuthStateChanged pero nos da acceso a los claims del token
     const unsubscribe = onIdTokenChanged(auth, async (user) => {
       if (user) {
+        // Verificar si el usuario es un cliente corporativo (B2B)
+        const esB2B = await esClienteCorporativo(user.email);
+
+        if (esB2B) {
+          // Si es cliente B2B, bloquear acceso a la aplicación principal
+          await signOut(auth);
+          setCurrentUser(null);
+          setUserRole(null);
+          setLoading(false);
+          alert('Este usuario tiene acceso únicamente al Portal B2B. Por favor ingresa en: ' + window.location.origin + '/portal/login');
+          return;
+        }
+
         setCurrentUser(user);
 
         // Forzamos al token a refrescarse para obtener los claims más recientes

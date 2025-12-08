@@ -502,6 +502,7 @@ const Inventory = () => {
           stockTotal: Number(row.STOCK_TOTAL || 0),
           stockReservadoPedidos: 0,
           stockReservadoApartados: 0,
+          esB2B: row.ES_B2B === 'SI' || row.ES_B2B === 'si' || row.ES_B2B === true || row.ES_B2B === 1,
           createdAt: serverTimestamp()
         });
 

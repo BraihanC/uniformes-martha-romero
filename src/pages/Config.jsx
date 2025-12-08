@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { db, functions, storage } from '../services/firebase';
 import {
   collection, getDocs, addDoc, updateDoc, deleteDoc, doc,
-  getDoc, setDoc, serverTimestamp
+  getDoc, setDoc, serverTimestamp, query, where
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import {
@@ -495,13 +495,35 @@ const Config = () => {
   // FUNCIONES PARA GESTIÓN DE USUARIOS (Functions)
   // ============================================
 
+  // Verificar si un email es de un cliente corporativo B2B
+  const esClienteB2B = async (email) => {
+    try {
+      const clientesRef = collection(db, 'clientes_corporativos');
+      const q = query(clientesRef, where('credenciales.email', '==', email));
+      const querySnapshot = await getDocs(q);
+      return !querySnapshot.empty;
+    } catch (error) {
+      console.error('Error verificando cliente B2B:', error);
+      return false;
+    }
+  };
+
   // Cargar lista de usuarios
   const fetchUsuarios = async () => {
     setLoadingUsers(true);
     try {
       const listUsersFunction = httpsCallable(functions, 'listUsers');
       const result = await listUsersFunction();
-      setUsers(result.data.users);
+
+      // Verificar cuáles usuarios son clientes B2B
+      const usersWithB2BFlag = await Promise.all(
+        result.data.users.map(async (user) => {
+          const isB2B = await esClienteB2B(user.email);
+          return { ...user, isB2B };
+        })
+      );
+
+      setUsers(usersWithB2BFlag);
     } catch (error) {
       console.error('Error al cargar usuarios:', error);
       alert(`Error al cargar usuarios: ${error.message}`);
@@ -1359,21 +1381,33 @@ const Config = () => {
                         <p className="font-semibold text-gray-900 text-base mb-2">{user.email}</p>
                         <div className="flex items-center gap-2 mb-2">
                           <span className="text-sm text-gray-600">Rol:</span>
-                          <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
-                            user.role === 'admin' ? 'bg-pink-100 text-pink-800' : 'bg-gray-100 text-gray-800'
-                          }`}>
-                            {user.role}
-                          </span>
+                          {user.isB2B ? (
+                            <span className="px-2 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-800">
+                              Cliente B2B
+                            </span>
+                          ) : (
+                            <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                              user.role === 'admin' ? 'bg-pink-100 text-pink-800' : 'bg-gray-100 text-gray-800'
+                            }`}>
+                              {user.role || 'Sin Rol'}
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-gray-500 font-mono break-all">UID: {user.uid}</p>
                       </div>
-                      <button
-                        onClick={() => handleDeleteUser(user.uid, user.email)}
-                        disabled={loadingUsers}
-                        className="w-full px-4 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600 transition-colors disabled:opacity-50"
-                      >
-                        Eliminar
-                      </button>
+                      {user.isB2B ? (
+                        <div className="w-full px-4 py-2 bg-gray-200 text-gray-500 text-sm rounded text-center">
+                          Usuario B2B (Portal)
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => handleDeleteUser(user.uid, user.email)}
+                          disabled={loadingUsers}
+                          className="w-full px-4 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600 transition-colors disabled:opacity-50"
+                        >
+                          Eliminar
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1396,23 +1430,35 @@ const Config = () => {
                             {user.email}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                            <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
-                              user.role === 'admin' ? 'bg-pink-100 text-pink-800' : 'bg-gray-100 text-gray-800'
-                            }`}>
-                              {user.role}
-                            </span>
+                            {user.isB2B ? (
+                              <span className="px-2 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-800">
+                                Cliente B2B
+                              </span>
+                            ) : (
+                              <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                                user.role === 'admin' ? 'bg-pink-100 text-pink-800' : 'bg-gray-100 text-gray-800'
+                              }`}>
+                                {user.role || 'Sin Rol'}
+                              </span>
+                            )}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">
                             {user.uid}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-right text-sm space-x-2">
-                            <button
-                              onClick={() => handleDeleteUser(user.uid, user.email)}
-                              disabled={loadingUsers}
-                              className="px-4 py-1.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors disabled:opacity-50"
-                            >
-                              Eliminar
-                            </button>
+                            {user.isB2B ? (
+                              <span className="px-4 py-1.5 bg-gray-200 text-gray-500 rounded text-xs">
+                                Usuario B2B (Portal)
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => handleDeleteUser(user.uid, user.email)}
+                                disabled={loadingUsers}
+                                className="px-4 py-1.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors disabled:opacity-50"
+                              >
+                                Eliminar
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
