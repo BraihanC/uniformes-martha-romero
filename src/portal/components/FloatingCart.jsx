@@ -45,7 +45,7 @@ const FloatingCart = () => {
         <>
           {/* Overlay - Ligeramente oscuro */}
           <div
-            className="fixed inset-0 bg-black/10 z-40"
+            className="fixed inset-0 bg-black/40 z-40"
             onClick={() => setIsOpen(false)}
           />
 

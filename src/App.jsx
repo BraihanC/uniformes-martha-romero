@@ -9,7 +9,6 @@ import Inventory from './pages/Inventory';
 import Clients from './pages/Clients';
 import Pedidos from './pages/Pedidos';
 import PedidosB2B from './pages/PedidosB2B';
-import ReportesImperfectos from './pages/ReportesImperfectos';
 import Apartados from './pages/Apartados';
 import Devoluciones from './pages/Devoluciones';
 import Egresos from './pages/Egresos';
@@ -97,7 +96,6 @@ function App() {
                 <Route path="clients" element={<Clients />} />
                 <Route path="pedidos" element={<Pedidos />} />
                 <Route path="pedidos-b2b" element={<PedidosB2B />} />
-                <Route path="reportes-imperfectos" element={<ReportesImperfectos />} />
                 <Route path="apartados" element={<Apartados />} />
                 <Route path="devoluciones" element={<Devoluciones />} />
                 <Route path="productos-reparacion" element={<ProductosReparacion />} />

@@ -8,7 +8,8 @@ import {
   increment,
   serverTimestamp,
   query,
-  where
+  where,
+  addDoc
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
@@ -22,7 +23,8 @@ import {
   User,
   Factory,
   Users,
-  Building
+  Building,
+  Edit
 } from 'lucide-react';
 
 const ProductosReparacion = () => {
@@ -35,6 +37,12 @@ const ProductosReparacion = () => {
   const [accion, setAccion] = useState(null); // 'reparar' o 'baja'
   const [observaciones, setObservaciones] = useState('');
   const [activeTab, setActiveTab] = useState('clientes'); // 'clientes', 'satelites' o 'b2b'
+
+  // Estados para modal de gestión B2B
+  const [selectedReporte, setSelectedReporte] = useState(null);
+  const [showGestionModal, setShowGestionModal] = useState(false);
+  const [nuevoEstado, setNuevoEstado] = useState('');
+  const [resolucion, setResolucion] = useState('');
 
   // Cargar productos en reparación y reportes B2B
   useEffect(() => {
@@ -65,11 +73,7 @@ const ProductosReparacion = () => {
   const fetchReportesB2B = async () => {
     try {
       const reportesRef = collection(db, 'reportes_imperfectos');
-      const q = query(
-        reportesRef,
-        where('resuelto', '==', false)
-      );
-      const querySnapshot = await getDocs(q);
+      const querySnapshot = await getDocs(reportesRef);
 
       const reportes = querySnapshot.docs.map(doc => ({
         id: doc.id,
@@ -79,6 +83,53 @@ const ProductosReparacion = () => {
       setReportesB2B(reportes);
     } catch (error) {
       console.error('Error al cargar reportes B2B:', error);
+    }
+  };
+
+  const handleActualizarEstadoB2B = async () => {
+    if (!nuevoEstado) {
+      alert('Selecciona un estado');
+      return;
+    }
+
+    if (!resolucion.trim() && (nuevoEstado === 'Aprobado' || nuevoEstado === 'Rechazado')) {
+      alert('Ingresa una resolución/comentario');
+      return;
+    }
+
+    try {
+      const reporteRef = doc(db, 'reportes_imperfectos', selectedReporte.id);
+
+      const updateData = {
+        estado: nuevoEstado,
+        resuelto: nuevoEstado === 'Aprobado' || nuevoEstado === 'Rechazado',
+        resolucion: resolucion.trim(),
+        resueltoPor: currentUser.displayName || currentUser.email,
+        fechaResolucion: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+
+      await updateDoc(reporteRef, updateData);
+
+      // Crear notificación para el cliente
+      await addDoc(collection(db, 'notificaciones_portal'), {
+        clienteId: selectedReporte.clienteId,
+        tipo: 'reporte_respondido',
+        titulo: 'Respuesta a Reporte de Imperfecto',
+        mensaje: `Tu reporte sobre "${selectedReporte.producto.descripcion}" ha sido ${nuevoEstado.toLowerCase()}. ${resolucion.trim()}`,
+        leida: false,
+        pedidoId: selectedReporte.pedidoId,
+        createdAt: serverTimestamp()
+      });
+
+      alert('Reporte actualizado exitosamente');
+      setShowGestionModal(false);
+      setResolucion('');
+      setNuevoEstado('');
+      fetchReportesB2B();
+    } catch (error) {
+      console.error('Error al actualizar reporte:', error);
+      alert('Error al actualizar reporte: ' + error.message);
     }
   };
 
@@ -486,6 +537,7 @@ const ProductosReparacion = () => {
                           <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Detalles</th>
                           <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Fecha Reporte</th>
                           <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Estado</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Acciones</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
@@ -533,6 +585,21 @@ const ProductosReparacion = () => {
                                 {reporte.estado}
                               </span>
                             </td>
+                            <td className="px-4 py-3 text-center">
+                              <button
+                                onClick={() => {
+                                  setSelectedReporte(reporte);
+                                  setNuevoEstado(reporte.estado);
+                                  setResolucion(reporte.resolucion || '');
+                                  setShowGestionModal(true);
+                                }}
+                                className="inline-flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg hover:bg-gray-100 transition-colors"
+                                style={{ color: '#D50565' }}
+                              >
+                                <Edit size={14} />
+                                Gestionar
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -562,24 +629,34 @@ const ProductosReparacion = () => {
                             Reportado: {reporte.createdAt && new Date(reporte.createdAt.toDate()).toLocaleDateString('es-CO')}
                           </p>
                         </div>
-                        <span className={`inline-block px-2 py-1 text-xs rounded-full font-medium ${
-                          reporte.estado === 'Pendiente' ? 'bg-yellow-100 text-yellow-800' :
-                          reporte.estado === 'En Revisión' ? 'bg-blue-100 text-blue-800' :
-                          reporte.estado === 'Aprobado' ? 'bg-green-100 text-green-800' :
-                          'bg-red-100 text-red-800'
-                        }`}>
-                          {reporte.estado}
-                        </span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`inline-block px-2 py-1 text-xs rounded-full font-medium ${
+                            reporte.estado === 'Pendiente' ? 'bg-yellow-100 text-yellow-800' :
+                            reporte.estado === 'En Revisión' ? 'bg-blue-100 text-blue-800' :
+                            reporte.estado === 'Aprobado' ? 'bg-green-100 text-green-800' :
+                            'bg-red-100 text-red-800'
+                          }`}>
+                            {reporte.estado}
+                          </span>
+                          <button
+                            onClick={() => {
+                              setSelectedReporte(reporte);
+                              setNuevoEstado(reporte.estado);
+                              setResolucion(reporte.resolucion || '');
+                              setShowGestionModal(true);
+                            }}
+                            className="inline-flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg hover:bg-gray-100 transition-colors"
+                            style={{ color: '#D50565' }}
+                          >
+                            <Edit size={14} />
+                            Gestionar
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
                 </>
               )}
-              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                <p className="text-sm text-blue-800">
-                  💡 <strong>Nota:</strong> Para gestionar estos reportes (aprobar, rechazar, agregar resolución), ve a la sección <strong>"Reportes Imperfectos"</strong> en el menú lateral.
-                </p>
-              </div>
             </div>
           )}
         </div>
@@ -689,6 +766,146 @@ const ProductosReparacion = () => {
                 }`}
               >
                 {accion === 'reparar' ? 'Confirmar Reparación' : 'Confirmar Baja'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Gestión Reportes B2B */}
+      {showGestionModal && selectedReporte && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-800">Gestionar Reporte B2B</h2>
+                  <p className="text-gray-600 mt-1">{selectedReporte.producto?.descripcion} - Talla {selectedReporte.producto?.talla}</p>
+                </div>
+                <button
+                  onClick={() => setShowGestionModal(false)}
+                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                >
+                  &times;
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6">
+              {/* Información del reporte */}
+              <div className="bg-gray-50 rounded-lg p-4 mb-6">
+                <h3 className="font-semibold text-gray-800 mb-3">Información del Reporte</h3>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <p className="text-gray-600">Cliente:</p>
+                    <p className="font-semibold" style={{ color: '#D50565' }}>{selectedReporte.clienteNombre}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Pedido:</p>
+                    <p className="font-semibold">#{selectedReporte.pedidoNumero}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Cantidad Total:</p>
+                    <p className="font-semibold">{selectedReporte.producto?.cantidadTotal} unidades</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Cantidad Defectuosa:</p>
+                    <p className="font-semibold text-red-600">{selectedReporte.producto?.cantidadDefectuosa} unidades</p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-gray-600">Descripción del Problema:</p>
+                    <p className="font-semibold mt-1">{selectedReporte.descripcionProblema}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Reportado el:</p>
+                    <p className="font-semibold">
+                      {selectedReporte.createdAt && new Date(selectedReporte.createdAt.toDate()).toLocaleDateString('es-CO', {
+                        day: 'numeric',
+                        month: 'long',
+                        year: 'numeric'
+                      })}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Reportado por:</p>
+                    <p className="font-semibold">{selectedReporte.reportadoPor}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cambiar Estado */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Estado del Reporte <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={nuevoEstado}
+                  onChange={(e) => setNuevoEstado(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                >
+                  <option value="Pendiente">Pendiente</option>
+                  <option value="En Revisión">En Revisión</option>
+                  <option value="Aprobado">Aprobado</option>
+                  <option value="Rechazado">Rechazado</option>
+                </select>
+              </div>
+
+              {/* Resolución/Comentarios */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Resolución / Comentarios
+                  {(nuevoEstado === 'Aprobado' || nuevoEstado === 'Rechazado') && (
+                    <span className="text-red-500"> *</span>
+                  )}
+                </label>
+                <textarea
+                  value={resolucion}
+                  onChange={(e) => setResolucion(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 resize-none"
+                  rows="4"
+                  placeholder="Agrega comentarios o la resolución del reporte..."
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Este mensaje se enviará como notificación al cliente B2B.
+                </p>
+              </div>
+
+              {/* Información de resolución anterior si existe */}
+              {selectedReporte.resolucion && (
+                <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <h4 className="font-semibold text-blue-900 mb-2">Resolución Anterior</h4>
+                  <p className="text-sm text-blue-800 mb-2">{selectedReporte.resolucion}</p>
+                  <div className="text-xs text-blue-600">
+                    <p>Resuelto por: {selectedReporte.resueltoPor}</p>
+                    {selectedReporte.fechaResolucion && (
+                      <p>
+                        Fecha: {new Date(selectedReporte.fechaResolucion.toDate()).toLocaleDateString('es-CO', {
+                          day: 'numeric',
+                          month: 'long',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-6 border-t border-gray-200 flex gap-3">
+              <button
+                onClick={() => setShowGestionModal(false)}
+                className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleActualizarEstadoB2B}
+                className="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90"
+                style={{ backgroundColor: '#D50565' }}
+              >
+                Actualizar Reporte
               </button>
             </div>
           </div>
