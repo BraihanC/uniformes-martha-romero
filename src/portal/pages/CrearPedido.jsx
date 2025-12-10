@@ -88,21 +88,21 @@ const CrearPedido = () => {
 
   if (cartItems.length === 0) {
     return (
-      <div className="max-w-4xl mx-auto">
-        <div className="bg-white rounded-lg shadow-md p-12 text-center">
-          <ShoppingBag size={64} className="mx-auto text-gray-300 mb-4" />
-          <h2 className="text-2xl font-bold text-gray-700 mb-2">
+      <div className="max-w-4xl mx-auto px-4">
+        <div className="bg-white rounded-lg shadow-md p-8 md:p-12 text-center">
+          <ShoppingBag size={48} className="md:w-16 md:h-16 mx-auto text-gray-300 mb-4" />
+          <h2 className="text-xl md:text-2xl font-bold text-gray-700 mb-2">
             El carrito está vacío
           </h2>
-          <p className="text-gray-500 mb-6">
+          <p className="text-sm md:text-base text-gray-500 mb-6">
             Agrega productos desde el catálogo para crear un pedido
           </p>
           <button
             onClick={() => navigate('/portal/catalogo')}
-            className="inline-flex items-center gap-2 px-6 py-3 text-white rounded-lg hover:opacity-90 transition-colors"
+            className="inline-flex items-center gap-2 px-4 md:px-6 py-2 md:py-3 text-sm md:text-base text-white rounded-lg hover:opacity-90 transition-colors"
             style={{ backgroundColor: '#D50565' }}
           >
-            <Package size={20} />
+            <Package size={18} className="md:w-5 md:h-5" />
             Ir al Catálogo
           </button>
         </div>
@@ -111,29 +111,29 @@ const CrearPedido = () => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="max-w-4xl mx-auto px-4 space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3 md:gap-4">
         <button
           onClick={() => navigate('/portal/catalogo')}
           className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
         >
-          <ArrowLeft size={24} />
+          <ArrowLeft size={20} className="md:w-6 md:h-6" />
         </button>
         <div>
-          <h1 className="text-2xl font-bold text-gray-800">
+          <h1 className="text-xl md:text-2xl font-bold text-gray-800">
             Crear Nuevo Pedido
           </h1>
-          <p className="text-gray-600">
+          <p className="text-sm md:text-base text-gray-600">
             {clienteCorporativo?.nombre}
           </p>
         </div>
       </div>
 
       {/* Resumen del Pedido */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-          <ShoppingBag size={24} />
+      <div className="bg-white rounded-lg shadow-md p-4 md:p-6">
+        <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+          <ShoppingBag size={20} className="md:w-6 md:h-6" />
           Resumen del Pedido
         </h2>
 
@@ -142,23 +142,23 @@ const CrearPedido = () => {
           {cartItems.map((item, index) => (
             <div
               key={`${item.id}-${item.talla}`}
-              className={`flex justify-between items-center p-4 rounded-lg ${
+              className={`flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 p-3 md:p-4 rounded-lg ${
                 index % 2 === 0 ? 'bg-gray-50' : 'bg-white'
               } border border-gray-200`}
             >
               <div className="flex-1">
-                <h3 className="font-semibold text-gray-800">
+                <h3 className="font-semibold text-gray-800 text-sm md:text-base">
                   {item.descripcion}
                 </h3>
-                <p className="text-sm text-gray-500">
+                <p className="text-xs md:text-sm text-gray-500 mt-1">
                   Talla: {item.talla} • Cantidad: {item.cantidad}
                 </p>
               </div>
-              <div className="text-right">
-                <p className="font-bold text-gray-800">
+              <div className="text-left sm:text-right">
+                <p className="font-bold text-gray-800 text-sm md:text-base">
                   {formatCurrency(item.precio * item.cantidad)}
                 </p>
-                <p className="text-sm text-gray-500">
+                <p className="text-xs md:text-sm text-gray-500">
                   {formatCurrency(item.precio)} c/u
                 </p>
               </div>
@@ -169,8 +169,8 @@ const CrearPedido = () => {
         {/* Total */}
         <div className="border-t pt-4">
           <div className="flex justify-between items-center">
-            <span className="text-xl font-bold text-gray-700">Total:</span>
-            <span className="text-3xl font-bold" style={{ color: '#D50565' }}>
+            <span className="text-lg md:text-xl font-bold text-gray-700">Total:</span>
+            <span className="text-2xl md:text-3xl font-bold" style={{ color: '#D50565' }}>
               {formatCurrency(getTotalPrice())}
             </span>
           </div>
@@ -178,41 +178,41 @@ const CrearPedido = () => {
       </div>
 
       {/* Notas del Pedido */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-xl font-bold text-gray-800 mb-4">
+      <div className="bg-white rounded-lg shadow-md p-4 md:p-6">
+        <h2 className="text-lg md:text-xl font-bold text-gray-800 mb-4">
           Notas del Pedido (Opcional)
         </h2>
         <textarea
           value={notas}
           onChange={(e) => setNotas(e.target.value)}
           placeholder="Agrega cualquier nota o instrucción especial para este pedido..."
-          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 resize-none"
+          className="w-full px-3 md:px-4 py-2 md:py-3 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 resize-none"
           rows={4}
         />
       </div>
 
       {/* Botones de Acción */}
-      <div className="flex gap-4">
+      <div className="flex flex-col sm:flex-row gap-3 md:gap-4 pb-6">
         <button
           onClick={() => navigate('/portal/catalogo')}
-          className="flex-1 px-6 py-3 bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 transition-colors"
+          className="w-full sm:flex-1 px-4 md:px-6 py-2 md:py-3 text-sm md:text-base bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 transition-colors"
         >
           Cancelar
         </button>
         <button
           onClick={handleCrearPedido}
           disabled={loading}
-          className="flex-1 flex items-center justify-center gap-2 px-6 py-3 text-white font-semibold rounded-lg hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full sm:flex-1 flex items-center justify-center gap-2 px-4 md:px-6 py-2 md:py-3 text-sm md:text-base text-white font-semibold rounded-lg hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ backgroundColor: '#D50565' }}
         >
           {loading ? (
             <>
-              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+              <div className="animate-spin rounded-full h-4 w-4 md:h-5 md:w-5 border-b-2 border-white"></div>
               Creando...
             </>
           ) : (
             <>
-              <Send size={20} />
+              <Send size={18} className="md:w-5 md:h-5" />
               Confirmar Pedido
             </>
           )}

@@ -226,6 +226,26 @@ const PortalLayout = () => {
                 </span>
               </div>
 
+              {/* Notificaciones Mobile */}
+              {noLeidas > 0 && (
+                <div className="px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg mb-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Bell size={18} className="text-blue-600" />
+                      <span className="text-sm font-medium text-blue-800">
+                        {noLeidas} {noLeidas === 1 ? 'notificación nueva' : 'notificaciones nuevas'}
+                      </span>
+                    </div>
+                    <button
+                      onClick={marcarTodasComoLeidas}
+                      className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                    >
+                      Marcar como leídas
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Nav Items Mobile */}
               {navItems.map((item) => (
                 <NavLink

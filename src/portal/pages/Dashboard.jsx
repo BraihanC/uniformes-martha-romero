@@ -191,12 +191,12 @@ const Dashboard = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h1 className="text-2xl font-bold text-gray-800 mb-2 flex items-center gap-2">
-          <TrendingUp size={28} style={{ color: '#D50565' }} />
+      <div className="bg-white rounded-lg shadow-md p-4 md:p-6">
+        <h1 className="text-xl md:text-2xl font-bold text-gray-800 mb-2 flex items-center gap-2">
+          <TrendingUp size={24} className="md:w-7 md:h-7" style={{ color: '#D50565' }} />
           Dashboard
         </h1>
-        <p className="text-gray-600">
+        <p className="text-sm md:text-base text-gray-600">
           {clienteCorporativo?.nombre}
         </p>
       </div>

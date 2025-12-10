@@ -267,24 +267,24 @@ const ReportarImperfecto = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 px-4 md:px-0">
       {/* Header */}
-      <div className="bg-white rounded-lg shadow-md p-6">
+      <div className="bg-white rounded-lg shadow-md p-4 md:p-6">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex-1">
-            <h1 className="text-2xl font-bold text-gray-800 mb-2 flex items-center gap-2">
-              <AlertCircle size={28} style={{ color: '#D50565' }} />
-              Reportar Producto Imperfecto
+            <h1 className="text-xl md:text-2xl font-bold text-gray-800 mb-2 flex items-center gap-2">
+              <AlertCircle size={24} className="md:w-7 md:h-7" style={{ color: '#D50565' }} />
+              <span className="text-base md:text-2xl">Reportar Producto Imperfecto</span>
             </h1>
-            <p className="text-gray-600">
+            <p className="text-sm md:text-base text-gray-600">
               Si recibiste productos con imperfecciones o defectos, repórtalos aquí.
             </p>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button
               onClick={() => setVistaActual('crear')}
-              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              className={`flex-1 sm:flex-none px-3 md:px-4 py-2 text-sm md:text-base rounded-lg font-medium transition-colors ${
                 vistaActual === 'crear'
                   ? 'text-white'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -295,7 +295,7 @@ const ReportarImperfecto = () => {
             </button>
             <button
               onClick={() => setVistaActual('historial')}
-              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              className={`flex-1 sm:flex-none px-3 md:px-4 py-2 text-sm md:text-base rounded-lg font-medium transition-colors ${
                 vistaActual === 'historial'
                   ? 'text-white'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
