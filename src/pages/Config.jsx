@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { db, functions, storage } from '../services/firebase';
 import {
   collection, getDocs, addDoc, updateDoc, deleteDoc, doc,
-  getDoc, setDoc, serverTimestamp, query, where
+  getDoc, setDoc, serverTimestamp, query, where, orderBy
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import {
@@ -60,6 +60,28 @@ const Config = () => {
     role: 'vendedor', // Por defecto es 'vendedor'
   });
 
+  // Estados para Gestión de Clientes B2B
+  const [clientesB2B, setClientesB2B] = useState([]);
+  const [loadingB2B, setLoadingB2B] = useState(false);
+  const [showB2BModal, setShowB2BModal] = useState(false);
+  const [editingB2BId, setEditingB2BId] = useState(null);
+  const [formDataB2B, setFormDataB2B] = useState({
+    nombre: '',
+    codigoColegio: '',
+    email: '',
+    password: '',
+    contactoNombre: '',
+    contactoTelefono: '',
+    activo: true
+  });
+
+  // Estados para Gestión de Pedidos B2B
+  const [pedidosB2B, setPedidosB2B] = useState([]);
+  const [loadingPedidosB2B, setLoadingPedidosB2B] = useState(false);
+  const [selectedPedido, setSelectedPedido] = useState(null);
+  const [showPedidoModal, setShowPedidoModal] = useState(false);
+  const [stockInfo, setStockInfo] = useState({}); // {productoId: stockDisponible}
+
   // Cargar datos según la pestaña activa
   useEffect(() => {
     if (activeTab === 'colegios') {
@@ -72,6 +94,10 @@ const Config = () => {
       fetchDatosEmpresa();
     } else if (activeTab === 'usuarios') {
       fetchUsuarios();
+    } else if (activeTab === 'clientesB2B') {
+      fetchClientesB2B();
+    } else if (activeTab === 'pedidosB2B') {
+      fetchPedidosB2B();
     }
   }, [activeTab]);
 
@@ -587,6 +613,267 @@ const Config = () => {
     }));
   };
 
+  // ============================================
+  // FUNCIONES PARA GESTIÓN DE CLIENTES B2B
+  // ============================================
+
+  // Cargar lista de clientes corporativos
+  const fetchClientesB2B = async () => {
+    setLoadingB2B(true);
+    try {
+      const querySnapshot = await getDocs(collection(db, 'clientes_corporativos'));
+      const clientesData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setClientesB2B(clientesData);
+    } catch (error) {
+      console.error('Error al cargar clientes B2B:', error);
+      alert('Error al cargar clientes B2B: ' + error.message);
+    } finally {
+      setLoadingB2B(false);
+    }
+  };
+
+  // Crear nuevo cliente B2B
+  const handleCreateClienteB2B = async (e) => {
+    e.preventDefault();
+
+    if (!formDataB2B.nombre || !formDataB2B.codigoColegio || !formDataB2B.email) {
+      alert('Por favor completa todos los campos obligatorios');
+      return;
+    }
+
+    setLoadingB2B(true);
+    try {
+      if (editingB2BId) {
+        // Actualizar cliente existente
+        const clienteRef = doc(db, 'clientes_corporativos', editingB2BId);
+        await updateDoc(clienteRef, {
+          nombre: formDataB2B.nombre.trim(),
+          codigoColegio: formDataB2B.codigoColegio.trim().toUpperCase(),
+          credenciales: {
+            email: formDataB2B.email.trim()
+          },
+          contacto: {
+            nombre: formDataB2B.contactoNombre.trim(),
+            telefono: formDataB2B.contactoTelefono.trim()
+          },
+          activo: formDataB2B.activo
+        });
+        alert('Cliente B2B actualizado correctamente');
+      } else {
+        // Crear nuevo cliente
+        // 1. Crear usuario en Firebase Authentication
+        const createUserFunction = httpsCallable(functions, 'createUser');
+        const userResult = await createUserFunction({
+          email: formDataB2B.email.trim(),
+          password: formDataB2B.password || '123456', // Password por defecto si no se proporciona
+          role: 'b2b' // Aunque no se usa, lo marcamos
+        });
+
+        // 2. Crear documento en clientes_corporativos
+        await addDoc(collection(db, 'clientes_corporativos'), {
+          nombre: formDataB2B.nombre.trim(),
+          codigoColegio: formDataB2B.codigoColegio.trim().toUpperCase(),
+          credenciales: {
+            email: formDataB2B.email.trim()
+          },
+          contacto: {
+            nombre: formDataB2B.contactoNombre.trim(),
+            telefono: formDataB2B.contactoTelefono.trim()
+          },
+          activo: true,
+          createdAt: serverTimestamp()
+        });
+
+        alert('Cliente B2B creado correctamente');
+      }
+
+      // Limpiar formulario y recargar
+      setFormDataB2B({
+        nombre: '',
+        codigoColegio: '',
+        email: '',
+        password: '',
+        contactoNombre: '',
+        contactoTelefono: '',
+        activo: true
+      });
+      setEditingB2BId(null);
+      setShowB2BModal(false);
+      fetchClientesB2B();
+    } catch (error) {
+      console.error('Error al guardar cliente B2B:', error);
+      alert('Error al guardar cliente B2B: ' + error.message);
+    } finally {
+      setLoadingB2B(false);
+    }
+  };
+
+  // Editar cliente B2B
+  const handleEditClienteB2B = (cliente) => {
+    setFormDataB2B({
+      nombre: cliente.nombre || '',
+      codigoColegio: cliente.codigoColegio || '',
+      email: cliente.credenciales?.email || '',
+      password: '', // No mostramos la password
+      contactoNombre: cliente.contacto?.nombre || '',
+      contactoTelefono: cliente.contacto?.telefono || '',
+      activo: cliente.activo !== false
+    });
+    setEditingB2BId(cliente.id);
+    setShowB2BModal(true);
+  };
+
+  // Eliminar cliente B2B
+  const handleDeleteClienteB2B = async (id, nombre, email) => {
+    if (!window.confirm(`¿Estás seguro de eliminar el cliente "${nombre}"? Esto también eliminará su usuario de autenticación.`)) {
+      return;
+    }
+
+    setLoadingB2B(true);
+    try {
+      // 1. Buscar y eliminar el usuario de Authentication
+      const listUsersFunction = httpsCallable(functions, 'listUsers');
+      const result = await listUsersFunction();
+      const user = result.data.users.find(u => u.email === email);
+
+      if (user) {
+        const deleteUserFunction = httpsCallable(functions, 'deleteUser');
+        await deleteUserFunction({ uid: user.uid });
+      }
+
+      // 2. Eliminar documento de clientes_corporativos
+      await deleteDoc(doc(db, 'clientes_corporativos', id));
+
+      alert('Cliente B2B eliminado correctamente');
+      fetchClientesB2B();
+    } catch (error) {
+      console.error('Error al eliminar cliente B2B:', error);
+      alert('Error al eliminar cliente B2B: ' + error.message);
+    } finally {
+      setLoadingB2B(false);
+    }
+  };
+
+  // Manejador de cambios para formulario B2B
+  const handleB2BFormChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setFormDataB2B(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value
+    }));
+  };
+
+  // ============================================
+  // FUNCIONES PARA GESTIÓN DE PEDIDOS B2B
+  // ============================================
+
+  // Cargar lista de pedidos B2B
+  const fetchPedidosB2B = async () => {
+    setLoadingPedidosB2B(true);
+    try {
+      const querySnapshot = await getDocs(
+        query(collection(db, 'pedidos_b2b'), orderBy('createdAt', 'desc'))
+      );
+      const pedidosData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setPedidosB2B(pedidosData);
+    } catch (error) {
+      console.error('Error al cargar pedidos B2B:', error);
+      alert('Error al cargar pedidos B2B: ' + error.message);
+    } finally {
+      setLoadingPedidosB2B(false);
+    }
+  };
+
+  // Actualizar estado del pedido
+  const handleUpdateEstadoPedido = async (pedidoId, nuevoEstado) => {
+    if (!window.confirm(`¿Cambiar el estado del pedido a "${nuevoEstado}"?`)) {
+      return;
+    }
+
+    setLoadingPedidosB2B(true);
+    try {
+      const pedidoRef = doc(db, 'pedidos_b2b', pedidoId);
+      await updateDoc(pedidoRef, {
+        estado: nuevoEstado,
+        updatedAt: serverTimestamp()
+      });
+
+      alert('Estado del pedido actualizado correctamente');
+      fetchPedidosB2B();
+      setShowPedidoModal(false);
+    } catch (error) {
+      console.error('Error al actualizar estado:', error);
+      alert('Error al actualizar estado: ' + error.message);
+    } finally {
+      setLoadingPedidosB2B(false);
+    }
+  };
+
+  // Abrir modal de detalle del pedido
+  const handleVerPedido = async (pedido) => {
+    setSelectedPedido(pedido);
+    setShowPedidoModal(true);
+
+    // Cargar información de stock para cada producto del pedido
+    try {
+      const stockData = {};
+      for (const producto of pedido.productos || []) {
+        if (producto.productoId) {
+          const productoDoc = await getDoc(doc(db, 'products', producto.productoId));
+          if (productoDoc.exists()) {
+            stockData[producto.productoId] = productoDoc.data().stockDisponible || 0;
+          }
+        }
+      }
+      setStockInfo(stockData);
+    } catch (error) {
+      console.error('Error al cargar stock:', error);
+    }
+  };
+
+  // Helpers para pedidos
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('es-CO', {
+      style: 'currency',
+      currency: 'COP',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(amount);
+  };
+
+  const formatDate = (timestamp) => {
+    if (!timestamp) return 'N/A';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return new Intl.DateTimeFormat('es-CO', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(date);
+  };
+
+  const getEstadoBadgeColor = (estado) => {
+    switch (estado) {
+      case 'Pendiente':
+        return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+      case 'En Preparación':
+        return 'bg-blue-100 text-blue-800 border-blue-300';
+      case 'Despachado':
+        return 'bg-purple-100 text-purple-800 border-purple-300';
+      case 'Entregado':
+        return 'bg-green-100 text-green-800 border-green-300';
+      default:
+        return 'bg-gray-100 text-gray-800 border-gray-300';
+    }
+  };
+
   return (
     <div className="max-w-6xl">
       <h1 className="text-2xl md:text-3xl font-bold text-gray-800 mb-2">Configuración</h1>
@@ -660,6 +947,28 @@ const Config = () => {
           >
             <span className="hidden sm:inline">Gestión de Usuarios</span>
             <span className="sm:hidden">Usuarios</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('clientesB2B')}
+            className={`pb-3 px-1 text-sm sm:text-base font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'clientesB2B'
+                ? 'border-b-2 border-primary text-primary'
+                : 'text-gray-600 hover:text-gray-800'
+            }`}
+          >
+            <span className="hidden sm:inline">Clientes B2B</span>
+            <span className="sm:hidden">B2B</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('pedidosB2B')}
+            className={`pb-3 px-1 text-sm sm:text-base font-medium transition-colors whitespace-nowrap ${
+              activeTab === 'pedidosB2B'
+                ? 'border-b-2 border-primary text-primary'
+                : 'text-gray-600 hover:text-gray-800'
+            }`}
+          >
+            <span className="hidden sm:inline">Pedidos B2B</span>
+            <span className="sm:hidden">Pedidos</span>
           </button>
         </div>
       </div>
@@ -1471,9 +1780,248 @@ const Config = () => {
         </div>
       )}
 
+      {/* CONTENIDO PESTAÑA CLIENTES B2B */}
+      {activeTab === 'clientesB2B' && (
+        <div>
+          {/* Botón para añadir cliente */}
+          <div className="flex justify-end mb-4">
+            <button
+              onClick={() => {
+                setShowB2BModal(true);
+                setEditingB2BId(null);
+                setFormDataB2B({
+                  nombre: '',
+                  codigoColegio: '',
+                  email: '',
+                  password: '',
+                  contactoNombre: '',
+                  contactoTelefono: '',
+                  activo: true
+                });
+              }}
+              style={{ backgroundColor: '#D50565' }}
+              className="px-4 py-2 sm:px-6 text-sm sm:text-base text-white font-medium rounded-lg hover:opacity-90 transition-opacity"
+            >
+              + Añadir Cliente B2B
+            </button>
+          </div>
+
+          {/* Tabla de Clientes B2B */}
+          <div className="bg-white rounded-lg shadow-md overflow-hidden">
+            <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-200">
+              <h2 className="text-lg sm:text-xl font-semibold text-gray-800">Lista de Clientes B2B</h2>
+            </div>
+            {loadingB2B && clientesB2B.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">Cargando clientes...</div>
+            ) : clientesB2B.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">
+                No hay clientes B2B registrados.
+              </div>
+            ) : (
+              <>
+                {/* Vista Mobile - Cards */}
+                <div className="md:hidden divide-y divide-gray-200">
+                  {clientesB2B.map((cliente) => (
+                    <div key={cliente.id} className="p-4">
+                      <div className="mb-3">
+                        <p className="font-semibold text-gray-900 text-base mb-2">{cliente.nombre}</p>
+                        <div className="space-y-1 text-sm">
+                          <p className="text-gray-600">
+                            <span className="font-medium">Email:</span> {cliente.credenciales?.email}
+                          </p>
+                          <p className="text-gray-600">
+                            <span className="font-medium">Colegio:</span> {cliente.codigoColegio}
+                          </p>
+                          {cliente.contacto?.nombre && (
+                            <p className="text-gray-600">
+                              <span className="font-medium">Contacto:</span> {cliente.contacto.nombre}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                              cliente.activo !== false ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                            }`}>
+                              {cliente.activo !== false ? 'Activo' : 'Inactivo'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleEditClienteB2B(cliente)}
+                          disabled={loadingB2B}
+                          className="flex-1 px-4 py-2 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 transition-colors disabled:opacity-50"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          onClick={() => handleDeleteClienteB2B(cliente.id, cliente.nombre, cliente.credenciales?.email)}
+                          disabled={loadingB2B}
+                          className="flex-1 px-4 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600 transition-colors disabled:opacity-50"
+                        >
+                          Eliminar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Vista Desktop - Tabla */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nombre</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Colegio</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contacto</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Estado</th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {clientesB2B.map((cliente) => (
+                        <tr key={cliente.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">
+                            {cliente.nombre}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                            {cliente.credenciales?.email}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono">
+                            {cliente.codigoColegio}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                            {cliente.contacto?.nombre || '-'}
+                            {cliente.contacto?.telefono && <div className="text-xs text-gray-500">{cliente.contacto.telefono}</div>}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                              cliente.activo !== false ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                            }`}>
+                              {cliente.activo !== false ? 'Activo' : 'Inactivo'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm space-x-2">
+                            <button
+                              onClick={() => handleEditClienteB2B(cliente)}
+                              disabled={loadingB2B}
+                              className="px-4 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors disabled:opacity-50"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              onClick={() => handleDeleteClienteB2B(cliente.id, cliente.nombre, cliente.credenciales?.email)}
+                              disabled={loadingB2B}
+                              className="px-4 py-1.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors disabled:opacity-50"
+                            >
+                              Eliminar
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* CONTENIDO PESTAÑA GESTIÓN DE COSTOS */}
       {activeTab === 'costos' && (
         <GestionCostos />
+      )}
+
+      {/* CONTENIDO PESTAÑA PEDIDOS B2B */}
+      {activeTab === 'pedidosB2B' && (
+        <div>
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h2 className="text-xl font-bold text-gray-800">
+                  Gestión de Pedidos B2B
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {pedidosB2B.length} {pedidosB2B.length === 1 ? 'pedido registrado' : 'pedidos registrados'}
+                </p>
+              </div>
+              <button
+                onClick={fetchPedidosB2B}
+                disabled={loadingPedidosB2B}
+                className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors disabled:opacity-50"
+              >
+                Actualizar
+              </button>
+            </div>
+
+            {loadingPedidosB2B ? (
+              <div className="text-center py-12">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+                <p className="text-gray-600">Cargando pedidos...</p>
+              </div>
+            ) : pedidosB2B.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-gray-500 text-lg">No hay pedidos B2B registrados</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {pedidosB2B.map((pedido) => (
+                  <div
+                    key={pedido.id}
+                    className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                  >
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <h3 className="font-bold text-gray-800">
+                            Pedido #{pedido.id.slice(-6).toUpperCase()}
+                          </h3>
+                          <span
+                            className={`px-3 py-1 rounded-full text-xs font-semibold border ${getEstadoBadgeColor(
+                              pedido.estado
+                            )}`}
+                          >
+                            {pedido.estado}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm text-gray-600">
+                          <div>
+                            <span className="font-medium">Cliente:</span> {pedido.clienteNombre}
+                          </div>
+                          <div>
+                            <span className="font-medium">Fecha:</span> {formatDate(pedido.createdAt)}
+                          </div>
+                          <div>
+                            <span className="font-medium">Productos:</span> {pedido.productos?.length || 0}
+                          </div>
+                          <div>
+                            <span className="font-medium">Total:</span>{' '}
+                            <span className="font-bold text-primary">
+                              {formatCurrency(pedido.total)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleVerPedido(pedido)}
+                          className="px-4 py-2 bg-primary text-white rounded-lg hover:opacity-90 transition-colors"
+                          style={{ backgroundColor: '#D50565' }}
+                        >
+                          Ver Detalle
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Modal para Crear Usuario */}
@@ -1553,6 +2101,360 @@ const Config = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para Crear/Editar Cliente B2B */}
+      {showB2BModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center sticky top-0 bg-white">
+              <h2 className="text-2xl font-semibold text-gray-800">
+                {editingB2BId ? 'Editar Cliente B2B' : 'Añadir Nuevo Cliente B2B'}
+              </h2>
+              <button
+                onClick={() => {
+                  setShowB2BModal(false);
+                  setEditingB2BId(null);
+                }}
+                className="text-gray-400 hover:text-gray-600 text-2xl"
+              >
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleCreateClienteB2B} className="px-6 py-4 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Nombre del Cliente <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    name="nombre"
+                    value={formDataB2B.nombre}
+                    onChange={handleB2BFormChange}
+                    placeholder="Ej: Colegio San José"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Código del Colegio <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    name="codigoColegio"
+                    value={formDataB2B.codigoColegio}
+                    onChange={handleB2BFormChange}
+                    placeholder="Ej: GAR"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary uppercase"
+                    required
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Debe coincidir con un colegio existente
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Email de Acceso <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    name="email"
+                    value={formDataB2B.email}
+                    onChange={handleB2BFormChange}
+                    placeholder="cliente@colegio.com"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    required
+                    disabled={editingB2BId} // No permitir cambiar email al editar
+                  />
+                </div>
+
+                {!editingB2BId && (
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Contraseña {!editingB2BId && <span className="text-red-500">*</span>}
+                    </label>
+                    <input
+                      type="password"
+                      name="password"
+                      value={formDataB2B.password}
+                      onChange={handleB2BFormChange}
+                      placeholder={editingB2BId ? "Dejar vacío para no cambiar" : "Mínimo 6 caracteres"}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                      required={!editingB2BId}
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Nombre de Contacto
+                  </label>
+                  <input
+                    type="text"
+                    name="contactoNombre"
+                    value={formDataB2B.contactoNombre}
+                    onChange={handleB2BFormChange}
+                    placeholder="Ej: María González"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Teléfono de Contacto
+                  </label>
+                  <input
+                    type="text"
+                    name="contactoTelefono"
+                    value={formDataB2B.contactoTelefono}
+                    onChange={handleB2BFormChange}
+                    placeholder="Ej: 3001234567"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                </div>
+
+                {editingB2BId && (
+                  <div className="md:col-span-2">
+                    <label className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        name="activo"
+                        checked={formDataB2B.activo}
+                        onChange={handleB2BFormChange}
+                        className="w-4 h-4 text-primary border-gray-300 rounded focus:ring-primary"
+                      />
+                      <span className="text-sm font-medium text-gray-700">Cliente Activo</span>
+                    </label>
+                    <p className="text-xs text-gray-500 mt-1 ml-6">
+                      Los clientes inactivos no podrán acceder al portal
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex space-x-3 pt-4 border-t">
+                <button
+                  type="submit"
+                  disabled={loadingB2B}
+                  style={{ backgroundColor: '#D50565' }}
+                  className="px-6 py-2 text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+                >
+                  {loadingB2B ? 'Guardando...' : editingB2BId ? 'Actualizar Cliente' : 'Crear Cliente'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowB2BModal(false);
+                    setEditingB2BId(null);
+                  }}
+                  disabled={loadingB2B}
+                  className="px-6 py-2 bg-gray-500 text-white font-medium rounded-lg hover:bg-gray-600 transition-colors disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para Ver Detalle de Pedido B2B */}
+      {showPedidoModal && selectedPedido && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center" style={{ backgroundColor: '#D50565' }}>
+              <h2 className="text-2xl font-semibold text-white">
+                Detalle del Pedido #{selectedPedido.id.slice(-6).toUpperCase()}
+              </h2>
+              <button
+                onClick={() => {
+                  setShowPedidoModal(false);
+                  setSelectedPedido(null);
+                }}
+                className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-1 text-2xl"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="px-6 py-4 space-y-6">
+              {/* Información del Cliente */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800 mb-3">Información del Cliente</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-gray-50 p-4 rounded-lg">
+                  <div>
+                    <p className="text-sm text-gray-600">Cliente</p>
+                    <p className="font-medium text-gray-800">{selectedPedido.clienteNombre}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Código Colegio</p>
+                    <p className="font-medium text-gray-800">{selectedPedido.codigoColegio}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Fecha del Pedido</p>
+                    <p className="font-medium text-gray-800">{formatDate(selectedPedido.createdAt)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Estado</p>
+                    <span
+                      className={`inline-block px-3 py-1 rounded-full text-sm font-semibold border ${getEstadoBadgeColor(
+                        selectedPedido.estado
+                      )}`}
+                    >
+                      {selectedPedido.estado}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Productos del Pedido */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800 mb-3">Productos del Pedido</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-100 border-b-2 border-gray-300">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Producto</th>
+                        <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">Talla</th>
+                        <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">Pedido</th>
+                        <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">En Stock</th>
+                        <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">A Producir</th>
+                        <th className="px-4 py-3 text-right text-sm font-semibold text-gray-700">Subtotal</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {selectedPedido.productos?.map((producto, index) => {
+                        const stockDisponible = stockInfo[producto.productoId] || 0;
+                        const aProducir = Math.max(0, producto.cantidad - stockDisponible);
+                        const enStock = Math.min(producto.cantidad, stockDisponible);
+
+                        return (
+                          <tr key={index} className="bg-white hover:bg-gray-50">
+                            <td className="px-4 py-3">
+                              <p className="font-medium text-gray-800">{producto.descripcion}</p>
+                              <p className="text-xs text-gray-500">{producto.codigo}</p>
+                            </td>
+                            <td className="px-4 py-3 text-center text-gray-800">
+                              {producto.talla}
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <span className="font-semibold text-gray-900">{producto.cantidad}</span>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <span className={`font-medium ${enStock > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                                {enStock}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              {aProducir > 0 ? (
+                                <span className="inline-block px-3 py-1 bg-orange-100 text-orange-800 font-semibold rounded-full text-sm">
+                                  {aProducir}
+                                </span>
+                              ) : (
+                                <span className="text-gray-400">-</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <p className="font-semibold text-gray-800">
+                                {formatCurrency(producto.subtotal)}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {formatCurrency(producto.precioUnitario)} c/u
+                              </p>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Resumen de Producción */}
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <p className="text-sm text-green-700 font-medium">Total en Stock</p>
+                    <p className="text-2xl font-bold text-green-800">
+                      {selectedPedido.productos?.reduce((total, prod) => {
+                        const stockDisponible = stockInfo[prod.productoId] || 0;
+                        return total + Math.min(prod.cantidad, stockDisponible);
+                      }, 0) || 0}
+                    </p>
+                  </div>
+                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                    <p className="text-sm text-orange-700 font-medium">Total a Producir</p>
+                    <p className="text-2xl font-bold text-orange-800">
+                      {selectedPedido.productos?.reduce((total, prod) => {
+                        const stockDisponible = stockInfo[prod.productoId] || 0;
+                        return total + Math.max(0, prod.cantidad - stockDisponible);
+                      }, 0) || 0}
+                    </p>
+                  </div>
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <p className="text-sm text-blue-700 font-medium">Total de Prendas</p>
+                    <p className="text-2xl font-bold text-blue-800">
+                      {selectedPedido.productos?.reduce((total, prod) => total + prod.cantidad, 0) || 0}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Notas */}
+              {selectedPedido.notas && (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-800 mb-3">Notas</h3>
+                  <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                    <p className="text-gray-700 whitespace-pre-wrap">{selectedPedido.notas}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Total */}
+              <div className="flex justify-between items-center bg-gray-50 p-4 rounded-lg border-2" style={{ borderColor: '#D50565' }}>
+                <span className="text-xl font-bold text-gray-800">Total del Pedido:</span>
+                <span className="text-2xl font-bold" style={{ color: '#D50565' }}>
+                  {formatCurrency(selectedPedido.total)}
+                </span>
+              </div>
+
+              {/* Cambiar Estado */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800 mb-3">Cambiar Estado del Pedido</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {['Pendiente', 'En Preparación', 'Despachado', 'Entregado'].map((estado) => (
+                    <button
+                      key={estado}
+                      onClick={() => handleUpdateEstadoPedido(selectedPedido.id, estado)}
+                      disabled={selectedPedido.estado === estado || loadingPedidosB2B}
+                      className={`px-4 py-3 rounded-lg font-medium transition-colors ${
+                        selectedPedido.estado === estado
+                          ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                          : 'bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50'
+                      }`}
+                    >
+                      {estado}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
+              <button
+                onClick={() => {
+                  setShowPedidoModal(false);
+                  setSelectedPedido(null);
+                }}
+                className="px-6 py-2 bg-gray-500 text-white font-medium rounded-lg hover:bg-gray-600 transition-colors"
+              >
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       )}

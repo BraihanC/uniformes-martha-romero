@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { usePortalAuth } from '../context/PortalAuthContext';
+import FloatingCart from './FloatingCart';
 import {
   ShoppingBag,
   Package,
@@ -166,6 +167,9 @@ const PortalLayout = () => {
           </div>
         </div>
       </footer>
+
+      {/* Floating Cart */}
+      <FloatingCart />
     </div>
   );
 };

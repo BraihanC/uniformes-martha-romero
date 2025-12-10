@@ -6,7 +6,9 @@ import {
   updateDoc,
   deleteDoc,
   increment,
-  serverTimestamp
+  serverTimestamp,
+  query,
+  where
 } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
@@ -19,22 +21,25 @@ import {
   TrendingUp,
   User,
   Factory,
-  Users
+  Users,
+  Building
 } from 'lucide-react';
 
 const ProductosReparacion = () => {
   const { currentUser } = useAuth();
   const [productosReparacion, setProductosReparacion] = useState([]);
+  const [reportesB2B, setReportesB2B] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedProducto, setSelectedProducto] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [accion, setAccion] = useState(null); // 'reparar' o 'baja'
   const [observaciones, setObservaciones] = useState('');
-  const [activeTab, setActiveTab] = useState('clientes'); // 'clientes' o 'satelites'
+  const [activeTab, setActiveTab] = useState('clientes'); // 'clientes', 'satelites' o 'b2b'
 
-  // Cargar productos en reparación
+  // Cargar productos en reparación y reportes B2B
   useEffect(() => {
     fetchProductosReparacion();
+    fetchReportesB2B();
   }, []);
 
   const fetchProductosReparacion = async () => {
@@ -54,6 +59,26 @@ const ProductosReparacion = () => {
       alert('Error al cargar productos en reparación');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchReportesB2B = async () => {
+    try {
+      const reportesRef = collection(db, 'reportes_imperfectos');
+      const q = query(
+        reportesRef,
+        where('resuelto', '==', false)
+      );
+      const querySnapshot = await getDocs(q);
+
+      const reportes = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      setReportesB2B(reportes);
+    } catch (error) {
+      console.error('Error al cargar reportes B2B:', error);
     }
   };
 
@@ -137,11 +162,19 @@ const ProductosReparacion = () => {
     return { totalUnidades, totalProductos };
   };
 
+  const calcularEstadisticasB2B = (reportes) => {
+    const totalUnidades = reportes.reduce((sum, r) => sum + (r.producto?.cantidadDefectuosa || 0), 0);
+    const totalProductos = reportes.length;
+
+    return { totalUnidades, totalProductos };
+  };
+
   const statsClientes = calcularEstadisticas(productosClientes);
   const statsSatelites = calcularEstadisticas(productosSatelites);
+  const statsB2B = calcularEstadisticasB2B(reportesB2B);
   const statsTotal = {
-    totalUnidades: statsClientes.totalUnidades + statsSatelites.totalUnidades,
-    totalProductos: statsClientes.totalProductos + statsSatelites.totalProductos
+    totalUnidades: statsClientes.totalUnidades + statsSatelites.totalUnidades + statsB2B.totalUnidades,
+    totalProductos: statsClientes.totalProductos + statsSatelites.totalProductos + statsB2B.totalProductos
   };
 
   if (loading) {
@@ -295,17 +328,18 @@ const ProductosReparacion = () => {
 
       {/* Tabs */}
       <div className="bg-white rounded-lg shadow-md overflow-hidden mb-6">
-        <div className="flex border-b border-gray-200">
+        <div className="grid grid-cols-3 border-b border-gray-200">
           <button
             onClick={() => setActiveTab('clientes')}
-            className={`flex-1 px-6 py-4 font-medium transition-colors flex items-center justify-center gap-2 ${
+            className={`px-4 py-4 font-medium transition-colors flex items-center justify-center gap-2 ${
               activeTab === 'clientes'
                 ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600'
                 : 'text-gray-600 hover:bg-gray-50'
             }`}
           >
             <Users size={20} />
-            Devoluciones de Clientes
+            <span className="hidden sm:inline">Devoluciones de Clientes</span>
+            <span className="sm:hidden">Clientes</span>
             <span className={`ml-2 px-2 py-1 rounded-full text-xs font-bold ${
               activeTab === 'clientes' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-600'
             }`}>
@@ -314,18 +348,36 @@ const ProductosReparacion = () => {
           </button>
           <button
             onClick={() => setActiveTab('satelites')}
-            className={`flex-1 px-6 py-4 font-medium transition-colors flex items-center justify-center gap-2 ${
+            className={`px-4 py-4 font-medium transition-colors flex items-center justify-center gap-2 ${
               activeTab === 'satelites'
                 ? 'bg-orange-50 text-orange-600 border-b-2 border-orange-600'
                 : 'text-gray-600 hover:bg-gray-50'
             }`}
           >
             <Factory size={20} />
-            Defectos de Satélites
+            <span className="hidden sm:inline">Defectos de Satélites</span>
+            <span className="sm:hidden">Satélites</span>
             <span className={`ml-2 px-2 py-1 rounded-full text-xs font-bold ${
               activeTab === 'satelites' ? 'bg-orange-600 text-white' : 'bg-gray-200 text-gray-600'
             }`}>
               {statsSatelites.totalUnidades}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab('b2b')}
+            className={`px-4 py-4 font-medium transition-colors flex items-center justify-center gap-2 ${
+              activeTab === 'b2b'
+                ? 'bg-pink-50 text-pink-600 border-b-2 border-pink-600'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Building size={20} />
+            <span className="hidden sm:inline">Reparación B2B</span>
+            <span className="sm:hidden">B2B</span>
+            <span className={`ml-2 px-2 py-1 rounded-full text-xs font-bold ${
+              activeTab === 'b2b' ? 'bg-pink-600 text-white' : 'bg-gray-200 text-gray-600'
+            }`}>
+              {statsB2B.totalUnidades}
             </span>
           </button>
         </div>
@@ -411,6 +463,123 @@ const ProductosReparacion = () => {
                   </div>
                 </>
               )}
+            </div>
+          )}
+
+          {activeTab === 'b2b' && (
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800 mb-4">Reportes de Imperfectos B2B</h3>
+              {reportesB2B.length === 0 ? (
+                <div className="text-center py-8">
+                  <CheckCircle className="mx-auto text-green-500 mb-4" size={48} />
+                  <p className="text-gray-600">No hay reportes de imperfectos B2B pendientes</p>
+                </div>
+              ) : (
+                <>
+                  {/* Desktop Table */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Cantidad Defectuosa</th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Detalles</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Fecha Reporte</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {reportesB2B.map(reporte => (
+                          <tr key={reporte.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3">
+                              <div>
+                                <p className="font-medium text-gray-800">{reporte.producto?.descripcion}</p>
+                                <p className="text-xs text-gray-500">Talla: {reporte.producto?.talla}</p>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
+                                {reporte.producto?.cantidadDefectuosa || 0}
+                              </span>
+                              <p className="text-xs text-gray-500 mt-1">
+                                de {reporte.producto?.cantidadTotal}
+                              </p>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="text-sm text-gray-600">
+                                <p className="font-medium" style={{ color: '#D50565' }}>
+                                  {reporte.clienteNombre}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  Pedido: #{reporte.pedidoNumero}
+                                </p>
+                                <p className="text-xs text-gray-600 mt-1">
+                                  {reporte.descripcionProblema?.substring(0, 50)}...
+                                </p>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <p className="text-xs text-gray-500">
+                                {reporte.createdAt && new Date(reporte.createdAt.toDate()).toLocaleDateString('es-CO')}
+                              </p>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <span className={`px-2 py-1 text-xs rounded-full font-medium ${
+                                reporte.estado === 'Pendiente' ? 'bg-yellow-100 text-yellow-800' :
+                                reporte.estado === 'En Revisión' ? 'bg-blue-100 text-blue-800' :
+                                reporte.estado === 'Aprobado' ? 'bg-green-100 text-green-800' :
+                                'bg-red-100 text-red-800'
+                              }`}>
+                                {reporte.estado}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile Cards */}
+                  <div className="md:hidden">
+                    {reportesB2B.map(reporte => (
+                      <div key={reporte.id} className="p-4 border-b border-gray-200">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex-1">
+                            <p className="font-medium text-gray-800">{reporte.producto?.descripcion}</p>
+                            <p className="text-xs text-gray-500">Talla: {reporte.producto?.talla}</p>
+                          </div>
+                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                            {reporte.producto?.cantidadDefectuosa}/{reporte.producto?.cantidadTotal}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-600 mb-3">
+                          <p className="font-medium" style={{ color: '#D50565' }}>
+                            {reporte.clienteNombre}
+                          </p>
+                          <p className="text-gray-500">Pedido: #{reporte.pedidoNumero}</p>
+                          <p className="mt-1">{reporte.descripcionProblema?.substring(0, 60)}...</p>
+                          <p className="mt-1">
+                            Reportado: {reporte.createdAt && new Date(reporte.createdAt.toDate()).toLocaleDateString('es-CO')}
+                          </p>
+                        </div>
+                        <span className={`inline-block px-2 py-1 text-xs rounded-full font-medium ${
+                          reporte.estado === 'Pendiente' ? 'bg-yellow-100 text-yellow-800' :
+                          reporte.estado === 'En Revisión' ? 'bg-blue-100 text-blue-800' :
+                          reporte.estado === 'Aprobado' ? 'bg-green-100 text-green-800' :
+                          'bg-red-100 text-red-800'
+                        }`}>
+                          {reporte.estado}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-sm text-blue-800">
+                  💡 <strong>Nota:</strong> Para gestionar estos reportes (aprobar, rechazar, agregar resolución), ve a la sección <strong>"Reportes Imperfectos"</strong> en el menú lateral.
+                </p>
+              </div>
             </div>
           )}
         </div>

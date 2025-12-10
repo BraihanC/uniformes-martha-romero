@@ -8,6 +8,8 @@ import POS from './pages/POS';
 import Inventory from './pages/Inventory';
 import Clients from './pages/Clients';
 import Pedidos from './pages/Pedidos';
+import PedidosB2B from './pages/PedidosB2B';
+import ReportesImperfectos from './pages/ReportesImperfectos';
 import Apartados from './pages/Apartados';
 import Devoluciones from './pages/Devoluciones';
 import Egresos from './pages/Egresos';
@@ -26,10 +28,14 @@ import Perfil from './pages/Perfil';
 
 // Portal B2B Imports
 import { PortalAuthProvider } from './portal/context/PortalAuthContext';
+import { CartProvider } from './portal/context/CartContext';
 import PortalLogin from './portal/pages/Login';
 import PortalLayout from './portal/components/PortalLayout';
 import ProtectedRoute from './portal/components/ProtectedRoute';
 import Catalogo from './portal/pages/Catalogo';
+import CrearPedido from './portal/pages/CrearPedido';
+import MisPedidos from './portal/pages/MisPedidos';
+import ReportarImperfecto from './portal/pages/ReportarImperfecto';
 
 function App() {
   return (
@@ -38,29 +44,31 @@ function App() {
         {/* ==================== PORTAL B2B ROUTES ==================== */}
         <Route path="/portal/*" element={
           <PortalAuthProvider>
-            <Routes>
-              {/* Portal Login */}
-              <Route path="login" element={<PortalLogin />} />
+            <CartProvider>
+              <Routes>
+                {/* Portal Login */}
+                <Route path="login" element={<PortalLogin />} />
 
-              {/* Portal Protected Routes */}
-              <Route
-                path="/"
-                element={
-                  <ProtectedRoute>
-                    <PortalLayout />
-                  </ProtectedRoute>
-                }
-              >
-                <Route index element={<Navigate to="/portal/catalogo" replace />} />
-                <Route path="catalogo" element={<Catalogo />} />
-                {/* Placeholder routes para futuras funcionalidades */}
-                <Route path="mis-pedidos" element={<div className="text-center py-12"><p className="text-xl text-gray-600">Próximamente: Mis Pedidos</p></div>} />
-                <Route path="reportar-imperfecto" element={<div className="text-center py-12"><p className="text-xl text-gray-600">Próximamente: Reportar Imperfectos</p></div>} />
-              </Route>
+                {/* Portal Protected Routes */}
+                <Route
+                  path="/"
+                  element={
+                    <ProtectedRoute>
+                      <PortalLayout />
+                    </ProtectedRoute>
+                  }
+                >
+                  <Route index element={<Navigate to="/portal/catalogo" replace />} />
+                  <Route path="catalogo" element={<Catalogo />} />
+                  <Route path="crear-pedido" element={<CrearPedido />} />
+                  <Route path="mis-pedidos" element={<MisPedidos />} />
+                  <Route path="reportar-imperfecto" element={<ReportarImperfecto />} />
+                </Route>
 
-              {/* Catch all portal - redirect to catalogo */}
-              <Route path="*" element={<Navigate to="/portal/catalogo" replace />} />
-            </Routes>
+                {/* Catch all portal - redirect to catalogo */}
+                <Route path="*" element={<Navigate to="/portal/catalogo" replace />} />
+              </Routes>
+            </CartProvider>
           </PortalAuthProvider>
         } />
 
@@ -85,6 +93,8 @@ function App() {
                 <Route path="pos" element={<POS />} />
                 <Route path="clients" element={<Clients />} />
                 <Route path="pedidos" element={<Pedidos />} />
+                <Route path="pedidos-b2b" element={<PedidosB2B />} />
+                <Route path="reportes-imperfectos" element={<ReportesImperfectos />} />
                 <Route path="apartados" element={<Apartados />} />
                 <Route path="devoluciones" element={<Devoluciones />} />
                 <Route path="productos-reparacion" element={<ProductosReparacion />} />

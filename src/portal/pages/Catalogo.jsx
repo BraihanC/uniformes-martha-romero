@@ -1,17 +1,20 @@
 import { useState, useEffect } from 'react';
 import { usePortalAuth } from '../context/PortalAuthContext';
+import { useCart } from '../context/CartContext';
 import { db } from '../../services/firebase';
 import { collection, getDocs, query, where, doc, getDoc } from 'firebase/firestore';
 import { Search, ShoppingCart, Package } from 'lucide-react';
 
 const Catalogo = () => {
   const { clienteCorporativo } = usePortalAuth();
+  const { addToCart } = useCart();
   const [productos, setProductos] = useState([]);
   const [productosFiltrados, setProductosFiltrados] = useState([]);
   const [preciosCorporativos, setPreciosCorporativos] = useState({});
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [tipoFilter, setTipoFilter] = useState('todos');
+  const [cantidades, setCantidades] = useState({}); // {productoId: cantidad}
 
   useEffect(() => {
     if (clienteCorporativo) {
@@ -136,6 +139,42 @@ const Catalogo = () => {
     }).format(amount);
   };
 
+  const getCantidad = (productoId) => {
+    return cantidades[productoId] || 1;
+  };
+
+  const updateCantidad = (productoId, cantidad) => {
+    const cantidadNum = parseInt(cantidad) || 1;
+    setCantidades(prev => ({
+      ...prev,
+      [productoId]: Math.max(1, cantidadNum)
+    }));
+  };
+
+  const handleAgregarAlCarrito = (producto) => {
+    const cantidad = getCantidad(producto.id);
+    const precio = getPrecio(producto);
+
+    addToCart({
+      id: producto.id,
+      codigo: producto.codigo,
+      descripcion: producto.nombre,
+      talla: producto.talla,
+      precio: precio,
+      tipo: producto.tipo,
+      categoria: producto.categoria
+    }, cantidad);
+
+    // Mostrar notificación
+    alert(`${cantidad} x ${producto.nombre} agregado al carrito`);
+
+    // Resetear cantidad
+    setCantidades(prev => ({
+      ...prev,
+      [producto.id]: 1
+    }));
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -223,17 +262,9 @@ const Catalogo = () => {
                 key={producto.id}
                 className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-shadow duration-300"
               >
-                {/* Imagen del Producto */}
-                <div className="aspect-square bg-gray-100 flex items-center justify-center relative">
-                  {producto.imagenUrl ? (
-                    <img
-                      src={producto.imagenUrl}
-                      alt={producto.nombre}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <Package size={64} className="text-gray-300" />
-                  )}
+                {/* Placeholder del Producto (sin imagen por el momento) */}
+                <div className="aspect-square bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center relative">
+                  <Package size={64} className="text-gray-300" />
 
                   {/* Badge de Precio Especial */}
                   {tienePrecioEspecial && (
@@ -244,8 +275,8 @@ const Catalogo = () => {
 
                   {/* Badge de Stock */}
                   {stockDisponible <= 0 && (
-                    <div className="absolute bottom-2 left-2 px-2 py-1 bg-red-500 text-white text-xs font-semibold rounded">
-                      Sin Stock
+                    <div className="absolute bottom-2 left-2 px-2 py-1 bg-orange-500 text-white text-xs font-semibold rounded">
+                      Sobre Pedido
                     </div>
                   )}
                 </div>
@@ -288,14 +319,39 @@ const Catalogo = () => {
                     </div>
                   </div>
 
-                  {/* Botón Agregar al Pedido (Próximamente) */}
-                  <button
-                    disabled
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-gray-200 text-gray-500 rounded-lg cursor-not-allowed"
-                  >
-                    <ShoppingCart size={18} />
-                    <span>Próximamente</span>
-                  </button>
+                  {/* Selector de Cantidad y Botón */}
+                  <div className="space-y-2">
+                    {/* Selector de Cantidad */}
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium text-gray-700">
+                        Cantidad:
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={getCantidad(producto.id)}
+                        onChange={(e) => updateCantidad(producto.id, e.target.value)}
+                        className="w-20 px-2 py-1 border border-gray-300 rounded-lg text-center focus:outline-none focus:ring-2 focus:ring-pink-500"
+                      />
+                    </div>
+
+                    {/* Botón Agregar al Carrito */}
+                    <button
+                      onClick={() => handleAgregarAlCarrito(producto)}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors text-white hover:opacity-90"
+                      style={{ backgroundColor: '#D50565' }}
+                    >
+                      <ShoppingCart size={18} />
+                      <span>Agregar al Carrito</span>
+                    </button>
+
+                    {/* Indicador de Stock (Informativo) */}
+                    {stockDisponible === 0 && (
+                      <p className="text-xs text-orange-600 text-center">
+                        Se producirá sobre pedido
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
             );
