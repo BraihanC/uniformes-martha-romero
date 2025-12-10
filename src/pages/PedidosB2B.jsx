@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, arrayUnion, serverTimestamp, query, orderBy } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, arrayUnion, serverTimestamp, query, orderBy, addDoc } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
-import { Package, DollarSign, CheckCircle, Clock, Eye, Plus, Calendar } from 'lucide-react';
+import { Package, DollarSign, CheckCircle, Clock, Eye, Plus, Calendar, CreditCard } from 'lucide-react';
 
 const PedidosB2B = () => {
   const { user } = useAuth();
@@ -69,6 +69,42 @@ const PedidosB2B = () => {
     return total - calcularTotalAbonado(abonos);
   };
 
+  const calcularEstadoPago = (total, abonos) => {
+    const totalAbonado = calcularTotalAbonado(abonos);
+    if (totalAbonado === 0) return 'Sin Pagar';
+    if (totalAbonado >= total) return 'Pagado';
+    return 'Pago Parcial';
+  };
+
+  const getEstadoPagoBadgeColor = (estadoPago) => {
+    switch (estadoPago) {
+      case 'Pagado':
+        return 'bg-green-100 text-green-800 border-green-300';
+      case 'Pago Parcial':
+        return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+      case 'Sin Pagar':
+        return 'bg-red-100 text-red-800 border-red-300';
+      default:
+        return 'bg-gray-100 text-gray-800 border-gray-300';
+    }
+  };
+
+  const crearNotificacion = async (pedido, tipo, titulo, mensaje) => {
+    try {
+      await addDoc(collection(db, 'notificaciones_portal'), {
+        clienteId: pedido.clienteId,
+        tipo: tipo,
+        titulo: titulo,
+        mensaje: mensaje,
+        leida: false,
+        pedidoId: pedido.id,
+        createdAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error('Error al crear notificación:', error);
+    }
+  };
+
   const handleAprobarPedido = async (pedido) => {
     if (!window.confirm('¿Aprobar este pedido?')) return;
 
@@ -81,6 +117,14 @@ const PedidosB2B = () => {
         fechaAprobacion: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
+
+      // Crear notificación para el cliente
+      await crearNotificacion(
+        pedido,
+        'pedido_estado',
+        'Pedido Aprobado',
+        `Tu pedido #${pedido.id.slice(-6).toUpperCase()} ha sido aprobado y está en preparación.`
+      );
 
       alert('Pedido aprobado exitosamente');
       fetchPedidos();
@@ -115,6 +159,17 @@ const PedidosB2B = () => {
         abonos: arrayUnion(nuevoAbono),
         updatedAt: serverTimestamp()
       });
+
+      // Calcular nuevo saldo
+      const nuevoSaldo = calcularSaldoPendiente(selectedPedido.total, [...(selectedPedido.abonos || []), nuevoAbono]);
+
+      // Crear notificación para el cliente
+      await crearNotificacion(
+        selectedPedido,
+        'abono_registrado',
+        'Pago Registrado',
+        `Se ha registrado un pago de ${formatCurrency(monto)} en tu pedido #${selectedPedido.id.slice(-6).toUpperCase()}. Saldo pendiente: ${formatCurrency(nuevoSaldo)}`
+      );
 
       alert('Abono registrado exitosamente');
       setShowAbonoModal(false);
@@ -199,7 +254,10 @@ const PedidosB2B = () => {
                     Saldo
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Estado
+                    Estado Pedido
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Estado Pago
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Acciones
@@ -210,6 +268,7 @@ const PedidosB2B = () => {
                 {pedidos.map((pedido) => {
                   const totalAbonado = calcularTotalAbonado(pedido.abonos);
                   const saldoPendiente = calcularSaldoPendiente(pedido.total, pedido.abonos);
+                  const estadoPago = calcularEstadoPago(pedido.total, pedido.abonos);
 
                   return (
                     <tr key={pedido.id} className="hover:bg-gray-50">
@@ -243,6 +302,12 @@ const PedidosB2B = () => {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full border ${getEstadoBadgeColor(pedido.estado)}`}>
                           {pedido.estado}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full border ${getEstadoPagoBadgeColor(estadoPago)}`}>
+                          <CreditCard size={12} className="mr-1" />
+                          {estadoPago}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm">

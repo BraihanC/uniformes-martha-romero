@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { usePortalAuth } from '../context/PortalAuthContext';
 import { db } from '../../services/firebase';
 import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
-import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp } from 'lucide-react';
+import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard } from 'lucide-react';
 
 const MisPedidos = () => {
   const { clienteCorporativo } = usePortalAuth();
@@ -77,6 +77,31 @@ const MisPedidos = () => {
     }
   };
 
+  const calcularTotalAbonado = (abonos) => {
+    if (!abonos || abonos.length === 0) return 0;
+    return abonos.reduce((sum, abono) => sum + (abono.monto || 0), 0);
+  };
+
+  const calcularEstadoPago = (total, abonos) => {
+    const totalAbonado = calcularTotalAbonado(abonos);
+    if (totalAbonado === 0) return 'Sin Pagar';
+    if (totalAbonado >= total) return 'Pagado';
+    return 'Pago Parcial';
+  };
+
+  const getEstadoPagoBadgeColor = (estadoPago) => {
+    switch (estadoPago) {
+      case 'Pagado':
+        return 'bg-green-100 text-green-800 border-green-300';
+      case 'Pago Parcial':
+        return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+      case 'Sin Pagar':
+        return 'bg-red-100 text-red-800 border-red-300';
+      default:
+        return 'bg-gray-100 text-gray-800 border-gray-300';
+    }
+  };
+
   const togglePedido = (pedidoId) => {
     setExpandedPedido(expandedPedido === pedidoId ? null : pedidoId);
   };
@@ -133,7 +158,7 @@ const MisPedidos = () => {
               >
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
+                    <div className="flex items-center gap-3 mb-2 flex-wrap">
                       <h3 className="text-lg font-bold text-gray-800">
                         Pedido #{pedido.id.slice(-6).toUpperCase()}
                       </h3>
@@ -143,6 +168,14 @@ const MisPedidos = () => {
                         )}`}
                       >
                         {pedido.estado}
+                      </span>
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-semibold border flex items-center gap-1 ${getEstadoPagoBadgeColor(
+                          calcularEstadoPago(pedido.total, pedido.abonos)
+                        )}`}
+                      >
+                        <CreditCard size={12} />
+                        {calcularEstadoPago(pedido.total, pedido.abonos)}
                       </span>
                     </div>
 

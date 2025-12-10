@@ -29,6 +29,7 @@ import Perfil from './pages/Perfil';
 // Portal B2B Imports
 import { PortalAuthProvider } from './portal/context/PortalAuthContext';
 import { CartProvider } from './portal/context/CartContext';
+import { NotificacionesProvider } from './portal/context/NotificacionesContext';
 import PortalLogin from './portal/pages/Login';
 import PortalLayout from './portal/components/PortalLayout';
 import ProtectedRoute from './portal/components/ProtectedRoute';
@@ -45,29 +46,31 @@ function App() {
         <Route path="/portal/*" element={
           <PortalAuthProvider>
             <CartProvider>
-              <Routes>
-                {/* Portal Login */}
-                <Route path="login" element={<PortalLogin />} />
+              <NotificacionesProvider>
+                <Routes>
+                  {/* Portal Login */}
+                  <Route path="login" element={<PortalLogin />} />
 
-                {/* Portal Protected Routes */}
-                <Route
-                  path="/"
-                  element={
-                    <ProtectedRoute>
-                      <PortalLayout />
-                    </ProtectedRoute>
-                  }
-                >
-                  <Route index element={<Navigate to="/portal/catalogo" replace />} />
-                  <Route path="catalogo" element={<Catalogo />} />
-                  <Route path="crear-pedido" element={<CrearPedido />} />
-                  <Route path="mis-pedidos" element={<MisPedidos />} />
-                  <Route path="reportar-imperfecto" element={<ReportarImperfecto />} />
-                </Route>
+                  {/* Portal Protected Routes */}
+                  <Route
+                    path="/"
+                    element={
+                      <ProtectedRoute>
+                        <PortalLayout />
+                      </ProtectedRoute>
+                    }
+                  >
+                    <Route index element={<Navigate to="/portal/catalogo" replace />} />
+                    <Route path="catalogo" element={<Catalogo />} />
+                    <Route path="crear-pedido" element={<CrearPedido />} />
+                    <Route path="mis-pedidos" element={<MisPedidos />} />
+                    <Route path="reportar-imperfecto" element={<ReportarImperfecto />} />
+                  </Route>
 
-                {/* Catch all portal - redirect to catalogo */}
-                <Route path="*" element={<Navigate to="/portal/catalogo" replace />} />
-              </Routes>
+                  {/* Catch all portal - redirect to catalogo */}
+                  <Route path="*" element={<Navigate to="/portal/catalogo" replace />} />
+                </Routes>
+              </NotificacionesProvider>
             </CartProvider>
           </PortalAuthProvider>
         } />

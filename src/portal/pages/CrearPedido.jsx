@@ -57,7 +57,18 @@ const CrearPedido = () => {
         updatedAt: serverTimestamp()
       };
 
-      await addDoc(collection(db, 'pedidos_b2b'), pedidoData);
+      const pedidoRef = await addDoc(collection(db, 'pedidos_b2b'), pedidoData);
+
+      // Crear notificación para administradores
+      await addDoc(collection(db, 'notificaciones_admin'), {
+        tipo: 'nuevo_pedido_b2b',
+        titulo: 'Nuevo Pedido B2B',
+        mensaje: `${clienteCorporativo.nombre} ha creado un pedido por ${formatCurrency(getTotalPrice())}`,
+        leida: false,
+        pedidoId: pedidoRef.id,
+        clienteNombre: clienteCorporativo.nombre,
+        createdAt: serverTimestamp()
+      });
 
       // Limpiar el carrito
       clearCart();

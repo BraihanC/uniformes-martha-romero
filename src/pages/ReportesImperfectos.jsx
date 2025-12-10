@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, query, orderBy, serverTimestamp } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, query, orderBy, serverTimestamp, addDoc } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { AlertCircle, Eye, CheckCircle, XCircle, Clock } from 'lucide-react';
 
@@ -99,6 +99,17 @@ const ReportesImperfectos = () => {
       };
 
       await updateDoc(reporteRef, updateData);
+
+      // Crear notificación para el cliente
+      await addDoc(collection(db, 'notificaciones_portal'), {
+        clienteId: selectedReporte.clienteId,
+        tipo: 'reporte_respondido',
+        titulo: 'Respuesta a Reporte de Imperfecto',
+        mensaje: `Tu reporte sobre "${selectedReporte.producto.descripcion}" ha sido ${nuevoEstado.toLowerCase()}. ${resolucion.trim()}`,
+        leida: false,
+        pedidoId: selectedReporte.pedidoId,
+        createdAt: serverTimestamp()
+      });
 
       alert('Reporte actualizado exitosamente');
       setShowResolucionModal(false);

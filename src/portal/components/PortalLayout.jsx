@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { usePortalAuth } from '../context/PortalAuthContext';
+import { useNotificaciones } from '../context/NotificacionesContext';
 import FloatingCart from './FloatingCart';
 import {
   ShoppingBag,
@@ -9,13 +10,34 @@ import {
   LogOut,
   Menu,
   X,
-  User
+  User,
+  Bell
 } from 'lucide-react';
 
 const PortalLayout = () => {
   const { clienteCorporativo, logout } = usePortalAuth();
+  const { notificaciones, noLeidas, marcarComoLeida, marcarTodasComoLeidas } = useNotificaciones();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [notificacionesOpen, setNotificacionesOpen] = useState(false);
   const navigate = useNavigate();
+  const notificacionesRef = useRef(null);
+
+  // Cerrar dropdown al hacer click fuera
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (notificacionesRef.current && !notificacionesRef.current.contains(event.target)) {
+        setNotificacionesOpen(false);
+      }
+    };
+
+    if (notificacionesOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [notificacionesOpen]);
 
   const handleLogout = async () => {
     if (window.confirm('¿Seguro que deseas cerrar sesión?')) {
@@ -81,8 +103,86 @@ const PortalLayout = () => {
               ))}
             </nav>
 
-            {/* User Info y Logout */}
+            {/* Notificaciones, User Info y Logout */}
             <div className="hidden md:flex items-center gap-4">
+              {/* Botón de Notificaciones */}
+              <div className="relative" ref={notificacionesRef}>
+                <button
+                  onClick={() => setNotificacionesOpen(!notificacionesOpen)}
+                  className="relative p-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  <Bell size={20} />
+                  {noLeidas > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                      {noLeidas > 9 ? '9+' : noLeidas}
+                    </span>
+                  )}
+                </button>
+
+                {/* Dropdown de Notificaciones */}
+                {notificacionesOpen && (
+                  <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-50">
+                    <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+                      <h3 className="font-semibold text-gray-800">Notificaciones</h3>
+                      {noLeidas > 0 && (
+                        <button
+                          onClick={marcarTodasComoLeidas}
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                        >
+                          Marcar todas como leídas
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="max-h-96 overflow-y-auto">
+                      {notificaciones.length === 0 ? (
+                        <div className="p-6 text-center text-gray-500">
+                          <Bell size={32} className="mx-auto mb-2 text-gray-300" />
+                          <p className="text-sm">No tienes notificaciones</p>
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-gray-100">
+                          {notificaciones.map((notif) => (
+                            <div
+                              key={notif.id}
+                              onClick={() => {
+                                if (!notif.leida) marcarComoLeida(notif.id);
+                                setNotificacionesOpen(false);
+                              }}
+                              className={`p-4 hover:bg-gray-50 cursor-pointer transition-colors ${
+                                !notif.leida ? 'bg-blue-50' : ''
+                              }`}
+                            >
+                              <div className="flex items-start gap-3">
+                                {!notif.leida && (
+                                  <div className="w-2 h-2 bg-blue-500 rounded-full mt-2 flex-shrink-0"></div>
+                                )}
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-medium text-gray-900 text-sm">
+                                    {notif.titulo}
+                                  </p>
+                                  <p className="text-sm text-gray-600 mt-1">
+                                    {notif.mensaje}
+                                  </p>
+                                  <p className="text-xs text-gray-400 mt-2">
+                                    {notif.createdAt?.toDate?.()?.toLocaleDateString('es-MX', {
+                                      day: 'numeric',
+                                      month: 'short',
+                                      hour: '2-digit',
+                                      minute: '2-digit'
+                                    })}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-lg">
                 <User size={18} className="text-gray-600" />
                 <span className="text-sm font-medium text-gray-700">
