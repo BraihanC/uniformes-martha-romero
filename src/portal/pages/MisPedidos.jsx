@@ -1,14 +1,25 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { usePortalAuth } from '../context/PortalAuthContext';
 import { db } from '../../services/firebase';
 import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
-import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard } from 'lucide-react';
+import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard, Filter, Download, X, Search, FileSpreadsheet } from 'lucide-react';
 
 const MisPedidos = () => {
   const { clienteCorporativo } = usePortalAuth();
   const [pedidos, setPedidos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expandedPedido, setExpandedPedido] = useState(null);
+
+  // Estados de filtros
+  const [showFiltros, setShowFiltros] = useState(false);
+  const [filtroEstado, setFiltroEstado] = useState('');
+  const [filtroPago, setFiltroPago] = useState('');
+  const [fechaDesde, setFechaDesde] = useState('');
+  const [fechaHasta, setFechaHasta] = useState('');
+  const [montoMin, setMontoMin] = useState('');
+  const [montoMax, setMontoMax] = useState('');
+  const [busqueda, setBusqueda] = useState('');
+  const [ordenamiento, setOrdenamiento] = useState('fecha-desc');
 
   useEffect(() => {
     if (clienteCorporativo) {
@@ -62,6 +73,16 @@ const MisPedidos = () => {
     }).format(date);
   };
 
+  const formatDateShort = (timestamp) => {
+    if (!timestamp) return 'N/A';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return new Intl.DateTimeFormat('es-CO', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(date);
+  };
+
   const getEstadoBadgeColor = (estado) => {
     switch (estado) {
       case 'Pendiente':
@@ -106,6 +127,184 @@ const MisPedidos = () => {
     setExpandedPedido(expandedPedido === pedidoId ? null : pedidoId);
   };
 
+  const limpiarFiltros = () => {
+    setFiltroEstado('');
+    setFiltroPago('');
+    setFechaDesde('');
+    setFechaHasta('');
+    setMontoMin('');
+    setMontoMax('');
+    setBusqueda('');
+    setOrdenamiento('fecha-desc');
+  };
+
+  // Aplicar filtros y ordenamiento
+  const pedidosFiltrados = useMemo(() => {
+    let resultado = [...pedidos];
+
+    // Filtro por búsqueda (número de pedido)
+    if (busqueda.trim()) {
+      resultado = resultado.filter(p =>
+        p.id.toLowerCase().includes(busqueda.toLowerCase())
+      );
+    }
+
+    // Filtro por estado
+    if (filtroEstado) {
+      resultado = resultado.filter(p => p.estado === filtroEstado);
+    }
+
+    // Filtro por estado de pago
+    if (filtroPago) {
+      resultado = resultado.filter(p => calcularEstadoPago(p.total, p.abonos) === filtroPago);
+    }
+
+    // Filtro por fecha desde
+    if (fechaDesde) {
+      const fechaDesdeDate = new Date(fechaDesde);
+      resultado = resultado.filter(p => {
+        if (!p.createdAt) return false;
+        const pedidoDate = p.createdAt.toDate ? p.createdAt.toDate() : new Date(p.createdAt);
+        return pedidoDate >= fechaDesdeDate;
+      });
+    }
+
+    // Filtro por fecha hasta
+    if (fechaHasta) {
+      const fechaHastaDate = new Date(fechaHasta);
+      fechaHastaDate.setHours(23, 59, 59, 999);
+      resultado = resultado.filter(p => {
+        if (!p.createdAt) return false;
+        const pedidoDate = p.createdAt.toDate ? p.createdAt.toDate() : new Date(p.createdAt);
+        return pedidoDate <= fechaHastaDate;
+      });
+    }
+
+    // Filtro por monto mínimo
+    if (montoMin) {
+      const min = parseFloat(montoMin);
+      resultado = resultado.filter(p => p.total >= min);
+    }
+
+    // Filtro por monto máximo
+    if (montoMax) {
+      const max = parseFloat(montoMax);
+      resultado = resultado.filter(p => p.total <= max);
+    }
+
+    // Ordenamiento
+    resultado.sort((a, b) => {
+      switch (ordenamiento) {
+        case 'fecha-desc':
+          return (b.createdAt?.toDate?.() || new Date(b.createdAt || 0)) - (a.createdAt?.toDate?.() || new Date(a.createdAt || 0));
+        case 'fecha-asc':
+          return (a.createdAt?.toDate?.() || new Date(a.createdAt || 0)) - (b.createdAt?.toDate?.() || new Date(b.createdAt || 0));
+        case 'monto-desc':
+          return (b.total || 0) - (a.total || 0);
+        case 'monto-asc':
+          return (a.total || 0) - (b.total || 0);
+        default:
+          return 0;
+      }
+    });
+
+    return resultado;
+  }, [pedidos, busqueda, filtroEstado, filtroPago, fechaDesde, fechaHasta, montoMin, montoMax, ordenamiento]);
+
+  // Exportar a Excel (CSV)
+  const exportarExcel = () => {
+    if (pedidosFiltrados.length === 0) {
+      alert('No hay pedidos para exportar');
+      return;
+    }
+
+    // Crear CSV
+    let csv = 'Pedido,Fecha,Estado,Estado Pago,Total,Abonado,Saldo,Productos\n';
+
+    pedidosFiltrados.forEach(pedido => {
+      const totalAbonado = calcularTotalAbonado(pedido.abonos);
+      const saldo = pedido.total - totalAbonado;
+      const productos = pedido.productos?.map(p => `${p.descripcion} (${p.talla})`).join('; ') || '';
+
+      csv += `"#${pedido.id.slice(-6).toUpperCase()}",`;
+      csv += `"${formatDateShort(pedido.createdAt)}",`;
+      csv += `"${pedido.estado}",`;
+      csv += `"${calcularEstadoPago(pedido.total, pedido.abonos)}",`;
+      csv += `"${formatCurrency(pedido.total)}",`;
+      csv += `"${formatCurrency(totalAbonado)}",`;
+      csv += `"${formatCurrency(saldo)}",`;
+      csv += `"${productos}"\n`;
+    });
+
+    // Descargar
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `pedidos_${clienteCorporativo.nombre}_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Exportar Estado de Cuenta
+  const exportarEstadoCuenta = () => {
+    if (pedidosFiltrados.length === 0) {
+      alert('No hay pedidos para exportar');
+      return;
+    }
+
+    const totalComprado = pedidosFiltrados.reduce((sum, p) => sum + p.total, 0);
+    const totalAbonado = pedidosFiltrados.reduce((sum, p) => sum + calcularTotalAbonado(p.abonos), 0);
+    const saldoTotal = totalComprado - totalAbonado;
+
+    // Crear contenido del estado de cuenta
+    let contenido = `ESTADO DE CUENTA\n`;
+    contenido += `${clienteCorporativo.nombre}\n`;
+    contenido += `Fecha: ${new Date().toLocaleDateString('es-CO')}\n`;
+    contenido += `\n`;
+    contenido += `RESUMEN GENERAL\n`;
+    contenido += `Total Comprado: ${formatCurrency(totalComprado)}\n`;
+    contenido += `Total Abonado: ${formatCurrency(totalAbonado)}\n`;
+    contenido += `Saldo Pendiente: ${formatCurrency(saldoTotal)}\n`;
+    contenido += `\n`;
+    contenido += `DETALLE DE PEDIDOS\n`;
+    contenido += `${'='.repeat(80)}\n`;
+
+    pedidosFiltrados.forEach(pedido => {
+      const totalAbonado = calcularTotalAbonado(pedido.abonos);
+      const saldo = pedido.total - totalAbonado;
+
+      contenido += `\nPedido: #${pedido.id.slice(-6).toUpperCase()}\n`;
+      contenido += `Fecha: ${formatDate(pedido.createdAt)}\n`;
+      contenido += `Estado: ${pedido.estado}\n`;
+      contenido += `Total: ${formatCurrency(pedido.total)}\n`;
+      contenido += `Abonado: ${formatCurrency(totalAbonado)}\n`;
+      contenido += `Saldo: ${formatCurrency(saldo)}\n`;
+
+      if (pedido.abonos && pedido.abonos.length > 0) {
+        contenido += `\nHistorial de Abonos:\n`;
+        pedido.abonos.forEach((abono, i) => {
+          contenido += `  ${i + 1}. ${formatCurrency(abono.monto)} - ${formatDateShort(abono.fecha)} - ${abono.notas || ''}\n`;
+        });
+      }
+
+      contenido += `${'-'.repeat(80)}\n`;
+    });
+
+    // Descargar
+    const blob = new Blob([contenido], { type: 'text/plain;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `estado_cuenta_${clienteCorporativo.nombre}_${new Date().toISOString().split('T')[0]}.txt`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -117,36 +316,243 @@ const MisPedidos = () => {
     );
   }
 
+  const filtrosActivos = filtroEstado || filtroPago || fechaDesde || fechaHasta || montoMin || montoMax || busqueda;
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="bg-white rounded-lg shadow-md p-6">
-        <h1 className="text-2xl font-bold text-gray-800 mb-2 flex items-center gap-2">
-          <Package size={28} />
-          Mis Pedidos
-        </h1>
-        <p className="text-gray-600">
-          {clienteCorporativo?.nombre}
-        </p>
-        <p className="text-sm text-gray-500 mt-1">
-          {pedidos.length} {pedidos.length === 1 ? 'pedido realizado' : 'pedidos realizados'}
-        </p>
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="flex-1">
+            <h1 className="text-2xl font-bold text-gray-800 mb-2 flex items-center gap-2">
+              <Package size={28} />
+              Mis Pedidos
+            </h1>
+            <p className="text-gray-600">
+              {clienteCorporativo?.nombre}
+            </p>
+            <p className="text-sm text-gray-500 mt-1">
+              {pedidosFiltrados.length} de {pedidos.length} {pedidos.length === 1 ? 'pedido' : 'pedidos'}
+            </p>
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowFiltros(!showFiltros)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+                filtrosActivos
+                  ? 'text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+              style={filtrosActivos ? { backgroundColor: '#D50565' } : {}}
+            >
+              <Filter size={18} />
+              Filtros
+              {filtrosActivos && <span className="bg-white text-pink-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold">!</span>}
+            </button>
+
+            <div className="relative group">
+              <button
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"
+              >
+                <Download size={18} />
+                Exportar
+              </button>
+              <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-lg shadow-xl border border-gray-200 py-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
+                <button
+                  onClick={exportarExcel}
+                  className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                >
+                  <FileSpreadsheet size={16} />
+                  Exportar a Excel
+                </button>
+                <button
+                  onClick={exportarEstadoCuenta}
+                  className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                >
+                  <FileText size={16} />
+                  Estado de Cuenta
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
+      {/* Panel de Filtros */}
+      {showFiltros && (
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold text-gray-800">Filtros Avanzados</h3>
+            <button
+              onClick={() => setShowFiltros(false)}
+              className="text-gray-500 hover:text-gray-700"
+            >
+              <X size={20} />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Búsqueda */}
+            <div className="lg:col-span-3">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Buscar Pedido
+              </label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+                <input
+                  type="text"
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder="Número de pedido..."
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                />
+              </div>
+            </div>
+
+            {/* Estado Pedido */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Estado del Pedido
+              </label>
+              <select
+                value={filtroEstado}
+                onChange={(e) => setFiltroEstado(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              >
+                <option value="">Todos</option>
+                <option value="Pendiente">Pendiente</option>
+                <option value="En Preparación">En Preparación</option>
+                <option value="Despachado">Despachado</option>
+                <option value="Entregado">Entregado</option>
+              </select>
+            </div>
+
+            {/* Estado Pago */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Estado de Pago
+              </label>
+              <select
+                value={filtroPago}
+                onChange={(e) => setFiltroPago(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              >
+                <option value="">Todos</option>
+                <option value="Sin Pagar">Sin Pagar</option>
+                <option value="Pago Parcial">Pago Parcial</option>
+                <option value="Pagado">Pagado</option>
+              </select>
+            </div>
+
+            {/* Ordenamiento */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Ordenar por
+              </label>
+              <select
+                value={ordenamiento}
+                onChange={(e) => setOrdenamiento(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              >
+                <option value="fecha-desc">Fecha (más reciente)</option>
+                <option value="fecha-asc">Fecha (más antiguo)</option>
+                <option value="monto-desc">Monto (mayor a menor)</option>
+                <option value="monto-asc">Monto (menor a mayor)</option>
+              </select>
+            </div>
+
+            {/* Fecha Desde */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Desde
+              </label>
+              <input
+                type="date"
+                value={fechaDesde}
+                onChange={(e) => setFechaDesde(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              />
+            </div>
+
+            {/* Fecha Hasta */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Hasta
+              </label>
+              <input
+                type="date"
+                value={fechaHasta}
+                onChange={(e) => setFechaHasta(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              />
+            </div>
+
+            {/* Monto Mínimo */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Monto Mínimo
+              </label>
+              <input
+                type="number"
+                value={montoMin}
+                onChange={(e) => setMontoMin(e.target.value)}
+                placeholder="0"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              />
+            </div>
+
+            {/* Monto Máximo */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Monto Máximo
+              </label>
+              <input
+                type="number"
+                value={montoMax}
+                onChange={(e) => setMontoMax(e.target.value)}
+                placeholder="999999999"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              />
+            </div>
+          </div>
+
+          {filtrosActivos && (
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={limpiarFiltros}
+                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Limpiar Filtros
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Lista de Pedidos */}
-      {pedidos.length === 0 ? (
+      {pedidosFiltrados.length === 0 ? (
         <div className="bg-white rounded-lg shadow-md p-12 text-center">
           <Package size={64} className="mx-auto text-gray-300 mb-4" />
           <h3 className="text-lg font-semibold text-gray-700 mb-2">
-            No hay pedidos registrados
+            {pedidos.length === 0 ? 'No hay pedidos registrados' : 'No se encontraron pedidos con los filtros aplicados'}
           </h3>
           <p className="text-gray-500">
-            Cuando realices un pedido, aparecerá aquí
+            {pedidos.length === 0 ? 'Cuando realices un pedido, aparecerá aquí' : 'Intenta cambiar los criterios de búsqueda'}
           </p>
+          {pedidos.length > 0 && (
+            <button
+              onClick={limpiarFiltros}
+              className="mt-4 px-4 py-2 text-white rounded-lg hover:opacity-90 transition-colors"
+              style={{ backgroundColor: '#D50565' }}
+            >
+              Limpiar Filtros
+            </button>
+          )}
         </div>
       ) : (
         <div className="space-y-4">
-          {pedidos.map((pedido) => (
+          {pedidosFiltrados.map((pedido) => (
             <div
               key={pedido.id}
               className="bg-white rounded-lg shadow-md overflow-hidden"

@@ -1,19 +1,25 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { usePortalAuth } from '../context/PortalAuthContext';
 import { useCart } from '../context/CartContext';
 import { db } from '../../services/firebase';
 import { collection, getDocs, query, where, doc, getDoc } from 'firebase/firestore';
-import { Search, ShoppingCart, Package } from 'lucide-react';
+import { Search, ShoppingCart, Package, SlidersHorizontal, X } from 'lucide-react';
 
 const Catalogo = () => {
   const { clienteCorporativo } = usePortalAuth();
   const { addToCart } = useCart();
   const [productos, setProductos] = useState([]);
-  const [productosFiltrados, setProductosFiltrados] = useState([]);
   const [preciosCorporativos, setPreciosCorporativos] = useState({});
   const [loading, setLoading] = useState(true);
+
+  // Filtros
   const [searchTerm, setSearchTerm] = useState('');
   const [tipoFilter, setTipoFilter] = useState('todos');
+  const [precioMin, setPrecioMin] = useState('');
+  const [precioMax, setPrecioMax] = useState('');
+  const [ordenamiento, setOrdenamiento] = useState('nombre-asc');
+  const [showFiltros, setShowFiltros] = useState(false);
+
   const [cantidades, setCantidades] = useState({}); // {productoId: cantidad}
 
   useEffect(() => {
@@ -21,10 +27,6 @@ const Catalogo = () => {
       fetchCatalogo();
     }
   }, [clienteCorporativo]);
-
-  useEffect(() => {
-    filtrarProductos();
-  }, [searchTerm, tipoFilter, productos]);
 
   const fetchCatalogo = async () => {
     try {
@@ -77,16 +79,7 @@ const Catalogo = () => {
         ...doc.data()
       }));
 
-      // Ordenar por categoría y nombre
-      productosData.sort((a, b) => {
-        if (a.categoria !== b.categoria) {
-          return a.categoria.localeCompare(b.categoria);
-        }
-        return a.nombre.localeCompare(b.nombre);
-      });
-
       setProductos(productosData);
-      setProductosFiltrados(productosData);
     } catch (error) {
       console.error('Error al cargar catálogo:', error);
       alert('Error al cargar el catálogo: ' + error.message);
@@ -95,7 +88,13 @@ const Catalogo = () => {
     }
   };
 
-  const filtrarProductos = () => {
+  const getPrecio = (producto) => {
+    // Si hay precio corporativo, usar ese; si no, usar precio regular
+    return preciosCorporativos[producto.id] || producto.precio || 0;
+  };
+
+  // Filtrar y ordenar productos usando useMemo para mejor performance
+  const productosFiltrados = useMemo(() => {
     let filtered = [...productos];
 
     // Filtrar por búsqueda
@@ -122,13 +121,41 @@ const Catalogo = () => {
       });
     }
 
-    setProductosFiltrados(filtered);
-  };
+    // Filtrar por precio mínimo
+    if (precioMin) {
+      const min = parseFloat(precioMin);
+      filtered = filtered.filter(p => getPrecio(p) >= min);
+    }
 
-  const getPrecio = (producto) => {
-    // Si hay precio corporativo, usar ese; si no, usar precio regular
-    return preciosCorporativos[producto.id] || producto.precio || 0;
-  };
+    // Filtrar por precio máximo
+    if (precioMax) {
+      const max = parseFloat(precioMax);
+      filtered = filtered.filter(p => getPrecio(p) <= max);
+    }
+
+    // Ordenar
+    filtered.sort((a, b) => {
+      switch (ordenamiento) {
+        case 'nombre-asc':
+          return a.nombre.localeCompare(b.nombre);
+        case 'nombre-desc':
+          return b.nombre.localeCompare(a.nombre);
+        case 'precio-asc':
+          return getPrecio(a) - getPrecio(b);
+        case 'precio-desc':
+          return getPrecio(b) - getPrecio(a);
+        case 'categoria':
+          if (a.categoria !== b.categoria) {
+            return a.categoria.localeCompare(b.categoria);
+          }
+          return a.nombre.localeCompare(b.nombre);
+        default:
+          return 0;
+      }
+    });
+
+    return filtered;
+  }, [productos, searchTerm, tipoFilter, precioMin, precioMax, ordenamiento, preciosCorporativos]);
 
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('es-CO', {
@@ -175,6 +202,14 @@ const Catalogo = () => {
     }));
   };
 
+  const limpiarFiltros = () => {
+    setSearchTerm('');
+    setTipoFilter('todos');
+    setPrecioMin('');
+    setPrecioMax('');
+    setOrdenamiento('nombre-asc');
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-screen">
@@ -186,69 +221,166 @@ const Catalogo = () => {
     );
   }
 
+  const filtrosActivos = searchTerm || tipoFilter !== 'todos' || precioMin || precioMax || ordenamiento !== 'nombre-asc';
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="bg-white rounded-lg shadow-md p-6">
-        <h1 className="text-2xl font-bold text-gray-800 mb-2">
-          Catálogo de Uniformes
-        </h1>
-        <p className="text-gray-600">
-          {clienteCorporativo?.nombre}
-        </p>
-        <p className="text-sm text-gray-500 mt-1">
-          {productosFiltrados.length} {productosFiltrados.length === 1 ? 'producto disponible' : 'productos disponibles'}
-        </p>
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="flex-1">
+            <h1 className="text-2xl font-bold text-gray-800 mb-2">
+              Catálogo de Uniformes
+            </h1>
+            <p className="text-gray-600">
+              {clienteCorporativo?.nombre}
+            </p>
+            <p className="text-sm text-gray-500 mt-1">
+              {productosFiltrados.length} de {productos.length} {productos.length === 1 ? 'producto' : 'productos'}
+            </p>
+          </div>
+
+          <button
+            onClick={() => setShowFiltros(!showFiltros)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+              filtrosActivos
+                ? 'text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+            style={filtrosActivos ? { backgroundColor: '#D50565' } : {}}
+          >
+            <SlidersHorizontal size={18} />
+            Filtros
+            {filtrosActivos && <span className="bg-white text-pink-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold">!</span>}
+          </button>
+        </div>
       </div>
 
-      {/* Filtros */}
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Búsqueda */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Buscar
-            </label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Buscar por nombre, categoría o talla..."
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
-              />
+      {/* Panel de Filtros */}
+      {showFiltros && (
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold text-gray-800">Filtros y Ordenamiento</h3>
+            <button
+              onClick={() => setShowFiltros(false)}
+              className="text-gray-500 hover:text-gray-700"
+            >
+              <X size={20} />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Búsqueda */}
+            <div className="lg:col-span-3">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Buscar
+              </label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Buscar por nombre, categoría o talla..."
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                />
+              </div>
+            </div>
+
+            {/* Tipo */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Tipo
+              </label>
+              <select
+                value={tipoFilter}
+                onChange={(e) => setTipoFilter(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              >
+                <option value="todos">Todos los tipos</option>
+                <option value="diario">Diario</option>
+                <option value="deportivo">Deportivo</option>
+              </select>
+            </div>
+
+            {/* Ordenamiento */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Ordenar por
+              </label>
+              <select
+                value={ordenamiento}
+                onChange={(e) => setOrdenamiento(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              >
+                <option value="nombre-asc">Nombre (A-Z)</option>
+                <option value="nombre-desc">Nombre (Z-A)</option>
+                <option value="precio-asc">Precio (menor a mayor)</option>
+                <option value="precio-desc">Precio (mayor a menor)</option>
+                <option value="categoria">Categoría</option>
+              </select>
+            </div>
+
+            {/* Rango de Precio */}
+            <div className="lg:col-span-3">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Rango de Precio
+              </label>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <input
+                    type="number"
+                    value={precioMin}
+                    onChange={(e) => setPrecioMin(e.target.value)}
+                    placeholder="Precio mínimo"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                  />
+                </div>
+                <div>
+                  <input
+                    type="number"
+                    value={precioMax}
+                    onChange={(e) => setPrecioMax(e.target.value)}
+                    placeholder="Precio máximo"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Tipo */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Tipo
-            </label>
-            <select
-              value={tipoFilter}
-              onChange={(e) => setTipoFilter(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
-            >
-              <option value="todos">Todos los tipos</option>
-              <option value="diario">Diario</option>
-              <option value="deportivo">Deportivo</option>
-            </select>
-          </div>
+          {filtrosActivos && (
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={limpiarFiltros}
+                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Limpiar Filtros
+              </button>
+            </div>
+          )}
         </div>
-      </div>
+      )}
 
       {/* Grid de Productos */}
       {productosFiltrados.length === 0 ? (
         <div className="bg-white rounded-lg shadow-md p-12 text-center">
           <Package size={48} className="mx-auto text-gray-400 mb-4" />
           <h3 className="text-lg font-semibold text-gray-700 mb-2">
-            No se encontraron productos
+            {productos.length === 0 ? 'No hay productos disponibles' : 'No se encontraron productos con los filtros aplicados'}
           </h3>
           <p className="text-gray-500">
-            Intenta ajustar los filtros de búsqueda
+            {productos.length === 0 ? 'Los productos aparecerán aquí cuando estén disponibles' : 'Intenta ajustar los filtros de búsqueda'}
           </p>
+          {productos.length > 0 && (
+            <button
+              onClick={limpiarFiltros}
+              className="mt-4 px-4 py-2 text-white rounded-lg hover:opacity-90 transition-colors"
+              style={{ backgroundColor: '#D50565' }}
+            >
+              Limpiar Filtros
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">

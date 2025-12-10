@@ -32,6 +32,7 @@ import { NotificacionesProvider } from './portal/context/NotificacionesContext';
 import PortalLogin from './portal/pages/Login';
 import PortalLayout from './portal/components/PortalLayout';
 import ProtectedRoute from './portal/components/ProtectedRoute';
+import PortalDashboard from './portal/pages/Dashboard';
 import Catalogo from './portal/pages/Catalogo';
 import CrearPedido from './portal/pages/CrearPedido';
 import MisPedidos from './portal/pages/MisPedidos';
@@ -59,15 +60,16 @@ function App() {
                       </ProtectedRoute>
                     }
                   >
-                    <Route index element={<Navigate to="/portal/catalogo" replace />} />
+                    <Route index element={<Navigate to="/portal/dashboard" replace />} />
+                    <Route path="dashboard" element={<PortalDashboard />} />
                     <Route path="catalogo" element={<Catalogo />} />
                     <Route path="crear-pedido" element={<CrearPedido />} />
                     <Route path="mis-pedidos" element={<MisPedidos />} />
                     <Route path="reportar-imperfecto" element={<ReportarImperfecto />} />
                   </Route>
 
-                  {/* Catch all portal - redirect to catalogo */}
-                  <Route path="*" element={<Navigate to="/portal/catalogo" replace />} />
+                  {/* Catch all portal - redirect to dashboard */}
+                  <Route path="*" element={<Navigate to="/portal/dashboard" replace />} />
                 </Routes>
               </NotificacionesProvider>
             </CartProvider>

@@ -11,7 +11,8 @@ import {
   Menu,
   X,
   User,
-  Bell
+  Bell,
+  LayoutDashboard
 } from 'lucide-react';
 
 const PortalLayout = () => {
@@ -47,6 +48,11 @@ const PortalLayout = () => {
   };
 
   const navItems = [
+    {
+      path: '/portal/dashboard',
+      icon: LayoutDashboard,
+      label: 'Dashboard'
+    },
     {
       path: '/portal/catalogo',
       icon: ShoppingBag,
