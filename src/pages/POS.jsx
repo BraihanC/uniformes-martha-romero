@@ -668,8 +668,11 @@ const POS = () => {
   return (
     <div className="h-screen flex flex-col bg-gray-50">
       {/* Header */}
-      <div className="bg-white shadow-sm px-6 py-4 border-b">
-        <h1 className="text-2xl font-bold text-gray-800">Punto de Venta</h1>
+      <div className="bg-white shadow-sm px-4 md:px-6 py-2 md:py-3 border-b">
+        <div className="flex items-center justify-between">
+          <h1 className="text-lg md:text-xl font-bold text-gray-800">Punto de Venta</h1>
+          <h2 className="hidden lg:block text-lg md:text-xl font-bold text-gray-800">Carrito</h2>
+        </div>
       </div>
 
       {/* Mobile Tabs (visible only on mobile/tablet) */}
@@ -677,7 +680,7 @@ const POS = () => {
         <div className="flex">
           <button
             onClick={() => setActiveTab('catalogo')}
-            className={`flex-1 py-3 px-4 font-medium text-sm transition-colors ${
+            className={`flex-1 py-3 md:py-4 px-4 font-medium text-sm md:text-base transition-colors ${
               activeTab === 'catalogo'
                 ? 'bg-orange-500 text-white border-b-2 border-orange-600'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -687,7 +690,7 @@ const POS = () => {
           </button>
           <button
             onClick={() => setActiveTab('carrito')}
-            className={`flex-1 py-3 px-4 font-medium text-sm transition-colors relative ${
+            className={`flex-1 py-3 md:py-4 px-4 font-medium text-sm md:text-base transition-colors relative ${
               activeTab === 'carrito'
                 ? 'bg-orange-500 text-white border-b-2 border-orange-600'
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -695,7 +698,7 @@ const POS = () => {
           >
             Carrito
             {cartItems.length > 0 && (
-              <span className={`ml-2 px-2 py-0.5 rounded-full text-xs font-bold ${
+              <span className={`ml-2 px-2 py-0.5 rounded-full text-xs md:text-sm font-bold ${
                 activeTab === 'carrito' ? 'bg-white text-orange-500' : 'bg-orange-500 text-white'
               }`}>
                 {cartItems.length}
@@ -708,21 +711,21 @@ const POS = () => {
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
         {/* LEFT COLUMN - CATALOG */}
-        <div className={`flex-1 flex flex-col overflow-hidden p-6 ${
+        <div className={`flex-1 flex flex-col overflow-hidden p-2 md:p-3 ${
           activeTab === 'catalogo' ? 'flex' : 'hidden'
         } lg:flex`}>
           {/* Filters */}
-          <div className="bg-white rounded-lg shadow-sm p-4 mb-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div className="bg-white rounded-lg shadow-sm p-2 md:p-3 mb-2 md:mb-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 mb-3 md:mb-4">
               {/* Colegio Filter */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                   Colegio
                 </label>
                 <select
                   value={selectedColegio}
                   onChange={(e) => setSelectedColegio(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
                 >
                   <option value="">Todos los colegios</option>
                   {colegios.map(colegio => (
@@ -735,15 +738,15 @@ const POS = () => {
 
               {/* Tipo Filter */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                   Tipo de Uniforme
                 </label>
-                <div className="flex gap-2">
+                <div className="flex gap-1 md:gap-2">
                   {['Todos', 'Diario', 'Deportivo'].map(tipo => (
                     <button
                       key={tipo}
                       onClick={() => setSelectedTipo(tipo)}
-                      className={`flex-1 px-3 py-2 rounded-md font-medium transition-colors ${
+                      className={`flex-1 px-2 md:px-3 py-2 text-xs md:text-sm rounded-md font-medium transition-colors ${
                         selectedTipo === tipo
                           ? 'bg-orange-500 text-white'
                           : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
@@ -757,7 +760,7 @@ const POS = () => {
 
               {/* Search Filter (with autoFocus for scanner) */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                   Buscar (Nombre o Referencia)
                 </label>
                 <input
@@ -768,15 +771,15 @@ const POS = () => {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={handleSearchKeyDown}
                   placeholder="Escribir o escanear código..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
                 />
               </div>
             </div>
           </div>
 
           {/* Products Grid */}
-          <div className="flex-1 overflow-auto bg-white rounded-lg shadow-sm p-4">
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="flex-1 overflow-auto bg-white rounded-lg shadow-sm p-2 md:p-3 lg:p-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 md:gap-3 lg:gap-4">
               {filteredProducts.map(product => {
                 const availableStock = calculateAvailableStock(product);
                 const isOutOfStock = availableStock <= 0;
@@ -785,19 +788,19 @@ const POS = () => {
                   <div
                     key={product.id}
                     onClick={() => !isOutOfStock && handleAddToCart(product)}
-                    className={`border rounded-lg p-4 transition-all ${
+                    className={`border rounded-lg p-2 md:p-3 lg:p-4 transition-all ${
                       isOutOfStock
                         ? 'bg-gray-100 cursor-not-allowed opacity-50'
                         : 'bg-white hover:shadow-md hover:border-orange-500 cursor-pointer'
                     }`}
                   >
-                    <h3 className="font-semibold text-gray-800 mb-1 text-sm">
+                    <h3 className="font-semibold text-gray-800 mb-1 text-xs md:text-sm">
                       {product.nombre}
                     </h3>
-                    <p className="text-xs text-gray-500 mb-2">
+                    <p className="text-xs text-gray-500 mb-1 md:mb-2">
                       Ref: {product.referencia}
                     </p>
-                    <p className="text-lg font-bold text-orange-600 mb-2">
+                    <p className="text-base md:text-lg font-bold text-orange-600 mb-1 md:mb-2">
                       ${product.precio?.toLocaleString('es-CO')}
                     </p>
                     <p className={`text-xs font-medium ${
@@ -811,7 +814,7 @@ const POS = () => {
             </div>
 
             {filteredProducts.length === 0 && (
-              <div className="text-center text-gray-500 py-12">
+              <div className="text-center text-gray-500 py-8 md:py-12 text-sm md:text-base">
                 No se encontraron productos
               </div>
             )}
@@ -823,8 +826,8 @@ const POS = () => {
           activeTab === 'carrito' ? 'flex' : 'hidden'
         } lg:flex`}>
           {/* Client Selector */}
-          <div className="p-4 border-b">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+          <div className="p-2 md:p-3 border-b">
+            <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
               Cliente
             </label>
             <div className="flex gap-2 mb-2">
@@ -838,7 +841,7 @@ const POS = () => {
                   }}
                   onFocus={() => setShowClientSuggestions(true)}
                   placeholder="Buscar cliente..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
                 />
 
                 {/* Client Suggestions */}
@@ -860,21 +863,21 @@ const POS = () => {
 
               <button
                 onClick={() => setShowClientModal(true)}
-                className="px-3 py-2 bg-orange-500 text-white rounded-md hover:bg-orange-600 font-bold"
+                className="px-3 md:px-4 py-2 text-lg md:text-xl bg-orange-500 text-white rounded-md hover:bg-orange-600 font-bold"
               >
                 +
               </button>
             </div>
 
             {selectedClient && (
-              <div className="text-sm bg-green-50 border border-green-200 rounded-md p-2 flex items-start justify-between gap-2">
-                <div className="flex-1">
-                  <div className="font-medium">{selectedClient.nombreCompleto}</div>
-                  <div className="text-gray-600 text-xs">{selectedClient.numeroDocumento}</div>
+              <div className="text-xs md:text-sm bg-green-50 border border-green-200 rounded-md p-2 flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium truncate">{selectedClient.nombreCompleto}</div>
+                  <div className="text-gray-600 text-xs truncate">{selectedClient.numeroDocumento}</div>
                 </div>
                 <button
                   onClick={handleRemoveClient}
-                  className="text-red-600 hover:text-red-800 font-bold text-lg leading-none flex-shrink-0"
+                  className="text-red-600 hover:text-red-800 font-bold text-xl leading-none flex-shrink-0"
                   title="Remover cliente"
                 >
                   ×
@@ -884,21 +887,9 @@ const POS = () => {
           </div>
 
           {/* Cart Items */}
-          <div className="flex-1 overflow-auto p-4 border-b relative">
-            {/* Header con contador de productos */}
-            <div className="flex justify-between items-center mb-3 sticky top-0 bg-white pb-2 z-10">
-              <h3 className="font-semibold text-gray-800">
-                Carrito
-                {cartItems.length > 0 && (
-                  <span className="text-sm font-normal text-gray-600 ml-2">
-                    ({cartItems.length} {cartItems.length === 1 ? 'producto' : 'productos'} - {cartItems.reduce((sum, item) => sum + item.cantidad, 0)} {cartItems.reduce((sum, item) => sum + item.cantidad, 0) === 1 ? 'unidad' : 'unidades'})
-                  </span>
-                )}
-              </h3>
-            </div>
-
+          <div className="flex-1 overflow-auto p-2 md:p-3 border-b relative">
             {cartItems.length === 0 ? (
-              <div className="text-center text-gray-500 py-8">
+              <div className="text-center text-gray-500 py-6 text-sm md:text-base">
                 Carrito vacío
               </div>
             ) : (
@@ -924,7 +915,7 @@ const POS = () => {
                         </button>
                       </div>
 
-                      {/* Cantidad y precio en una sola línea */}
+                      {/* Cantidad y precio en una línea compacta */}
                       <div className="flex items-center gap-2 mb-1">
                         <button
                           onClick={() => handleQuantityChange(item.product.id, item.cantidad - 1)}
@@ -932,7 +923,7 @@ const POS = () => {
                         >
                           -
                         </button>
-                        <span className="w-10 text-center font-medium text-sm">{item.cantidad}</span>
+                        <span className="w-8 text-center font-medium text-sm">{item.cantidad}</span>
                         <button
                           onClick={() => handleQuantityChange(item.product.id, item.cantidad + 1)}
                           className="w-7 h-7 bg-gray-200 hover:bg-gray-300 rounded font-bold text-sm"
@@ -979,6 +970,11 @@ const POS = () => {
                             $
                           </button>
                         </div>
+                        {itemDiscount > 0 && (
+                          <span className="text-xs text-red-600 ml-auto">
+                            -${itemDiscount.toLocaleString('es-CO')}
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -993,8 +989,17 @@ const POS = () => {
           </div>
 
           {/* Billing Summary */}
-          <div className="p-4 border-b bg-gray-50">
-            <div className="space-y-2 text-sm">
+          <div className="p-2 md:p-3 border-b bg-gray-50">
+            <div className="space-y-2 text-xs md:text-sm">
+              {/* Contador de productos */}
+              {cartItems.length > 0 && (
+                <div className="bg-white rounded px-2 py-1.5 mb-2 border border-gray-200">
+                  <p className="text-xs text-gray-600 text-center">
+                    {cartItems.length} {cartItems.length === 1 ? 'producto' : 'productos'} • {cartItems.reduce((sum, item) => sum + item.cantidad, 0)} {cartItems.reduce((sum, item) => sum + item.cantidad, 0) === 1 ? 'unidad' : 'unidades'}
+                  </p>
+                </div>
+              )}
+
               <div className="flex justify-between">
                 <span>Subtotal:</span>
                 <span className="font-medium">${calculateSubtotal().toLocaleString('es-CO')}</span>
@@ -1019,23 +1024,23 @@ const POS = () => {
                     />
                     <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-orange-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
                   </label>
-                  <span>IVA ({companyConfig?.iva || 19}%)</span>
+                  <span className="text-xs md:text-sm">IVA ({companyConfig?.iva || 19}%)</span>
                 </div>
                 <span className="font-medium">${calculateIVA().toLocaleString('es-CO')}</span>
               </div>
 
               {/* General Discount */}
               <div className="border-t pt-2">
-                <div className="flex items-center gap-2 mb-1">
-                  <label className="text-xs text-gray-600">Descuento General:</label>
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                  <label className="text-xs text-gray-600 whitespace-nowrap">Descuento General:</label>
                   <input
                     type="number"
                     min="0"
                     value={descuentoGeneral}
                     onChange={(e) => setDescuentoGeneral(Math.max(0, parseFloat(e.target.value) || 0))}
-                    className="w-16 px-2 py-1 border border-gray-300 rounded text-sm"
+                    className="w-16 px-2 py-1 border border-gray-300 rounded text-xs"
                   />
-                  <div className="flex border border-gray-300 rounded">
+                  <div className="flex border border-gray-300 rounded overflow-hidden">
                     <button
                       onClick={() => setTipoDescuentoGeneral('%')}
                       className={`px-2 py-1 text-xs font-medium ${
@@ -1066,7 +1071,7 @@ const POS = () => {
                 )}
               </div>
 
-              <div className="flex justify-between text-lg font-bold border-t pt-2 mt-2">
+              <div className="flex justify-between text-base md:text-lg font-bold border-t pt-2 mt-2">
                 <span>TOTAL:</span>
                 <span className="text-orange-600">${calculateTotal().toLocaleString('es-CO')}</span>
               </div>
@@ -1074,15 +1079,15 @@ const POS = () => {
           </div>
 
           {/* Payment Controls */}
-          <div className="p-4 space-y-3">
+          <div className="p-2 md:p-3 space-y-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                 Método de Pago
               </label>
               <select
                 value={metodoPago}
                 onChange={(e) => setMetodoPago(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
               >
                 <option>Efectivo</option>
                 <option>Nequi</option>
@@ -1095,14 +1100,14 @@ const POS = () => {
             <div className="flex gap-2">
               <button
                 onClick={clearCart}
-                className="flex-1 px-4 py-3 bg-red-500 text-white rounded-md hover:bg-red-600 font-medium"
+                className="flex-1 px-3 md:px-4 py-2 md:py-3 text-sm md:text-base bg-red-500 text-white rounded-md hover:bg-red-600 font-medium"
               >
-                Limpiar Carrito
+                Limpiar
               </button>
               <button
                 onClick={handleGenerateFactura}
                 disabled={cartItems.length === 0 || !selectedClient}
-                className="flex-1 px-4 py-3 bg-orange-500 text-white rounded-md hover:bg-orange-600 font-medium disabled:bg-gray-300 disabled:cursor-not-allowed"
+                className="flex-1 px-3 md:px-4 py-2 md:py-3 text-sm md:text-base bg-orange-500 text-white rounded-md hover:bg-orange-600 font-medium disabled:bg-gray-300 disabled:cursor-not-allowed"
                 style={{ backgroundColor: cartItems.length > 0 && selectedClient ? '#EA5C2E' : undefined }}
               >
                 Generar Factura
@@ -1114,10 +1119,10 @@ const POS = () => {
 
       {/* QUICK CLIENT MODAL */}
       {showClientModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 md:p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-              <h2 className="text-2xl font-semibold text-gray-800">
+            <div className="px-4 md:px-6 py-3 md:py-4 border-b border-gray-200 flex justify-between items-center">
+              <h2 className="text-lg md:text-2xl font-semibold text-gray-800">
                 Crear Cliente Rápido
               </h2>
               <button
@@ -1134,17 +1139,17 @@ const POS = () => {
                     colegioId: ''
                   });
                 }}
-                className="text-gray-400 hover:text-gray-600 text-2xl"
+                className="text-gray-400 hover:text-gray-600 text-xl md:text-2xl"
               >
                 &times;
               </button>
             </div>
 
-            <div className="px-6 py-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="px-4 md:px-6 py-3 md:py-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
                 {/* Nombre Completo */}
                 <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                     Nombre Completo <span className="text-red-500">*</span>
                   </label>
                   <input
@@ -1152,19 +1157,19 @@ const POS = () => {
                     value={newClientData.nombreCompleto}
                     onChange={(e) => setNewClientData({ ...newClientData, nombreCompleto: e.target.value })}
                     placeholder="Ej: Juan Pérez García"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                   />
                 </div>
 
                 {/* Tipo de Documento */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                     Tipo de Documento <span className="text-red-500">*</span>
                   </label>
                   <select
                     value={newClientData.tipoDocumento}
                     onChange={(e) => setNewClientData({ ...newClientData, tipoDocumento: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                   >
                     {tiposDocumento.map((tipo) => (
                       <option key={tipo} value={tipo}>
@@ -1176,7 +1181,7 @@ const POS = () => {
 
                 {/* Número de Documento */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                     Número de Documento <span className="text-red-500">*</span>
                   </label>
                   <input
@@ -1184,13 +1189,13 @@ const POS = () => {
                     value={newClientData.numeroDocumento}
                     onChange={(e) => setNewClientData({ ...newClientData, numeroDocumento: e.target.value })}
                     placeholder="Ej: 123456789"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                   />
                 </div>
 
                 {/* Teléfono */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                     Teléfono
                   </label>
                   <input
@@ -1198,13 +1203,13 @@ const POS = () => {
                     value={newClientData.telefono}
                     onChange={(e) => setNewClientData({ ...newClientData, telefono: e.target.value })}
                     placeholder="Ej: 3001234567"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                   />
                 </div>
 
                 {/* Email */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                     Email
                   </label>
                   <input
@@ -1212,13 +1217,13 @@ const POS = () => {
                     value={newClientData.email}
                     onChange={(e) => setNewClientData({ ...newClientData, email: e.target.value })}
                     placeholder="Ej: cliente@ejemplo.com"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                   />
                 </div>
 
                 {/* Dirección */}
                 <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                     Dirección
                   </label>
                   <input
@@ -1226,13 +1231,13 @@ const POS = () => {
                     value={newClientData.direccion}
                     onChange={(e) => setNewClientData({ ...newClientData, direccion: e.target.value })}
                     placeholder="Ej: Calle 123 # 45-67"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                   />
                 </div>
 
                 {/* Ciudad */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                     Ciudad
                   </label>
                   <input
@@ -1240,19 +1245,19 @@ const POS = () => {
                     value={newClientData.ciudad}
                     onChange={(e) => setNewClientData({ ...newClientData, ciudad: e.target.value })}
                     placeholder="Ej: Bogotá"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                   />
                 </div>
 
                 {/* Colegio */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
                     Colegio (Opcional)
                   </label>
                   <select
                     value={newClientData.colegioId}
                     onChange={(e) => setNewClientData({ ...newClientData, colegioId: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                    className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                   >
                     <option value="">Sin colegio asignado</option>
                     {colegios.map(colegio => (
@@ -1265,7 +1270,7 @@ const POS = () => {
               </div>
             </div>
 
-            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+            <div className="px-4 md:px-6 py-3 md:py-4 border-t border-gray-200 flex flex-col sm:flex-row justify-end gap-2 md:gap-3">
               <button
                 onClick={() => {
                   setShowClientModal(false);
@@ -1280,13 +1285,13 @@ const POS = () => {
                     colegioId: ''
                   });
                 }}
-                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                className="w-full sm:w-auto px-4 py-2 text-sm md:text-base border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
               >
                 Cancelar
               </button>
               <button
                 onClick={handleCreateQuickClient}
-                className="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
+                className="w-full sm:w-auto px-4 py-2 text-sm md:text-base bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors"
               >
                 Crear Cliente
               </button>
@@ -1297,16 +1302,16 @@ const POS = () => {
 
       {/* PRINT MODAL (CORREGIDO) */}
       {showPrintModal && ventaData && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 md:p-4">
           <div className="bg-white rounded-lg w-full flex flex-col" style={{ maxWidth: '400px', maxHeight: '90vh' }}>
 
             {/* Header - Fijo arriba */}
-            <div className="flex-shrink-0 px-6 py-4 border-b border-gray-200">
+            <div className="flex-shrink-0 px-4 md:px-6 py-3 md:py-4 border-b border-gray-200">
               <div className="flex justify-between items-center">
-                <h2 className="text-xl font-bold">Factura Generada</h2>
+                <h2 className="text-lg md:text-xl font-bold">Factura Generada</h2>
                 <button
                   onClick={handleClosePrintModal}
-                  className="text-gray-500 hover:text-gray-700 text-2xl"
+                  className="text-gray-500 hover:text-gray-700 text-xl md:text-2xl"
                 >
                   &times;
                 </button>
@@ -1314,7 +1319,7 @@ const POS = () => {
             </div>
 
             {/* Receipt Preview - Con scroll si es necesario */}
-            <div className="flex-1 overflow-y-auto px-6 py-4">
+            <div className="flex-1 overflow-y-auto px-3 md:px-6 py-3 md:py-4">
               <div className="flex justify-center">
                 <div id="receipt-print" className="border p-4 bg-white" style={{ width: '300px' }}>
 
@@ -1405,27 +1410,27 @@ const POS = () => {
             </div>
 
             {/* Action Buttons - Fijos abajo */}
-            <div className="flex-shrink-0 px-6 py-4 border-t border-gray-200 bg-gray-50">
+            <div className="flex-shrink-0 px-3 md:px-6 py-3 md:py-4 border-t border-gray-200 bg-gray-50">
               <div className="flex flex-col gap-2">
               <div className="flex gap-2">
                 <button
                   onClick={handlePrint}
-                  className="flex-1 px-4 py-2 text-white rounded-md hover:opacity-90 transition-opacity"
+                  className="flex-1 px-3 md:px-4 py-2 text-sm md:text-base text-white rounded-md hover:opacity-90 transition-opacity"
                   style={{ backgroundColor: '#EA5C2E' }}
                 >
                   🖨️ Imprimir
                 </button>
                 <button
                   onClick={handleOpenEmailModal}
-                  className="flex-1 px-4 py-2 text-white rounded-md hover:opacity-90 transition-opacity"
+                  className="flex-1 px-3 md:px-4 py-2 text-sm md:text-base text-white rounded-md hover:opacity-90 transition-opacity"
                   style={{ backgroundColor: '#D50565' }}
                 >
-                  📧 Enviar por Correo
+                  📧 Correo
                 </button>
               </div>
                 <button
                   onClick={handleClosePrintModal}
-                  className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
+                  className="w-full px-3 md:px-4 py-2 text-sm md:text-base bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
                 >
                   Cerrar
                 </button>
@@ -1437,12 +1442,12 @@ const POS = () => {
 
       {/* EMAIL MODAL */}
       {showEmailModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h2 className="text-xl font-bold mb-4 text-gray-800">Enviar Factura por Correo</h2>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-3 md:px-4">
+          <div className="bg-white rounded-lg p-4 md:p-6 w-full max-w-md">
+            <h2 className="text-lg md:text-xl font-bold mb-3 md:mb-4 text-gray-800">Enviar Factura por Correo</h2>
 
             <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-xs md:text-sm font-medium text-gray-700 mb-2">
                 Correo Electrónico del Cliente
               </label>
               <input
@@ -1450,16 +1455,16 @@ const POS = () => {
                 value={emailRecipient}
                 onChange={(e) => setEmailRecipient(e.target.value)}
                 placeholder="ejemplo@correo.com"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
                 disabled={sendingEmail}
               />
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <button
                 onClick={handleSendEmail}
                 disabled={sendingEmail}
-                className="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-1 px-3 md:px-4 py-2 text-sm md:text-base text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ backgroundColor: '#D50565' }}
               >
                 {sendingEmail ? '📤 Enviando...' : '📧 Enviar'}
@@ -1467,7 +1472,7 @@ const POS = () => {
               <button
                 onClick={() => setShowEmailModal(false)}
                 disabled={sendingEmail}
-                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-1 px-3 md:px-4 py-2 text-sm md:text-base bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancelar
               </button>

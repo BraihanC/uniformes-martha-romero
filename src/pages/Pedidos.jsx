@@ -179,10 +179,74 @@ const Pedidos = () => {
       }));
       pedidosData.sort((a, b) => (b.numeroPedido || 0) - (a.numeroPedido || 0));
       setPedidos(pedidosData);
+
+      // Recalcular estados automáticamente después de cargar
+      await recalcularEstadosPedidos(pedidosData);
     } catch (error) {
       console.error('Error al cargar pedidos:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Función automática para recalcular el estado general de los pedidos
+  const recalcularEstadosPedidos = async (pedidosData) => {
+    try {
+      const batch = writeBatch(db);
+      let actualizados = 0;
+
+      for (const pedido of pedidosData) {
+        // Solo procesar pedidos que tengan items
+        if (!pedido.items || pedido.items.length === 0) continue;
+
+        // Calcular el estado correcto basándose en los items
+        const anyInProduction = pedido.items.some(item => item.estadoItem === 'En Producción');
+        const allItemsReadyOrDelivered = pedido.items.every(
+          item => item.estadoItem === 'Listo para Entrega' || item.estadoItem === 'Entregado'
+        );
+        const todosEntregados = pedido.items.every(item => item.estadoItem === 'Entregado');
+
+        let estadoCorrecto;
+        if (todosEntregados) {
+          estadoCorrecto = 'Entregado';
+        } else if (anyInProduction) {
+          estadoCorrecto = 'En Proceso';
+        } else if (allItemsReadyOrDelivered) {
+          estadoCorrecto = 'Pedido Completo - Listo para Recoger';
+        } else {
+          // Casos mixtos, mantener el estado actual
+          estadoCorrecto = pedido.estadoGeneral;
+        }
+
+        // Solo actualizar si el estado está incorrecto
+        if (pedido.estadoGeneral !== estadoCorrecto) {
+          const pedidoRef = doc(db, 'pedidos', pedido.id);
+          batch.update(pedidoRef, {
+            estadoGeneral: estadoCorrecto,
+            updatedAt: serverTimestamp()
+          });
+          actualizados++;
+          console.log(`✅ Pedido #${pedido.numeroPedido}: ${pedido.estadoGeneral} → ${estadoCorrecto}`);
+        }
+      }
+
+      // Ejecutar el batch si hay actualizaciones
+      if (actualizados > 0) {
+        await batch.commit();
+        console.log(`📊 Recalculados ${actualizados} pedidos con estados incorrectos`);
+
+        // Recargar pedidos para reflejar los cambios
+        const querySnapshot = await getDocs(collection(db, 'pedidos'));
+        const pedidosActualizados = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        pedidosActualizados.sort((a, b) => (b.numeroPedido || 0) - (a.numeroPedido || 0));
+        setPedidos(pedidosActualizados);
+      }
+    } catch (error) {
+      console.error('Error al recalcular estados de pedidos:', error);
+      // No mostrar alerta al usuario, solo log en consola
     }
   };
 
