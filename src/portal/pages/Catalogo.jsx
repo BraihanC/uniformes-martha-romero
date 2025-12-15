@@ -93,6 +93,41 @@ const Catalogo = () => {
     return preciosCorporativos[producto.id] || producto.precio || 0;
   };
 
+  // Función para ordenar productos por talla
+  const sortByTalla = (products) => {
+    // Orden de tallas personalizado
+    const tallaOrder = {
+      // Tallas numéricas
+      '4': 1, '6': 2, '8': 3, '10': 4, '12': 5, '14': 6, '16': 7,
+      // Tallas con letras
+      'SX': 8, 'S': 9, 'M': 10, 'L': 11, 'XL': 12, 'XXL': 13,
+      // Variaciones comunes
+      'XS': 8, 'PEQUEÑA': 14, 'MEDIANA': 15, 'GRANDE': 16,
+      // Rangos de medias
+      '4-6': 1.5, '6-8': 2.5, '8-10': 3.5, '10-12': 4.5, '12-14': 5.5
+    };
+
+    return [...products].sort((a, b) => {
+      const tallaA = (a.talla || '').toUpperCase().trim();
+      const tallaB = (b.talla || '').toUpperCase().trim();
+
+      const orderA = tallaOrder[tallaA] || 999;
+      const orderB = tallaOrder[tallaB] || 999;
+
+      // Si ambos tienen orden definido, compararlos
+      if (orderA !== 999 && orderB !== 999) {
+        return orderA - orderB;
+      }
+
+      // Si uno tiene orden y el otro no, el que tiene orden va primero
+      if (orderA !== 999) return -1;
+      if (orderB !== 999) return 1;
+
+      // Si ninguno tiene orden, ordenar alfabéticamente
+      return tallaA.localeCompare(tallaB);
+    });
+  };
+
   // Filtrar y ordenar productos usando useMemo para mejor performance
   const productosFiltrados = useMemo(() => {
     let filtered = [...productos];
@@ -133,26 +168,42 @@ const Catalogo = () => {
       filtered = filtered.filter(p => getPrecio(p) <= max);
     }
 
-    // Ordenar
-    filtered.sort((a, b) => {
-      switch (ordenamiento) {
-        case 'nombre-asc':
-          return a.nombre.localeCompare(b.nombre);
-        case 'nombre-desc':
-          return b.nombre.localeCompare(a.nombre);
-        case 'precio-asc':
-          return getPrecio(a) - getPrecio(b);
-        case 'precio-desc':
-          return getPrecio(b) - getPrecio(a);
-        case 'categoria':
-          if (a.categoria !== b.categoria) {
-            return a.categoria.localeCompare(b.categoria);
-          }
-          return a.nombre.localeCompare(b.nombre);
-        default:
-          return 0;
+    // Si hay búsqueda activa, ordenar por talla automáticamente
+    if (searchTerm.trim()) {
+      // Primero agrupar por nombre para mantener productos similares juntos
+      filtered.sort((a, b) => a.nombre.localeCompare(b.nombre));
+      // Luego ordenar por talla dentro de cada grupo
+      filtered = sortByTalla(filtered);
+    } else {
+      // Ordenar según la opción seleccionada
+      filtered.sort((a, b) => {
+        switch (ordenamiento) {
+          case 'nombre-asc':
+            return a.nombre.localeCompare(b.nombre);
+          case 'nombre-desc':
+            return b.nombre.localeCompare(a.nombre);
+          case 'precio-asc':
+            return getPrecio(a) - getPrecio(b);
+          case 'precio-desc':
+            return getPrecio(b) - getPrecio(a);
+          case 'categoria':
+            if (a.categoria !== b.categoria) {
+              return a.categoria.localeCompare(b.categoria);
+            }
+            return a.nombre.localeCompare(b.nombre);
+          case 'talla':
+            // Ordenar por talla
+            return 0; // Se aplicará sortByTalla después
+          default:
+            return 0;
+        }
+      });
+
+      // Si se seleccionó ordenamiento por talla, aplicarlo
+      if (ordenamiento === 'talla') {
+        filtered = sortByTalla(filtered);
       }
-    });
+    }
 
     return filtered;
   }, [productos, searchTerm, tipoFilter, precioMin, precioMax, ordenamiento, preciosCorporativos]);
@@ -318,6 +369,7 @@ const Catalogo = () => {
                 <option value="precio-asc">Precio (menor a mayor)</option>
                 <option value="precio-desc">Precio (mayor a menor)</option>
                 <option value="categoria">Categoría</option>
+                <option value="talla">Talla (4, 6, 8... S, M, L...)</option>
               </select>
             </div>
 

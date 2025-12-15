@@ -99,8 +99,15 @@ const Pedidos = () => {
   const [itemIndexToCorrect, setItemIndexToCorrect] = useState(null);
   const [searchProductoCorreccion, setSearchProductoCorreccion] = useState('');
   const [productoNuevoSeleccionado, setProductoNuevoSeleccionado] = useState(null);
+  const [nuevaCantidadCorreccion, setNuevaCantidadCorreccion] = useState(1);
   const [notasCorreccion, setNotasCorreccion] = useState('');
   const [corrigiendoProducto, setCorrigiendoProducto] = useState(false);
+
+  // Estados para anulación de productos en pedidos
+  const [showAnularProductoModal, setShowAnularProductoModal] = useState(false);
+  const [itemIndexToAnular, setItemIndexToAnular] = useState(null);
+  const [motivoAnulacion, setMotivoAnulacion] = useState('');
+  const [anulandoProducto, setAnulandoProducto] = useState(false);
 
   // Estados para cambio de cliente en pedidos
   const [showCambiarClienteModal, setShowCambiarClienteModal] = useState(false);
@@ -865,6 +872,7 @@ const Pedidos = () => {
     setShowCorreccionProductoModal(true);
     setSearchProductoCorreccion('');
     setProductoNuevoSeleccionado(null);
+    setNuevaCantidadCorreccion(selectedPedido.items[itemIndex].cantidad); // Inicializar con cantidad actual
     setNotasCorreccion('');
   };
 
@@ -873,12 +881,12 @@ const Pedidos = () => {
     setItemIndexToCorrect(null);
     setSearchProductoCorreccion('');
     setProductoNuevoSeleccionado(null);
+    setNuevaCantidadCorreccion(1);
     setNotasCorreccion('');
   };
 
   const handleCorregirProductoPedido = async () => {
-    if (!selectedPedido || itemIndexToCorrect === null || !productoNuevoSeleccionado) {
-      alert('Por favor, selecciona un producto nuevo.');
+    if (!selectedPedido || itemIndexToCorrect === null) {
       return;
     }
 
@@ -887,26 +895,51 @@ const Pedidos = () => {
       return;
     }
 
-    const itemActual = selectedPedido.items[itemIndexToCorrect];
-
-    // Validar que no sea el mismo producto
-    if (itemActual.productoId === productoNuevoSeleccionado.id) {
-      alert('El producto seleccionado es el mismo que el actual.');
+    // Validar que la nueva cantidad sea válida
+    const cantidadNueva = parseInt(nuevaCantidadCorreccion);
+    if (!cantidadNueva || cantidadNueva <= 0) {
+      alert('La cantidad debe ser mayor a 0');
       return;
     }
 
-    const confirmar = window.confirm(
-      `¿Confirmas que deseas corregir este producto?\n\n` +
-      `Producto Actual:\n` +
-      `- ${itemActual.nombre || itemActual.productoNombre}\n` +
-      `- Ref: ${itemActual.referencia}\n` +
-      `- Talla: ${itemActual.talla}\n\n` +
-      `Producto Nuevo:\n` +
-      `- ${productoNuevoSeleccionado.nombre}\n` +
-      `- Ref: ${productoNuevoSeleccionado.referencia}\n` +
-      `- Talla: ${productoNuevoSeleccionado.talla}\n\n` +
-      `Notas: ${notasCorreccion}`
-    );
+    const itemActual = selectedPedido.items[itemIndexToCorrect];
+    const cantidadAnterior = itemActual.cantidad;
+
+    // Si no se seleccionó producto nuevo, usar el actual
+    const productoParaUsar = productoNuevoSeleccionado || itemActual;
+    const cambioDeProducto = productoNuevoSeleccionado && itemActual.productoId !== productoNuevoSeleccionado.id;
+    const cambioDeCantidad = cantidadNueva !== cantidadAnterior;
+
+    // Validar que haya al menos un cambio
+    if (!cambioDeProducto && !cambioDeCantidad) {
+      alert('No hay cambios para aplicar. Modifica el producto o la cantidad.');
+      return;
+    }
+
+    // Mensaje de confirmación personalizado
+    let mensajeConfirmacion = `⚠️ CORREGIR PEDIDO\n\nPedido #${selectedPedido.numeroPedido}\n\n`;
+
+    if (cambioDeProducto && cambioDeCantidad) {
+      mensajeConfirmacion += `Producto anterior: ${itemActual.nombre || itemActual.productoNombre} (${cantidadAnterior} unidades)\n`;
+      mensajeConfirmacion += `Producto nuevo: ${productoParaUsar.nombre} (${cantidadNueva} unidades)\n`;
+    } else if (cambioDeProducto) {
+      mensajeConfirmacion += `Cambio de producto:\n`;
+      mensajeConfirmacion += `  De: ${itemActual.nombre || itemActual.productoNombre}\n`;
+      mensajeConfirmacion += `  A: ${productoParaUsar.nombre}\n`;
+      mensajeConfirmacion += `Cantidad: ${cantidadNueva} unidades\n`;
+    } else {
+      mensajeConfirmacion += `Producto: ${itemActual.nombre || itemActual.productoNombre}\n`;
+      mensajeConfirmacion += `Cantidad anterior: ${cantidadAnterior} unidades\n`;
+      mensajeConfirmacion += `Cantidad nueva: ${cantidadNueva} unidades\n`;
+    }
+
+    mensajeConfirmacion += `\nEsta acción:\n`;
+    mensajeConfirmacion += `• Modificará el pedido\n`;
+    mensajeConfirmacion += `• Ajustará el inventario reservado automáticamente\n`;
+    mensajeConfirmacion += `• Actualizará el valor total\n\n`;
+    mensajeConfirmacion += `¿Continuar?`;
+
+    const confirmar = window.confirm(mensajeConfirmacion);
 
     if (!confirmar) return;
 
@@ -915,77 +948,114 @@ const Pedidos = () => {
       const batch = writeBatch(db);
       const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
 
+      // Producto a usar (nuevo o el mismo)
+      const productoNuevoId = productoParaUsar.id || productoParaUsar.productoId;
+      const precioNuevo = productoParaUsar.precio;
+      const subtotalNuevo = precioNuevo * cantidadNueva;
+
       // Crear copia de items actualizada
       const updatedItems = [...selectedPedido.items];
-      const cantidadItem = itemActual.cantidad;
-
-      // Actualizar el item con el nuevo producto (mantener cantidad y estado)
       updatedItems[itemIndexToCorrect] = {
         ...updatedItems[itemIndexToCorrect],
-        productoId: productoNuevoSeleccionado.id,
-        productoNombre: productoNuevoSeleccionado.nombre,
-        nombre: productoNuevoSeleccionado.nombre,
-        productoRef: productoNuevoSeleccionado.referencia,
-        referencia: productoNuevoSeleccionado.referencia,
-        talla: productoNuevoSeleccionado.talla,
-        precio: productoNuevoSeleccionado.precio,
-        subtotal: productoNuevoSeleccionado.precio * cantidadItem,
-        categoria: productoNuevoSeleccionado.categoria || ''
+        productoId: productoNuevoId,
+        productoNombre: productoParaUsar.nombre,
+        nombre: productoParaUsar.nombre,
+        productoRef: productoParaUsar.referencia || '',
+        referencia: productoParaUsar.referencia || '',
+        talla: productoParaUsar.talla || '',
+        precio: precioNuevo,
+        cantidad: cantidadNueva,
+        subtotal: subtotalNuevo,
+        categoria: productoParaUsar.categoria || ''
       };
 
       // Recalcular total del pedido
       const nuevoTotal = updatedItems.reduce((sum, item) => sum + item.subtotal, 0);
       const nuevoSaldoPendiente = nuevoTotal - (selectedPedido.totalAbonado || 0);
 
-      // 1. Actualizar inventario del producto anterior (liberar stock reservado)
-      const productoAnteriorRef = doc(db, 'products', itemActual.productoId);
-      const productoAnteriorSnap = await getDoc(productoAnteriorRef);
-
-      if (productoAnteriorSnap.exists()) {
+      // Ajustar inventario
+      if (!cambioDeProducto) {
+        // Mismo producto, solo cambió la cantidad
+        const diferenciaCantidad = cantidadNueva - cantidadAnterior;
+        if (diferenciaCantidad !== 0) {
+          const productoRef = doc(db, 'products', itemActual.productoId);
+          batch.update(productoRef, {
+            stockReservadoPedidos: increment(diferenciaCantidad),
+            updatedAt: serverTimestamp()
+          });
+        }
+      } else {
+        // Productos diferentes
+        // Liberar stock del producto anterior
+        const productoAnteriorRef = doc(db, 'products', itemActual.productoId);
         batch.update(productoAnteriorRef, {
-          stockReservadoPedidos: increment(-cantidadItem),
+          stockReservadoPedidos: increment(-cantidadAnterior),
+          updatedAt: serverTimestamp()
+        });
+
+        // Reservar stock del producto nuevo
+        const productoNuevoRef = doc(db, 'products', productoNuevoId);
+        batch.update(productoNuevoRef, {
+          stockReservadoPedidos: increment(cantidadNueva),
           updatedAt: serverTimestamp()
         });
       }
 
-      // 2. Actualizar inventario del producto nuevo (reservar stock)
-      const productoNuevoRef = doc(db, 'products', productoNuevoSeleccionado.id);
-      batch.update(productoNuevoRef, {
-        stockReservadoPedidos: increment(cantidadItem),
-        updatedAt: serverTimestamp()
-      });
-
-      // 3. Actualizar el pedido
+      // Actualizar el pedido
       batch.update(pedidoRef, {
         items: updatedItems,
         total: nuevoTotal,
         saldoPendiente: nuevoSaldoPendiente,
-        correccionProducto: {
+        correccion: {
           fecha: serverTimestamp(),
           usuario: currentUser.uid,
           itemIndex: itemIndexToCorrect,
-          productoAnterior: {
-            id: itemActual.productoId,
-            nombre: itemActual.nombre || itemActual.productoNombre,
-            ref: itemActual.referencia,
-            talla: itemActual.talla,
-            precio: itemActual.precio
-          },
-          productoNuevo: {
-            id: productoNuevoSeleccionado.id,
-            nombre: productoNuevoSeleccionado.nombre,
-            ref: productoNuevoSeleccionado.referencia,
-            talla: productoNuevoSeleccionado.talla,
-            precio: productoNuevoSeleccionado.precio
-          },
+          productoAnterior: `${itemActual.nombre || itemActual.productoNombre} (${cantidadAnterior} unidades)`,
+          productoNuevo: `${productoParaUsar.nombre} (${cantidadNueva} unidades)`,
           notas: notasCorreccion
         },
         updatedAt: serverTimestamp()
       });
 
+      // Crear transacción de ajuste SI hay diferencia de total Y el pedido tiene abonos
+      const totalAnterior = selectedPedido.total || selectedPedido.totalPedido || 0;
+      const diferenciaSubtotal = nuevoTotal - totalAnterior;
+      const totalAbonado = selectedPedido.totalAbonado || 0;
+      const tieneAbonos = totalAbonado > 0;
+
+      if (diferenciaSubtotal !== 0 && tieneAbonos) {
+        const transactionRef = doc(collection(db, 'transactions'));
+        batch.set(transactionRef, {
+          tipo: diferenciaSubtotal > 0 ? 'ajuste_pedido_positivo' : 'ajuste_pedido_negativo',
+          monto: diferenciaSubtotal, // Puede ser positivo o negativo
+          metodoPago: 'Ajuste',
+          pedidoId: selectedPedido.id,
+          numeroPedido: selectedPedido.numeroPedido,
+          descripcion: `Corrección producto Pedido #${selectedPedido.numeroPedido}: ${itemActual.nombre || itemActual.productoNombre} → ${productoParaUsar.nombre}`,
+          notas: notasCorreccion,
+          clienteId: selectedPedido.clienteId,
+          clienteNombre: selectedPedido.clienteNombre,
+          detalleCorreccion: {
+            productoAnterior: itemActual.nombre || itemActual.productoNombre,
+            cantidadAnterior: cantidadAnterior,
+            subtotalAnterior: itemActual.subtotal,
+            productoNuevo: productoParaUsar.nombre,
+            cantidadNueva: cantidadNueva,
+            subtotalNuevo: subtotalNuevo,
+            diferencia: diferenciaSubtotal
+          },
+          fecha: serverTimestamp(),
+          userId: currentUser.uid
+        });
+      }
+
       await batch.commit();
 
-      alert('✅ Producto corregido exitosamente.');
+      let mensaje = '✅ Pedido corregido exitosamente.\n\nInventario actualizado correctamente.';
+      if (diferenciaSubtotal !== 0 && tieneAbonos) {
+        mensaje += `\n\n📊 Transacción de ajuste creada: ${diferenciaSubtotal >= 0 ? '+' : ''}$${diferenciaSubtotal.toLocaleString()}`;
+      }
+      alert(mensaje);
 
       // Recargar pedido
       const pedidoSnap = await getDoc(pedidoRef);
@@ -994,10 +1064,238 @@ const Pedidos = () => {
       handleCloseCorreccionProducto();
 
     } catch (error) {
-      console.error('Error al corregir producto:', error);
-      alert('❌ Error al corregir producto: ' + error.message);
+      console.error('Error al corregir pedido:', error);
+      alert('❌ Error al corregir pedido: ' + error.message);
     } finally {
       setCorrigiendoProducto(false);
+    }
+  };
+
+  // Funciones para anulación de productos en pedidos
+  const handleOpenAnularProducto = (itemIndex) => {
+    setItemIndexToAnular(itemIndex);
+    setShowAnularProductoModal(true);
+    setMotivoAnulacion('');
+  };
+
+  const handleCloseAnularProducto = () => {
+    setShowAnularProductoModal(false);
+    setItemIndexToAnular(null);
+    setMotivoAnulacion('');
+  };
+
+  const handleAnularProducto = async () => {
+    if (!selectedPedido || itemIndexToAnular === null) {
+      return;
+    }
+
+    if (!motivoAnulacion.trim()) {
+      alert('Por favor, ingresa el motivo de la anulación.');
+      return;
+    }
+
+    const itemToAnular = selectedPedido.items[itemIndexToAnular];
+
+    // Validar que no sea el último producto activo
+    const productosActivos = selectedPedido.items.filter(item => !item.anulado);
+    if (productosActivos.length === 1 && !itemToAnular.anulado) {
+      alert('⚠️ No puedes anular el último producto activo.\n\nSi deseas cancelar todo el pedido, usa la opción "Eliminar Pedido".');
+      return;
+    }
+
+    const confirmar = window.confirm(
+      `⚠️ ANULAR PRODUCTO\n\n` +
+      `Pedido #${selectedPedido.numeroPedido}\n` +
+      `Producto: ${itemToAnular.nombre}\n` +
+      `Talla: ${itemToAnular.talla}\n` +
+      `Cantidad: ${itemToAnular.cantidad}\n` +
+      `Subtotal: $${itemToAnular.subtotal?.toLocaleString()}\n\n` +
+      `Esta acción:\n` +
+      `• Liberará ${itemToAnular.cantidad} unidad(es) del inventario reservado\n` +
+      `• Reducirá el total del pedido\n` +
+      `• El producto quedará marcado como ANULADO (visible para auditoría)\n\n` +
+      `¿Continuar?`
+    );
+
+    if (!confirmar) return;
+
+    setAnulandoProducto(true);
+    try {
+      const batch = writeBatch(db);
+      const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
+
+      // Marcar producto como anulado
+      const updatedItems = [...selectedPedido.items];
+      updatedItems[itemIndexToAnular] = {
+        ...itemToAnular,
+        anulado: true,
+        anulacion: {
+          fecha: serverTimestamp(),
+          motivo: motivoAnulacion,
+          usuario: currentUser.email || 'Admin'
+        }
+      };
+
+      // Recalcular totales (solo productos NO anulados)
+      const nuevoTotal = updatedItems
+        .filter(item => !item.anulado)
+        .reduce((sum, item) => sum + item.subtotal, 0);
+
+      // Liberar stock reservado
+      const productoRef = doc(db, 'products', itemToAnular.productoId);
+      batch.update(productoRef, {
+        stockReservadoPedidos: increment(-itemToAnular.cantidad),
+        updatedAt: serverTimestamp()
+      });
+
+      // Actualizar pedido
+      batch.update(pedidoRef, {
+        items: updatedItems,
+        totalPedido: nuevoTotal,
+        updatedAt: serverTimestamp()
+      });
+
+      // Crear transacción de ajuste SI el pedido tiene abonos
+      const totalAbonado = selectedPedido.totalAbonado || 0;
+      const tieneAbonos = totalAbonado > 0;
+
+      if (tieneAbonos) {
+        const diferenciaTotal = itemToAnular.subtotal;
+        const transactionRef = doc(collection(db, 'transactions'));
+        batch.set(transactionRef, {
+          tipo: 'ajuste_pedido',
+          monto: -diferenciaTotal, // NEGATIVO - representa ajuste/devolución
+          metodoPago: 'Ajuste',
+          pedidoId: selectedPedido.id,
+          numeroPedido: selectedPedido.numeroPedido,
+          descripcion: `Anulación producto en Pedido #${selectedPedido.numeroPedido}: ${itemToAnular.nombre}`,
+          motivo: motivoAnulacion,
+          clienteId: selectedPedido.clienteId,
+          clienteNombre: selectedPedido.clienteNombre,
+          productoAnulado: {
+            nombre: itemToAnular.nombre,
+            cantidad: itemToAnular.cantidad,
+            precio: itemToAnular.precio,
+            subtotal: itemToAnular.subtotal
+          },
+          fecha: serverTimestamp(),
+          userId: currentUser.uid
+        });
+      }
+
+      await batch.commit();
+
+      let mensaje = `✅ Producto anulado exitosamente.\n\nNuevo total: $${nuevoTotal.toLocaleString()}`;
+      if (tieneAbonos) {
+        mensaje += `\n\n📊 Transacción de ajuste creada (pedido con abonos: $${totalAbonado.toLocaleString()}).`;
+      }
+      alert(mensaje);
+
+      // Recargar pedido
+      const pedidoSnap = await getDoc(pedidoRef);
+      setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
+      fetchPedidos();
+      fetchProducts();
+      handleCloseAnularProducto();
+
+    } catch (error) {
+      console.error('Error al anular producto:', error);
+      alert('❌ Error al anular producto: ' + error.message);
+    } finally {
+      setAnulandoProducto(false);
+    }
+  };
+
+  const handleRestaurarProducto = async (itemIndex) => {
+    if (!selectedPedido) return;
+
+    const itemToRestaurar = selectedPedido.items[itemIndex];
+
+    const confirmar = window.confirm(
+      `🔄 RESTAURAR PRODUCTO\n\n` +
+      `Producto: ${itemToRestaurar.nombre}\n` +
+      `Cantidad: ${itemToRestaurar.cantidad}\n` +
+      `Subtotal: $${itemToRestaurar.subtotal?.toLocaleString()}\n\n` +
+      `Esta acción:\n` +
+      `• Volverá a reservar ${itemToRestaurar.cantidad} unidad(es) en el inventario\n` +
+      `• Aumentará el total del pedido\n\n` +
+      `¿Continuar?`
+    );
+
+    if (!confirmar) return;
+
+    try {
+      const batch = writeBatch(db);
+      const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
+
+      // Quitar marca de anulado
+      const updatedItems = [...selectedPedido.items];
+      const { anulado, anulacion, ...itemSinAnulacion } = itemToRestaurar;
+      updatedItems[itemIndex] = itemSinAnulacion;
+
+      // Recalcular totales
+      const nuevoTotal = updatedItems
+        .filter(item => !item.anulado)
+        .reduce((sum, item) => sum + item.subtotal, 0);
+
+      // Reservar stock nuevamente
+      const productoRef = doc(db, 'products', itemToRestaurar.productoId);
+      batch.update(productoRef, {
+        stockReservadoPedidos: increment(itemToRestaurar.cantidad),
+        updatedAt: serverTimestamp()
+      });
+
+      // Actualizar pedido
+      batch.update(pedidoRef, {
+        items: updatedItems,
+        totalPedido: nuevoTotal,
+        updatedAt: serverTimestamp()
+      });
+
+      // Crear transacción de ajuste POSITIVA SI el pedido tiene abonos
+      const totalAbonado = selectedPedido.totalAbonado || 0;
+      const tieneAbonos = totalAbonado > 0;
+
+      if (tieneAbonos) {
+        const diferenciaTotal = itemToRestaurar.subtotal;
+        const transactionRef = doc(collection(db, 'transactions'));
+        batch.set(transactionRef, {
+          tipo: 'restauracion_pedido',
+          monto: diferenciaTotal, // POSITIVO - representa reversión de ajuste
+          metodoPago: 'Ajuste',
+          pedidoId: selectedPedido.id,
+          numeroPedido: selectedPedido.numeroPedido,
+          descripcion: `Restauración producto en Pedido #${selectedPedido.numeroPedido}: ${itemToRestaurar.nombre}`,
+          clienteId: selectedPedido.clienteId,
+          clienteNombre: selectedPedido.clienteNombre,
+          productoRestaurado: {
+            nombre: itemToRestaurar.nombre,
+            cantidad: itemToRestaurar.cantidad,
+            precio: itemToRestaurar.precio,
+            subtotal: itemToRestaurar.subtotal
+          },
+          fecha: serverTimestamp(),
+          userId: currentUser.uid
+        });
+      }
+
+      await batch.commit();
+
+      let mensaje = `✅ Producto restaurado exitosamente.\n\nNuevo total: $${nuevoTotal.toLocaleString()}`;
+      if (tieneAbonos) {
+        mensaje += `\n\n📊 Transacción de ajuste creada.`;
+      }
+      alert(mensaje);
+
+      // Recargar pedido
+      const pedidoSnap = await getDoc(pedidoRef);
+      setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
+      fetchPedidos();
+      fetchProducts();
+
+    } catch (error) {
+      console.error('Error al restaurar producto:', error);
+      alert('❌ Error al restaurar producto: ' + error.message);
     }
   };
 
@@ -1893,33 +2191,69 @@ const Pedidos = () => {
                     </thead>
                     <tbody className="divide-y divide-gray-200">
                       {selectedPedido.items.map((item, index) => (
-                        <tr key={index}>
+                        <tr key={index} className={item.anulado ? 'bg-gray-50' : ''}>
                           <td className="px-4 py-3">
-                            <p className="font-medium text-gray-800">{item.nombre || item.productoNombre}</p>
-                            <p className="text-sm text-gray-600">Ref: {item.referencia} | Talla: {item.talla}</p>
+                            <p className={`font-medium ${item.anulado ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+                              {item.nombre || item.productoNombre}
+                            </p>
+                            <p className={`text-sm ${item.anulado ? 'text-gray-400 line-through' : 'text-gray-600'}`}>
+                              Ref: {item.referencia} | Talla: {item.talla}
+                            </p>
+                            {item.anulado && (
+                              <p className="text-xs text-red-600 mt-1 font-normal">
+                                ❌ ANULADO - {item.anulacion?.motivo}
+                              </p>
+                            )}
                           </td>
-                          <td className="px-4 py-3 text-center">{item.cantidad}</td>
-                          <td className="px-4 py-3 text-center">${item.precio?.toLocaleString('es-CO')}</td>
-                          <td className="px-4 py-3 text-center font-medium">${item.subtotal?.toLocaleString('es-CO')}</td>
-                          <td className="px-4 py-3 text-center">
-                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                              item.estadoItem === 'En Producción'
-                                ? 'bg-blue-100 text-blue-800'
-                                : item.estadoItem === 'Listo para Entrega'
-                                ? 'bg-yellow-100 text-yellow-800'
-                                : 'bg-green-100 text-green-800'
-                            }`}>
-                              {item.estadoItem}
-                            </span>
+                          <td className={`px-4 py-3 text-center ${item.anulado ? 'text-gray-400 line-through' : ''}`}>
+                            {item.cantidad}
+                          </td>
+                          <td className={`px-4 py-3 text-center ${item.anulado ? 'text-gray-400 line-through' : ''}`}>
+                            ${item.precio?.toLocaleString('es-CO')}
+                          </td>
+                          <td className={`px-4 py-3 text-center font-medium ${item.anulado ? 'text-gray-400 line-through' : ''}`}>
+                            {item.anulado ? '[ANULADO]' : `$${item.subtotal?.toLocaleString('es-CO')}`}
                           </td>
                           <td className="px-4 py-3 text-center">
-                            {item.estadoItem !== 'Entregado' && (
+                            {!item.anulado && (
+                              <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                                item.estadoItem === 'En Producción'
+                                  ? 'bg-blue-100 text-blue-800'
+                                  : item.estadoItem === 'Listo para Entrega'
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : 'bg-green-100 text-green-800'
+                              }`}>
+                                {item.estadoItem}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            {!item.anulado ? (
+                              <div className="flex gap-2 justify-center">
+                                {item.estadoItem !== 'Entregado' && (
+                                  <button
+                                    onClick={() => handleOpenCorreccionProducto(index)}
+                                    className="px-3 py-1 bg-orange-500 text-white text-xs rounded hover:bg-orange-600 transition-colors"
+                                    title="Corregir Producto"
+                                  >
+                                    Corregir
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleOpenAnularProducto(index)}
+                                  className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition-colors"
+                                  title="Anular este producto"
+                                >
+                                  Anular
+                                </button>
+                              </div>
+                            ) : (
                               <button
-                                onClick={() => handleOpenCorreccionProducto(index)}
-                                className="px-3 py-1 bg-orange-500 text-white text-xs rounded hover:bg-orange-600 transition-colors"
-                                title="Corregir Producto"
+                                onClick={() => handleRestaurarProducto(index)}
+                                className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition-colors"
+                                title="Restaurar producto anulado"
                               >
-                                Corregir
+                                Restaurar
                               </button>
                             )}
                           </td>
@@ -2902,8 +3236,8 @@ const Pedidos = () => {
             </div>
 
             {/* Producto Actual */}
-            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
-              <h4 className="font-semibold text-red-800 mb-2">Producto Actual (a reemplazar)</h4>
+            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <h4 className="font-semibold text-blue-800 mb-2">Producto Actual</h4>
               <div className="text-sm text-gray-700">
                 <p><strong>Nombre:</strong> {selectedPedido.items[itemIndexToCorrect].nombre || selectedPedido.items[itemIndexToCorrect].productoNombre}</p>
                 <p><strong>Ref:</strong> {selectedPedido.items[itemIndexToCorrect].referencia}</p>
@@ -2917,8 +3251,11 @@ const Pedidos = () => {
             {/* Buscador de Producto Nuevo */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Buscar Producto Nuevo
+                Cambiar Producto (opcional)
               </label>
+              <p className="text-xs text-gray-500 mb-2">
+                Deja vacío si solo quieres cambiar la cantidad
+              </p>
               <input
                 type="text"
                 placeholder="Buscar por nombre, referencia o talla..."
@@ -2968,14 +3305,31 @@ const Pedidos = () => {
                   <p><strong>Ref:</strong> {productoNuevoSeleccionado.referencia}</p>
                   <p><strong>Talla:</strong> {productoNuevoSeleccionado.talla}</p>
                   <p><strong>Precio:</strong> ${productoNuevoSeleccionado.precio?.toLocaleString('es-CO')}</p>
-                  <p><strong>Nuevo Subtotal:</strong> ${(productoNuevoSeleccionado.precio * selectedPedido.items[itemIndexToCorrect].cantidad)?.toLocaleString('es-CO')}</p>
+                  <p><strong>Nuevo Subtotal:</strong> ${(productoNuevoSeleccionado.precio * nuevaCantidadCorreccion)?.toLocaleString('es-CO')}</p>
                   <p className="mt-2 text-orange-700">
-                    <strong>Diferencia:</strong> ${Math.abs((productoNuevoSeleccionado.precio * selectedPedido.items[itemIndexToCorrect].cantidad) - selectedPedido.items[itemIndexToCorrect].subtotal)?.toLocaleString('es-CO')}
-                    {(productoNuevoSeleccionado.precio * selectedPedido.items[itemIndexToCorrect].cantidad) > selectedPedido.items[itemIndexToCorrect].subtotal ? ' (aumenta)' : ' (disminuye)'}
+                    <strong>Diferencia:</strong> ${Math.abs((productoNuevoSeleccionado.precio * nuevaCantidadCorreccion) - selectedPedido.items[itemIndexToCorrect].subtotal)?.toLocaleString('es-CO')}
+                    {(productoNuevoSeleccionado.precio * nuevaCantidadCorreccion) > selectedPedido.items[itemIndexToCorrect].subtotal ? ' (aumenta)' : ' (disminuye)'}
                   </p>
                 </div>
               </div>
             )}
+
+            {/* Campo de Cantidad */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Cantidad:
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={nuevaCantidadCorreccion}
+                onChange={(e) => setNuevaCantidadCorreccion(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Cantidad actual: {selectedPedido.items[itemIndexToCorrect].cantidad}
+              </p>
+            </div>
 
             {/* Notas de Corrección */}
             <div className="mb-6">
@@ -3005,6 +3359,86 @@ const Pedidos = () => {
                 onClick={handleCloseCorreccionProducto}
                 disabled={corrigiendoProducto}
                 className="px-6 py-3 bg-gray-500 text-white font-medium rounded-lg hover:bg-gray-600 transition-colors disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Anular Producto */}
+      {showAnularProductoModal && selectedPedido && itemIndexToAnular !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-xl font-bold mb-4 text-gray-800">
+              ⚠️ Anular Producto
+            </h3>
+
+            {/* Información del producto a anular */}
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+              <h4 className="font-semibold text-red-800 mb-2">Producto a Anular:</h4>
+              <div className="space-y-1 text-sm">
+                <div>
+                  <span className="text-gray-600">Producto:</span>{' '}
+                  <span className="font-semibold">{selectedPedido.items[itemIndexToAnular].nombre}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Talla:</span>{' '}
+                  <span className="font-semibold">{selectedPedido.items[itemIndexToAnular].talla}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Cantidad:</span>{' '}
+                  <span className="font-semibold">{selectedPedido.items[itemIndexToAnular].cantidad}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Subtotal:</span>{' '}
+                  <span className="font-semibold">${selectedPedido.items[itemIndexToAnular].subtotal?.toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Advertencia */}
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
+              <p className="text-sm text-yellow-800">
+                <strong>Esta acción:</strong>
+              </p>
+              <ul className="text-xs text-yellow-700 mt-2 space-y-1 list-disc list-inside">
+                <li>Liberará el inventario reservado</li>
+                <li>Reducirá el total del pedido</li>
+                <li>El producto quedará visible como ANULADO</li>
+                <li>Se guardará en el historial para auditoría</li>
+              </ul>
+            </div>
+
+            {/* Campo de motivo */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Motivo de la Anulación (requerido):
+              </label>
+              <textarea
+                value={motivoAnulacion}
+                onChange={(e) => setMotivoAnulacion(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                rows="3"
+                placeholder="Ej: Producto agregado por error, cliente cambió de opinión, etc."
+                required
+              />
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-2">
+              <button
+                onClick={handleAnularProducto}
+                disabled={anulandoProducto}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-opacity disabled:opacity-50"
+              >
+                {anulandoProducto ? 'Anulando...' : 'Anular Producto'}
+              </button>
+              <button
+                onClick={handleCloseAnularProducto}
+                disabled={anulandoProducto}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50"
               >
                 Cancelar
               </button>

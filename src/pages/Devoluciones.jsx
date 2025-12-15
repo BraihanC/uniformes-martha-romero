@@ -312,9 +312,20 @@ const Devoluciones = () => {
         metodoPago: metodoDevolucion,
         devolucionId: devolucionRef.id,
         ventaId: facturaEncontrada.id,
+        numeroFactura: facturaEncontrada.numeroFactura,
         descripcion: `Devolución Factura #${facturaEncontrada.numeroFactura}`,
         clienteId: facturaEncontrada.clienteId,
         clienteNombre: facturaEncontrada.clienteNombre,
+        itemsDevueltos: itemsDevueltos.map(item => ({
+          nombre: item.nombre,
+          referencia: item.referencia || item.product?.referencia,
+          talla: item.talla,
+          cantidad: item.cantidad,
+          precioUnitario: item.precioUnitario,
+          subtotal: item.cantidad * item.precioUnitario,
+          razon: item.razon
+        })),
+        notas: notasDevolucion,
         fecha: serverTimestamp(),
         userId: currentUser.uid
       });
@@ -541,11 +552,32 @@ const Devoluciones = () => {
           metodoPago: metodoPagoDiferencia,
           cambioId: cambioRef.id,
           ventaId: facturaEncontrada.id,
+          numeroFactura: facturaEncontrada.numeroFactura,
           descripcion: diferencia > 0
             ? `Cambio - Cliente paga diferencia Factura #${facturaEncontrada.numeroFactura}`
             : `Cambio - Cliente recibe diferencia Factura #${facturaEncontrada.numeroFactura}`,
           clienteId: facturaEncontrada.clienteId,
           clienteNombre: facturaEncontrada.clienteNombre,
+          itemsDevueltos: itemsDevueltos.map(item => ({
+            nombre: item.nombre,
+            referencia: item.referencia || item.product?.referencia,
+            talla: item.talla,
+            cantidad: item.cantidad,
+            precioUnitario: item.precioUnitario,
+            subtotal: item.cantidad * item.precioUnitario,
+            razon: item.razon
+          })),
+          itemsNuevos: productosNuevos.map(p => ({
+            nombre: p.nombre,
+            referencia: p.referencia,
+            talla: p.tallaSeleccionada,
+            cantidad: p.cantidad,
+            precio: p.precio,
+            subtotal: p.cantidad * p.precio
+          })),
+          valorDevuelto: calcularValorDevuelto(),
+          valorNuevo: calcularValorNuevo(),
+          notas: notasCambio,
           fecha: serverTimestamp(),
           userId: currentUser.uid
         });

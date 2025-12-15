@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   collection,
   getDocs,
+  getDoc,
   updateDoc,
   doc,
   serverTimestamp,
@@ -79,6 +80,21 @@ const Apartados = () => {
   const [nuevoAbono, setNuevoAbono] = useState('');
   const [notasAbono, setNotasAbono] = useState('');
   const [metodoPagoAbono, setMetodoPagoAbono] = useState('Efectivo');
+
+  // Estados para corrección de productos en apartados
+  const [showCorreccionProductoModal, setShowCorreccionProductoModal] = useState(false);
+  const [itemIndexToCorrect, setItemIndexToCorrect] = useState(null);
+  const [searchProductoCorreccion, setSearchProductoCorreccion] = useState('');
+  const [productoNuevoSeleccionado, setProductoNuevoSeleccionado] = useState(null);
+  const [nuevaCantidadCorreccion, setNuevaCantidadCorreccion] = useState(1);
+  const [notasCorreccion, setNotasCorreccion] = useState('');
+  const [corrigiendoProducto, setCorrigiendoProducto] = useState(false);
+
+  // Estados para anulación de productos en apartados
+  const [showAnularProductoModal, setShowAnularProductoModal] = useState(false);
+  const [itemIndexToAnular, setItemIndexToAnular] = useState(null);
+  const [motivoAnulacion, setMotivoAnulacion] = useState('');
+  const [anulandoProducto, setAnulandoProducto] = useState(false);
 
   // Cargar datos iniciales
   useEffect(() => {
@@ -731,6 +747,451 @@ const Apartados = () => {
       alert('Error al eliminar apartado: ' + error.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Funciones para corrección de productos en apartados
+  const handleOpenCorreccionProducto = (itemIndex) => {
+    setItemIndexToCorrect(itemIndex);
+    setShowCorreccionProductoModal(true);
+    setSearchProductoCorreccion('');
+    setProductoNuevoSeleccionado(null);
+    setNuevaCantidadCorreccion(selectedApartado.items[itemIndex].cantidad); // Inicializar con cantidad actual
+    setNotasCorreccion('');
+  };
+
+  const handleCloseCorreccionProducto = () => {
+    setShowCorreccionProductoModal(false);
+    setItemIndexToCorrect(null);
+    setSearchProductoCorreccion('');
+    setProductoNuevoSeleccionado(null);
+    setNuevaCantidadCorreccion(1);
+    setNotasCorreccion('');
+  };
+
+  const handleCorregirProductoApartado = async () => {
+    if (!selectedApartado || itemIndexToCorrect === null) {
+      return;
+    }
+
+    if (!notasCorreccion.trim()) {
+      alert('Por favor, ingresa las notas explicando el motivo de la corrección.');
+      return;
+    }
+
+    // Validar que la nueva cantidad sea válida
+    const cantidadNueva = parseInt(nuevaCantidadCorreccion);
+    if (!cantidadNueva || cantidadNueva <= 0) {
+      alert('La cantidad debe ser mayor a 0');
+      return;
+    }
+
+    const itemActual = selectedApartado.items[itemIndexToCorrect];
+    const cantidadAnterior = itemActual.cantidad;
+
+    // Si no se seleccionó producto nuevo, usar el actual
+    const productoParaUsar = productoNuevoSeleccionado || itemActual;
+    const cambioDeProducto = productoNuevoSeleccionado && itemActual.productoId !== productoNuevoSeleccionado.id;
+    const cambioDeCantidad = cantidadNueva !== cantidadAnterior;
+
+    // Validar que haya al menos un cambio
+    if (!cambioDeProducto && !cambioDeCantidad) {
+      alert('No hay cambios para aplicar. Modifica el producto o la cantidad.');
+      return;
+    }
+
+    // Mensaje de confirmación personalizado
+    let mensajeConfirmacion = `⚠️ CORREGIR APARTADO\n\nApartado #${selectedApartado.numeroApartado}\n\n`;
+
+    if (cambioDeProducto && cambioDeCantidad) {
+      mensajeConfirmacion += `Producto anterior: ${itemActual.nombre} (${cantidadAnterior} unidades)\n`;
+      mensajeConfirmacion += `Producto nuevo: ${productoParaUsar.nombre} (${cantidadNueva} unidades)\n`;
+    } else if (cambioDeProducto) {
+      mensajeConfirmacion += `Cambio de producto:\n`;
+      mensajeConfirmacion += `  De: ${itemActual.nombre}\n`;
+      mensajeConfirmacion += `  A: ${productoParaUsar.nombre}\n`;
+      mensajeConfirmacion += `Cantidad: ${cantidadNueva} unidades\n`;
+    } else {
+      mensajeConfirmacion += `Producto: ${itemActual.nombre}\n`;
+      mensajeConfirmacion += `Cantidad anterior: ${cantidadAnterior} unidades\n`;
+      mensajeConfirmacion += `Cantidad nueva: ${cantidadNueva} unidades\n`;
+    }
+
+    mensajeConfirmacion += `\nEsta acción:\n`;
+    mensajeConfirmacion += `• Modificará el apartado\n`;
+    mensajeConfirmacion += `• Ajustará el inventario reservado automáticamente\n`;
+    mensajeConfirmacion += `• Actualizará el valor total\n\n`;
+    mensajeConfirmacion += `¿Continuar?`;
+
+    const confirmar = window.confirm(mensajeConfirmacion);
+
+    if (!confirmar) return;
+
+    setCorrigiendoProducto(true);
+    try {
+      const batch = writeBatch(db);
+      const apartadoRef = doc(db, 'apartados', selectedApartado.id);
+
+      // Producto a usar (nuevo o el mismo)
+      const productoNuevoId = productoParaUsar.id || productoParaUsar.productoId;
+      const precioNuevo = productoParaUsar.precio;
+      const subtotalNuevo = precioNuevo * cantidadNueva;
+
+      // Crear copia de items actualizada
+      const updatedItems = [...selectedApartado.items];
+      updatedItems[itemIndexToCorrect] = {
+        productoId: productoNuevoId,
+        nombre: productoParaUsar.nombre,
+        referencia: productoParaUsar.referencia || '',
+        talla: productoParaUsar.talla || '',
+        precio: precioNuevo,
+        cantidad: cantidadNueva,
+        subtotal: subtotalNuevo
+      };
+
+      // Recalcular total del apartado
+      const nuevoTotal = updatedItems.reduce((sum, item) => sum + item.subtotal, 0);
+      const nuevoSaldoPendiente = nuevoTotal - (selectedApartado.totalAbonado || 0);
+
+      // Ajustar inventario
+      if (!cambioDeProducto) {
+        // Mismo producto, solo cambió la cantidad
+        const diferenciaCantidad = cantidadNueva - cantidadAnterior;
+        if (diferenciaCantidad !== 0) {
+          const productoRef = doc(db, 'products', itemActual.productoId);
+          batch.update(productoRef, {
+            stockReservadoApartados: increment(diferenciaCantidad),
+            updatedAt: serverTimestamp()
+          });
+        }
+      } else {
+        // Productos diferentes
+        // Liberar stock del producto anterior
+        const productoAnteriorRef = doc(db, 'products', itemActual.productoId);
+        batch.update(productoAnteriorRef, {
+          stockReservadoApartados: increment(-cantidadAnterior),
+          updatedAt: serverTimestamp()
+        });
+
+        // Reservar stock del producto nuevo
+        const productoNuevoRef = doc(db, 'products', productoNuevoId);
+        batch.update(productoNuevoRef, {
+          stockReservadoApartados: increment(cantidadNueva),
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      // Actualizar el apartado
+      batch.update(apartadoRef, {
+        items: updatedItems,
+        totalApartado: nuevoTotal,
+        saldoPendiente: nuevoSaldoPendiente,
+        correccion: {
+          fecha: serverTimestamp(),
+          itemIndex: itemIndexToCorrect,
+          productoAnterior: `${itemActual.nombre} (${cantidadAnterior} unidades)`,
+          productoNuevo: `${productoParaUsar.nombre} (${cantidadNueva} unidades)`,
+          notas: notasCorreccion
+        },
+        updatedAt: serverTimestamp()
+      });
+
+      // Crear transacción de ajuste SI hay diferencia de total Y el apartado tiene abonos
+      const totalAnterior = selectedApartado.totalApartado;
+      const diferenciaSubtotal = nuevoTotal - totalAnterior;
+      const totalAbonado = selectedApartado.totalAbonado || 0;
+      const tieneAbonos = totalAbonado > 0;
+
+      if (diferenciaSubtotal !== 0 && tieneAbonos) {
+        const transactionRef = doc(collection(db, 'transactions'));
+        batch.set(transactionRef, {
+          tipo: diferenciaSubtotal > 0 ? 'ajuste_apartado_positivo' : 'ajuste_apartado_negativo',
+          monto: diferenciaSubtotal, // Puede ser positivo o negativo
+          metodoPago: 'Ajuste',
+          apartadoId: selectedApartado.id,
+          numeroApartado: selectedApartado.numeroApartado,
+          descripcion: `Corrección producto Apartado #${selectedApartado.numeroApartado}: ${itemActual.nombre} → ${productoParaUsar.nombre}`,
+          notas: notasCorreccion,
+          clienteId: selectedApartado.clienteId,
+          clienteNombre: selectedApartado.clienteNombre,
+          detalleCorreccion: {
+            productoAnterior: {
+              nombre: itemActual.nombre,
+              cantidad: cantidadAnterior,
+              precio: itemActual.precio,
+              subtotal: itemActual.subtotal
+            },
+            productoNuevo: {
+              nombre: productoParaUsar.nombre,
+              cantidad: cantidadNueva,
+              precio: precioNuevo,
+              subtotal: subtotalNuevo
+            },
+            totalAnterior: totalAnterior,
+            totalNuevo: nuevoTotal,
+            diferencia: diferenciaSubtotal
+          },
+          fecha: serverTimestamp(),
+          userId: currentUser.email || 'Admin'
+        });
+      }
+
+      await batch.commit();
+
+      let mensaje = '✅ Apartado corregido exitosamente.\n\nInventario actualizado correctamente.';
+      if (diferenciaSubtotal !== 0 && tieneAbonos) {
+        mensaje += `\n\n📊 Transacción de ajuste creada (diferencia: $${Math.abs(diferenciaSubtotal).toLocaleString()}).`;
+      }
+      alert(mensaje);
+
+      // Recargar apartado
+      const apartadoSnap = await getDoc(apartadoRef);
+      setSelectedApartado({ id: apartadoSnap.id, ...apartadoSnap.data() });
+      fetchApartados();
+      fetchProductos();
+      handleCloseCorreccionProducto();
+
+    } catch (error) {
+      console.error('Error al corregir apartado:', error);
+      alert('❌ Error al corregir apartado: ' + error.message);
+    } finally {
+      setCorrigiendoProducto(false);
+    }
+  };
+
+  // Funciones para anulación de productos en apartados
+  const handleOpenAnularProducto = (itemIndex) => {
+    setItemIndexToAnular(itemIndex);
+    setShowAnularProductoModal(true);
+    setMotivoAnulacion('');
+  };
+
+  const handleCloseAnularProducto = () => {
+    setShowAnularProductoModal(false);
+    setItemIndexToAnular(null);
+    setMotivoAnulacion('');
+  };
+
+  const handleAnularProducto = async () => {
+    if (!selectedApartado || itemIndexToAnular === null) {
+      return;
+    }
+
+    if (!motivoAnulacion.trim()) {
+      alert('Por favor, ingresa el motivo de la anulación.');
+      return;
+    }
+
+    const itemToAnular = selectedApartado.items[itemIndexToAnular];
+
+    // Validar que no sea el último producto activo
+    const productosActivos = selectedApartado.items.filter(item => !item.anulado);
+    if (productosActivos.length === 1 && !itemToAnular.anulado) {
+      alert('⚠️ No puedes anular el último producto activo.\n\nSi deseas cancelar todo el apartado, usa la opción "Eliminar Apartado".');
+      return;
+    }
+
+    const confirmar = window.confirm(
+      `⚠️ ANULAR PRODUCTO\n\n` +
+      `Apartado #${selectedApartado.numeroApartado}\n` +
+      `Producto: ${itemToAnular.nombre}\n` +
+      `Talla: ${itemToAnular.talla}\n` +
+      `Cantidad: ${itemToAnular.cantidad}\n` +
+      `Subtotal: $${itemToAnular.subtotal?.toLocaleString()}\n\n` +
+      `Esta acción:\n` +
+      `• Liberará ${itemToAnular.cantidad} unidad(es) del inventario reservado\n` +
+      `• Reducirá el total del apartado\n` +
+      `• Ajustará el saldo pendiente\n` +
+      `• El producto quedará marcado como ANULADO (visible para auditoría)\n\n` +
+      `¿Continuar?`
+    );
+
+    if (!confirmar) return;
+
+    setAnulandoProducto(true);
+    try {
+      const batch = writeBatch(db);
+      const apartadoRef = doc(db, 'apartados', selectedApartado.id);
+
+      // Marcar producto como anulado
+      const updatedItems = [...selectedApartado.items];
+      updatedItems[itemIndexToAnular] = {
+        ...itemToAnular,
+        anulado: true,
+        anulacion: {
+          fecha: serverTimestamp(),
+          motivo: motivoAnulacion,
+          usuario: currentUser.email || 'Admin'
+        }
+      };
+
+      // Recalcular totales (solo productos NO anulados)
+      const nuevoTotal = updatedItems
+        .filter(item => !item.anulado)
+        .reduce((sum, item) => sum + item.subtotal, 0);
+
+      const nuevoSaldoPendiente = nuevoTotal - (selectedApartado.totalAbonado || 0);
+
+      // Liberar stock reservado
+      const productoRef = doc(db, 'products', itemToAnular.productoId);
+      batch.update(productoRef, {
+        stockReservadoApartados: increment(-itemToAnular.cantidad),
+        updatedAt: serverTimestamp()
+      });
+
+      // Actualizar apartado
+      batch.update(apartadoRef, {
+        items: updatedItems,
+        totalApartado: nuevoTotal,
+        saldoPendiente: nuevoSaldoPendiente,
+        updatedAt: serverTimestamp()
+      });
+
+      // Crear transacción de ajuste SI el apartado tiene abonos (igual que Pedidos)
+      const totalAbonado = selectedApartado.totalAbonado || 0;
+      const tieneAbonos = totalAbonado > 0;
+
+      if (tieneAbonos) {
+        const diferenciaTotal = itemToAnular.subtotal;
+        const transactionRef = doc(collection(db, 'transactions'));
+        batch.set(transactionRef, {
+          tipo: 'ajuste_apartado',
+          monto: -diferenciaTotal, // NEGATIVO - representa devolución/ajuste
+          metodoPago: 'Ajuste',
+          apartadoId: selectedApartado.id,
+          numeroApartado: selectedApartado.numeroApartado,
+          descripcion: `Anulación producto en Apartado #${selectedApartado.numeroApartado}: ${itemToAnular.nombre}`,
+          motivo: motivoAnulacion,
+          clienteId: selectedApartado.clienteId,
+          clienteNombre: selectedApartado.clienteNombre,
+          productoAnulado: {
+            nombre: itemToAnular.nombre,
+            cantidad: itemToAnular.cantidad,
+            precio: itemToAnular.precio,
+            subtotal: itemToAnular.subtotal
+          },
+          fecha: serverTimestamp(),
+          userId: currentUser.email || 'Admin'
+        });
+      }
+
+      await batch.commit();
+
+      let mensaje = `✅ Producto anulado exitosamente.\n\nNuevo total: $${nuevoTotal.toLocaleString()}\nSaldo pendiente: $${nuevoSaldoPendiente.toLocaleString()}`;
+      if (tieneAbonos) {
+        mensaje += `\n\n📊 Transacción de ajuste creada (apartado tiene abonos).`;
+      }
+      alert(mensaje);
+
+      // Recargar apartado
+      const apartadoSnap = await getDoc(apartadoRef);
+      setSelectedApartado({ id: apartadoSnap.id, ...apartadoSnap.data() });
+      fetchApartados();
+      fetchProductos();
+      handleCloseAnularProducto();
+
+    } catch (error) {
+      console.error('Error al anular producto:', error);
+      alert('❌ Error al anular producto: ' + error.message);
+    } finally {
+      setAnulandoProducto(false);
+    }
+  };
+
+  const handleRestaurarProducto = async (itemIndex) => {
+    if (!selectedApartado) return;
+
+    const itemToRestaurar = selectedApartado.items[itemIndex];
+
+    const confirmar = window.confirm(
+      `🔄 RESTAURAR PRODUCTO\n\n` +
+      `Producto: ${itemToRestaurar.nombre}\n` +
+      `Cantidad: ${itemToRestaurar.cantidad}\n` +
+      `Subtotal: $${itemToRestaurar.subtotal?.toLocaleString()}\n\n` +
+      `Esta acción:\n` +
+      `• Volverá a reservar ${itemToRestaurar.cantidad} unidad(es) en el inventario\n` +
+      `• Aumentará el total del apartado\n` +
+      `• Ajustará el saldo pendiente\n\n` +
+      `¿Continuar?`
+    );
+
+    if (!confirmar) return;
+
+    try {
+      const batch = writeBatch(db);
+      const apartadoRef = doc(db, 'apartados', selectedApartado.id);
+
+      // Quitar marca de anulado
+      const updatedItems = [...selectedApartado.items];
+      const { anulado, anulacion, ...itemSinAnulacion } = itemToRestaurar;
+      updatedItems[itemIndex] = itemSinAnulacion;
+
+      // Recalcular totales
+      const nuevoTotal = updatedItems
+        .filter(item => !item.anulado)
+        .reduce((sum, item) => sum + item.subtotal, 0);
+
+      const nuevoSaldoPendiente = nuevoTotal - (selectedApartado.totalAbonado || 0);
+
+      // Reservar stock nuevamente
+      const productoRef = doc(db, 'products', itemToRestaurar.productoId);
+      batch.update(productoRef, {
+        stockReservadoApartados: increment(itemToRestaurar.cantidad),
+        updatedAt: serverTimestamp()
+      });
+
+      // Actualizar apartado
+      batch.update(apartadoRef, {
+        items: updatedItems,
+        totalApartado: nuevoTotal,
+        saldoPendiente: nuevoSaldoPendiente,
+        updatedAt: serverTimestamp()
+      });
+
+      // Crear transacción de ajuste POSITIVA SI el apartado tiene abonos
+      const totalAbonado = selectedApartado.totalAbonado || 0;
+      const tieneAbonos = totalAbonado > 0;
+
+      if (tieneAbonos) {
+        const diferenciaTotal = itemToRestaurar.subtotal;
+        const transactionRef = doc(collection(db, 'transactions'));
+        batch.set(transactionRef, {
+          tipo: 'restauracion_apartado',
+          monto: diferenciaTotal, // POSITIVO - representa reversión de anulación
+          metodoPago: 'Ajuste',
+          apartadoId: selectedApartado.id,
+          numeroApartado: selectedApartado.numeroApartado,
+          descripcion: `Restauración producto en Apartado #${selectedApartado.numeroApartado}: ${itemToRestaurar.nombre}`,
+          clienteId: selectedApartado.clienteId,
+          clienteNombre: selectedApartado.clienteNombre,
+          productoRestaurado: {
+            nombre: itemToRestaurar.nombre,
+            cantidad: itemToRestaurar.cantidad,
+            precio: itemToRestaurar.precio,
+            subtotal: itemToRestaurar.subtotal
+          },
+          fecha: serverTimestamp(),
+          userId: currentUser.email || 'Admin'
+        });
+      }
+
+      await batch.commit();
+
+      let mensaje = `✅ Producto restaurado exitosamente.\n\nNuevo total: $${nuevoTotal.toLocaleString()}`;
+      if (tieneAbonos) {
+        mensaje += `\n\n📊 Transacción de ajuste creada (apartado tiene abonos).`;
+      }
+      alert(mensaje);
+
+      // Recargar apartado
+      const apartadoSnap = await getDoc(apartadoRef);
+      setSelectedApartado({ id: apartadoSnap.id, ...apartadoSnap.data() });
+      fetchApartados();
+      fetchProductos();
+
+    } catch (error) {
+      console.error('Error al restaurar producto:', error);
+      alert('❌ Error al restaurar producto: ' + error.message);
     }
   };
 
@@ -1794,19 +2255,59 @@ const Apartados = () => {
                         <th className="px-4 py-2 text-center text-sm font-semibold text-gray-700">Cantidad</th>
                         <th className="px-4 py-2 text-right text-sm font-semibold text-gray-700">Precio Unit.</th>
                         <th className="px-4 py-2 text-right text-sm font-semibold text-gray-700">Subtotal</th>
+                        <th className="px-4 py-2 text-center text-sm font-semibold text-gray-700">Acciones</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
                       {selectedApartado.items?.map((item, index) => (
-                        <tr key={index}>
-                          <td className="px-4 py-2 text-sm text-gray-800">{item.nombre}</td>
-                          <td className="px-4 py-2 text-center text-sm text-gray-600">{item.talla}</td>
-                          <td className="px-4 py-2 text-center text-sm text-gray-600">{item.cantidad}</td>
-                          <td className="px-4 py-2 text-right text-sm text-gray-800">
+                        <tr key={index} className={item.anulado ? 'bg-gray-50' : ''}>
+                          <td className={`px-4 py-2 text-sm ${item.anulado ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+                            {item.nombre}
+                            {item.anulado && (
+                              <div className="text-xs text-red-600 mt-1 font-normal">
+                                ❌ ANULADO - {item.anulacion?.motivo}
+                              </div>
+                            )}
+                          </td>
+                          <td className={`px-4 py-2 text-center text-sm ${item.anulado ? 'text-gray-400 line-through' : 'text-gray-600'}`}>
+                            {item.talla}
+                          </td>
+                          <td className={`px-4 py-2 text-center text-sm ${item.anulado ? 'text-gray-400 line-through' : 'text-gray-600'}`}>
+                            {item.cantidad}
+                          </td>
+                          <td className={`px-4 py-2 text-right text-sm ${item.anulado ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
                             ${item.precioUnitario?.toLocaleString()}
                           </td>
-                          <td className="px-4 py-2 text-right text-sm font-semibold text-gray-800">
-                            ${item.subtotal?.toLocaleString()}
+                          <td className={`px-4 py-2 text-right text-sm font-semibold ${item.anulado ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+                            {item.anulado ? '[ANULADO]' : `$${item.subtotal?.toLocaleString()}`}
+                          </td>
+                          <td className="px-4 py-2 text-center">
+                            {!item.anulado ? (
+                              <div className="flex gap-2 justify-center">
+                                <button
+                                  onClick={() => handleOpenCorreccionProducto(index)}
+                                  className="text-blue-600 hover:text-blue-800 text-sm underline"
+                                  title="Corregir producto o cantidad"
+                                >
+                                  Corregir
+                                </button>
+                                <button
+                                  onClick={() => handleOpenAnularProducto(index)}
+                                  className="text-red-600 hover:text-red-800 text-sm underline"
+                                  title="Anular este producto"
+                                >
+                                  Anular
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => handleRestaurarProducto(index)}
+                                className="text-green-600 hover:text-green-800 text-sm underline"
+                                title="Restaurar producto anulado"
+                              >
+                                Restaurar
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -2653,6 +3154,257 @@ const Apartados = () => {
               <button
                 onClick={() => setShowMetodoPagoModal(false)}
                 className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Corrección de Producto en Apartado */}
+      {showCorreccionProductoModal && selectedApartado && itemIndexToCorrect !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <h3 className="text-xl font-bold mb-4 text-gray-800">
+              Corregir Producto en Apartado #{selectedApartado.numeroApartado}
+            </h3>
+
+            {/* Producto Actual */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+              <h4 className="font-semibold text-blue-800 mb-2">Producto Actual:</h4>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <span className="text-gray-600">Producto:</span>{' '}
+                  <span className="font-semibold">{selectedApartado.items[itemIndexToCorrect].nombre}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Talla:</span>{' '}
+                  <span className="font-semibold">{selectedApartado.items[itemIndexToCorrect].talla}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Cantidad:</span>{' '}
+                  <span className="font-semibold">{selectedApartado.items[itemIndexToCorrect].cantidad}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Precio:</span>{' '}
+                  <span className="font-semibold">${selectedApartado.items[itemIndexToCorrect].precio?.toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Buscar Nuevo Producto (Opcional) */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Cambiar Producto (opcional)
+              </label>
+              <p className="text-xs text-gray-500 mb-2">
+                Deja vacío si solo quieres cambiar la cantidad
+              </p>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+                <input
+                  type="text"
+                  placeholder="Buscar producto por nombre, referencia o talla..."
+                  value={searchProductoCorreccion}
+                  onChange={(e) => setSearchProductoCorreccion(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                />
+              </div>
+            </div>
+
+            {/* Lista de productos filtrados */}
+            {searchProductoCorreccion && (
+              <div className="mb-4 border border-gray-300 rounded-lg max-h-60 overflow-y-auto">
+                {productos
+                  .filter(p => {
+                    const searchLower = searchProductoCorreccion.toLowerCase();
+                    return (
+                      p.nombre?.toLowerCase().includes(searchLower) ||
+                      p.referencia?.toLowerCase().includes(searchLower) ||
+                      p.talla?.toLowerCase().includes(searchLower)
+                    );
+                  })
+                  .map(producto => (
+                    <div
+                      key={producto.id}
+                      onClick={() => {
+                        setProductoNuevoSeleccionado(producto);
+                        setSearchProductoCorreccion('');
+                      }}
+                      className="p-3 hover:bg-gray-100 cursor-pointer border-b border-gray-200 last:border-b-0"
+                    >
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="font-semibold text-gray-800">{producto.nombre}</p>
+                          <p className="text-sm text-gray-600">
+                            Ref: {producto.referencia} | Talla: {producto.talla}
+                          </p>
+                        </div>
+                        <p className="font-semibold text-gray-800">${producto.precio?.toLocaleString()}</p>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            {/* Producto Nuevo Seleccionado */}
+            {productoNuevoSeleccionado && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
+                <h4 className="font-semibold text-green-800 mb-2">Nuevo Producto Seleccionado:</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-gray-600">Producto:</span>{' '}
+                    <span className="font-semibold">{productoNuevoSeleccionado.nombre}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Talla:</span>{' '}
+                    <span className="font-semibold">{productoNuevoSeleccionado.talla}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Referencia:</span>{' '}
+                    <span className="font-semibold">{productoNuevoSeleccionado.referencia}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Precio:</span>{' '}
+                    <span className="font-semibold">${productoNuevoSeleccionado.precio?.toLocaleString()}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setProductoNuevoSeleccionado(null)}
+                  className="mt-2 text-sm text-red-600 hover:text-red-800 underline"
+                >
+                  Cancelar selección
+                </button>
+              </div>
+            )}
+
+            {/* Campo de Cantidad */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Cantidad:
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={nuevaCantidadCorreccion}
+                onChange={(e) => setNuevaCantidadCorreccion(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Cantidad actual: {selectedApartado.items[itemIndexToCorrect].cantidad}
+              </p>
+            </div>
+
+            {/* Notas de la Corrección */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Notas de la Corrección (requerido):
+              </label>
+              <textarea
+                value={notasCorreccion}
+                onChange={(e) => setNotasCorreccion(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                rows="3"
+                placeholder="Explica el motivo de la corrección..."
+                required
+              />
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-2 pt-4 border-t">
+              <button
+                onClick={handleCorregirProductoApartado}
+                disabled={corrigiendoProducto}
+                className="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+                style={{ backgroundColor: '#D50565' }}
+              >
+                {corrigiendoProducto ? 'Corrigiendo...' : 'Corregir Apartado'}
+              </button>
+              <button
+                onClick={handleCloseCorreccionProducto}
+                disabled={corrigiendoProducto}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Anular Producto */}
+      {showAnularProductoModal && selectedApartado && itemIndexToAnular !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-xl font-bold mb-4 text-gray-800">
+              ⚠️ Anular Producto
+            </h3>
+
+            {/* Información del producto a anular */}
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+              <h4 className="font-semibold text-red-800 mb-2">Producto a Anular:</h4>
+              <div className="space-y-1 text-sm">
+                <div>
+                  <span className="text-gray-600">Producto:</span>{' '}
+                  <span className="font-semibold">{selectedApartado.items[itemIndexToAnular].nombre}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Talla:</span>{' '}
+                  <span className="font-semibold">{selectedApartado.items[itemIndexToAnular].talla}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Cantidad:</span>{' '}
+                  <span className="font-semibold">{selectedApartado.items[itemIndexToAnular].cantidad}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Subtotal:</span>{' '}
+                  <span className="font-semibold">${selectedApartado.items[itemIndexToAnular].subtotal?.toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Advertencia */}
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
+              <p className="text-sm text-yellow-800">
+                <strong>Esta acción:</strong>
+              </p>
+              <ul className="text-xs text-yellow-700 mt-2 space-y-1 list-disc list-inside">
+                <li>Liberará el inventario reservado</li>
+                <li>Reducirá el total del apartado</li>
+                <li>El producto quedará visible como ANULADO</li>
+                <li>Se guardará en el historial para auditoría</li>
+              </ul>
+            </div>
+
+            {/* Campo de motivo */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Motivo de la Anulación (requerido):
+              </label>
+              <textarea
+                value={motivoAnulacion}
+                onChange={(e) => setMotivoAnulacion(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                rows="3"
+                placeholder="Ej: Producto agregado por error, cliente cambió de opinión, etc."
+                required
+              />
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-2">
+              <button
+                onClick={handleAnularProducto}
+                disabled={anulandoProducto}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-opacity disabled:opacity-50"
+              >
+                {anulandoProducto ? 'Anulando...' : 'Anular Producto'}
+              </button>
+              <button
+                onClick={handleCloseAnularProducto}
+                disabled={anulandoProducto}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50"
               >
                 Cancelar
               </button>

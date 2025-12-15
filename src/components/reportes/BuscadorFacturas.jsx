@@ -49,8 +49,15 @@ const BuscadorFacturas = () => {
   const [productos, setProductos] = useState([]);
   const [searchProductoCorreccion, setSearchProductoCorreccion] = useState('');
   const [productoNuevoSeleccionado, setProductoNuevoSeleccionado] = useState(null);
+  const [nuevaCantidad, setNuevaCantidad] = useState(1);
   const [notasCorreccion, setNotasCorreccion] = useState('');
   const [corrigiendo, setCorrigiendo] = useState(false);
+
+  // Estados para anulación de productos en facturas
+  const [showAnularProductoModal, setShowAnularProductoModal] = useState(false);
+  const [itemIndexToAnular, setItemIndexToAnular] = useState(null);
+  const [motivoAnulacion, setMotivoAnulacion] = useState('');
+  const [anulandoProducto, setAnulandoProducto] = useState(false);
 
   // Estados para corrección de método de pago
   const [showMetodoPagoModal, setShowMetodoPagoModal] = useState(false);
@@ -281,6 +288,7 @@ const BuscadorFacturas = () => {
     setItemIndexToCorrect(itemIndex);
     setSearchProductoCorreccion('');
     setProductoNuevoSeleccionado(null);
+    setNuevaCantidad(facturaSeleccionada.items[itemIndex].cantidad); // Inicializar con cantidad actual
     setNotasCorreccion('');
     setShowCorreccionModal(true);
   };
@@ -293,34 +301,64 @@ const BuscadorFacturas = () => {
     setItemIndexToCorrect(null);
     setSearchProductoCorreccion('');
     setProductoNuevoSeleccionado(null);
+    setNuevaCantidad(1);
     setNotasCorreccion('');
   };
 
   /**
-   * Corrige la factura: cambia un producto por otro y ajusta inventario/transacción
+   * Corrige la factura: cambia un producto por otro y/o la cantidad, ajusta inventario/transacción
    */
   const handleCorregirFactura = async () => {
-    if (!productoNuevoSeleccionado) {
-      alert('Selecciona el nuevo producto');
-      return;
-    }
-
     if (!notasCorreccion.trim()) {
       alert('Ingresa una nota explicando la corrección');
       return;
     }
 
-    const confirmar = window.confirm(
-      `⚠️ CORREGIR FACTURA\n\n` +
-      `Factura #${facturaSeleccionada.numeroFactura}\n\n` +
-      `Producto actual: ${facturaSeleccionada.items[itemIndexToCorrect].nombre}\n` +
-      `Nuevo producto: ${productoNuevoSeleccionado.nombre}\n\n` +
-      `Esta acción:\n` +
-      `• Modificará la factura original\n` +
-      `• Ajustará el inventario\n` +
-      `• Actualizará el valor si es diferente\n\n` +
-      `¿Continuar?`
-    );
+    // Validar que la nueva cantidad sea válida
+    const cantidadNueva = parseInt(nuevaCantidad);
+    if (!cantidadNueva || cantidadNueva <= 0) {
+      alert('La cantidad debe ser mayor a 0');
+      return;
+    }
+
+    const productoActual = facturaSeleccionada.items[itemIndexToCorrect];
+    const cantidadAnterior = productoActual.cantidad;
+
+    // Si no se seleccionó un producto nuevo, usar el actual
+    const productoParaUsar = productoNuevoSeleccionado || productoActual;
+    const cambioDeProducto = productoNuevoSeleccionado && productoActual.productoId !== productoNuevoSeleccionado.id;
+    const cambioDeCantidad = cantidadNueva !== cantidadAnterior;
+
+    // Validar que haya al menos un cambio
+    if (!cambioDeProducto && !cambioDeCantidad) {
+      alert('No hay cambios para aplicar. Modifica el producto o la cantidad.');
+      return;
+    }
+
+    // Mensaje de confirmación personalizado
+    let mensajeConfirmacion = `⚠️ CORREGIR FACTURA\n\nFactura #${facturaSeleccionada.numeroFactura}\n\n`;
+
+    if (cambioDeProducto && cambioDeCantidad) {
+      mensajeConfirmacion += `Producto anterior: ${productoActual.nombre} (${cantidadAnterior} unidades)\n`;
+      mensajeConfirmacion += `Producto nuevo: ${productoParaUsar.nombre} (${cantidadNueva} unidades)\n`;
+    } else if (cambioDeProducto) {
+      mensajeConfirmacion += `Cambio de producto:\n`;
+      mensajeConfirmacion += `  De: ${productoActual.nombre}\n`;
+      mensajeConfirmacion += `  A: ${productoParaUsar.nombre}\n`;
+      mensajeConfirmacion += `Cantidad: ${cantidadNueva} unidades\n`;
+    } else {
+      mensajeConfirmacion += `Producto: ${productoActual.nombre}\n`;
+      mensajeConfirmacion += `Cantidad anterior: ${cantidadAnterior} unidades\n`;
+      mensajeConfirmacion += `Cantidad nueva: ${cantidadNueva} unidades\n`;
+    }
+
+    mensajeConfirmacion += `\nEsta acción:\n`;
+    mensajeConfirmacion += `• Modificará la factura original\n`;
+    mensajeConfirmacion += `• Ajustará el inventario automáticamente\n`;
+    mensajeConfirmacion += `• Actualizará el valor total\n\n`;
+    mensajeConfirmacion += `¿Continuar?`;
+
+    const confirmar = window.confirm(mensajeConfirmacion);
 
     if (!confirmar) return;
 
@@ -329,15 +367,13 @@ const BuscadorFacturas = () => {
       const batch = writeBatch(db);
       const facturaRef = doc(db, 'sales', facturaSeleccionada.id);
 
-      // Producto actual (el que está mal)
-      const productoActual = facturaSeleccionada.items[itemIndexToCorrect];
+      // Producto actual (el que está mal o el que solo cambia cantidad)
       const productoActualId = productoActual.productoId;
-      const cantidadActual = productoActual.cantidad;
 
-      // Producto nuevo (el correcto)
-      const productoNuevoId = productoNuevoSeleccionado.id;
-      const precioNuevo = productoNuevoSeleccionado.precio || 0;
-      const subtotalNuevo = precioNuevo * cantidadActual;
+      // Producto a usar (nuevo o el mismo)
+      const productoNuevoId = productoParaUsar.id || productoParaUsar.productoId;
+      const precioNuevo = productoParaUsar.precio || productoParaUsar.precioUnitario || 0;
+      const subtotalNuevo = precioNuevo * cantidadNueva;
 
       // Calcular diferencia de precio
       const diferenciaSubtotal = subtotalNuevo - productoActual.subtotal;
@@ -346,10 +382,10 @@ const BuscadorFacturas = () => {
       const itemsActualizados = [...facturaSeleccionada.items];
       itemsActualizados[itemIndexToCorrect] = {
         productoId: productoNuevoId,
-        nombre: productoNuevoSeleccionado.nombre,
-        referencia: productoNuevoSeleccionado.referencia || '',
-        talla: productoNuevoSeleccionado.talla || '',
-        cantidad: cantidadActual,
+        nombre: productoParaUsar.nombre,
+        referencia: productoParaUsar.referencia || '',
+        talla: productoParaUsar.talla || '',
+        cantidad: cantidadNueva,
         precioUnitario: precioNuevo,
         subtotal: subtotalNuevo
       };
@@ -365,27 +401,40 @@ const BuscadorFacturas = () => {
         totalPagado: nuevoTotalPagado,
         correccion: {
           fecha: serverTimestamp(),
-          productoAnterior: productoActual.nombre,
-          productoNuevo: productoNuevoSeleccionado.nombre,
+          productoAnterior: `${productoActual.nombre} (${cantidadAnterior} unidades)`,
+          productoNuevo: `${productoParaUsar.nombre} (${cantidadNueva} unidades)`,
           notas: notasCorreccion,
           diferenciaValor: diferenciaSubtotal
         },
         updatedAt: serverTimestamp()
       });
 
-      // 3. Ajustar inventario del producto incorrecto (devolver stock)
-      const productoIncorrectoRef = doc(db, 'products', productoActualId);
-      batch.update(productoIncorrectoRef, {
-        stockTotal: increment(cantidadActual) // Devolver el stock
-      });
+      // 3. Ajustar inventario
+      if (!cambioDeProducto) {
+        // Mismo producto, solo cambió la cantidad
+        const diferenciaCantidad = cantidadNueva - cantidadAnterior;
+        if (diferenciaCantidad !== 0) {
+          const productoRef = doc(db, 'products', productoActualId);
+          batch.update(productoRef, {
+            stockTotal: increment(-diferenciaCantidad) // Si aumentó cantidad, restar; si disminuyó, sumar
+          });
+        }
+      } else {
+        // Productos diferentes
+        // Devolver stock del producto anterior
+        const productoIncorrectoRef = doc(db, 'products', productoActualId);
+        batch.update(productoIncorrectoRef, {
+          stockTotal: increment(cantidadAnterior) // Devolver el stock
+        });
 
-      // 4. Ajustar inventario del producto correcto (descontar stock)
-      const productoCorrectoRef = doc(db, 'products', productoNuevoId);
-      batch.update(productoCorrectoRef, {
-        stockTotal: increment(-cantidadActual) // Descontar el stock
-      });
+        // Descontar stock del producto nuevo
+        const productoCorrectoRef = doc(db, 'products', productoNuevoId);
+        batch.update(productoCorrectoRef, {
+          stockTotal: increment(-cantidadNueva) // Descontar el stock
+        });
+      }
 
-      // 5. Buscar y actualizar la transacción asociada
+      // 4. Buscar y actualizar la transacción asociada
       const transactionsQuery = query(
         collection(db, 'transactions'),
         where('ventaId', '==', facturaSeleccionada.id)
@@ -403,6 +452,33 @@ const BuscadorFacturas = () => {
           }
         });
       });
+
+      // 5. Crear transacción de ajuste ADICIONAL si hay diferencia en el total
+      if (diferenciaSubtotal !== 0) {
+        const transactionAjusteRef = doc(collection(db, 'transactions'));
+        batch.set(transactionAjusteRef, {
+          tipo: diferenciaSubtotal > 0 ? 'ajuste_factura_positivo' : 'ajuste_factura_negativo',
+          monto: diferenciaSubtotal, // Puede ser positivo o negativo
+          metodoPago: facturaSeleccionada.metodoPago || 'Ajuste',
+          ventaId: facturaSeleccionada.id,
+          numeroFactura: facturaSeleccionada.numeroFactura,
+          descripcion: `Corrección producto Factura #${facturaSeleccionada.numeroFactura}: ${productoActual.nombre} → ${productoParaUsar.nombre}`,
+          notas: notasCorreccion,
+          clienteId: facturaSeleccionada.clienteId,
+          clienteNombre: facturaSeleccionada.clienteNombre,
+          detalleCorreccion: {
+            productoAnterior: productoActual.nombre,
+            cantidadAnterior: cantidadAnterior,
+            subtotalAnterior: productoActual.subtotal,
+            productoNuevo: productoParaUsar.nombre,
+            cantidadNueva: cantidadNueva,
+            subtotalNuevo: subtotalNuevo,
+            diferencia: diferenciaSubtotal
+          },
+          fecha: serverTimestamp(),
+          userId: currentUser.email || currentUser.uid
+        });
+      }
 
       await batch.commit();
 
@@ -440,6 +516,249 @@ const BuscadorFacturas = () => {
       alert('❌ Error al corregir factura: ' + error.message);
     } finally {
       setCorrigiendo(false);
+    }
+  };
+
+  // Funciones para anulación de productos en facturas
+  const handleOpenAnularProducto = (itemIndex) => {
+    setItemIndexToAnular(itemIndex);
+    setShowAnularProductoModal(true);
+    setMotivoAnulacion('');
+  };
+
+  const handleCloseAnularProducto = () => {
+    setShowAnularProductoModal(false);
+    setItemIndexToAnular(null);
+    setMotivoAnulacion('');
+  };
+
+  const handleAnularProducto = async () => {
+    if (!facturaSeleccionada || itemIndexToAnular === null) {
+      return;
+    }
+
+    if (!motivoAnulacion.trim()) {
+      alert('Por favor, ingresa el motivo de la anulación.');
+      return;
+    }
+
+    const itemToAnular = facturaSeleccionada.items[itemIndexToAnular];
+
+    // Validar que no sea el último producto activo
+    const productosActivos = facturaSeleccionada.items.filter(item => !item.anulado);
+    if (productosActivos.length === 1 && !itemToAnular.anulado) {
+      alert('⚠️ No puedes anular el último producto activo.\n\nSi deseas anular toda la factura, debes crear una Nota Crédito o anular el documento completo.');
+      return;
+    }
+
+    const confirmar = window.confirm(
+      `⚠️ ANULAR PRODUCTO DE FACTURA\n\n` +
+      `⚠️ ADVERTENCIA: Las facturas tienen valor fiscal y tributario.\n` +
+      `Esta acción debe usarse solo en casos excepcionales.\n\n` +
+      `Factura #${facturaSeleccionada.numeroFactura}\n` +
+      `Producto: ${itemToAnular.nombre}\n` +
+      `Cantidad: ${itemToAnular.cantidad}\n` +
+      `Subtotal: $${itemToAnular.subtotal?.toLocaleString()}\n\n` +
+      `Esta acción:\n` +
+      `• DEVOLVERÁ ${itemToAnular.cantidad} unidad(es) al stock total\n` +
+      `• Reducirá el total de la factura\n` +
+      `• El producto quedará marcado como ANULADO\n` +
+      `• Se guardará en historial para auditoría fiscal\n\n` +
+      `¿Estás COMPLETAMENTE SEGURO de continuar?`
+    );
+
+    if (!confirmar) return;
+
+    setAnulandoProducto(true);
+    try {
+      const batch = writeBatch(db);
+      const facturaRef = doc(db, 'sales', facturaSeleccionada.id);
+
+      // Marcar producto como anulado
+      const updatedItems = [...facturaSeleccionada.items];
+      updatedItems[itemIndexToAnular] = {
+        ...itemToAnular,
+        anulado: true,
+        anulacion: {
+          fecha: serverTimestamp(),
+          motivo: motivoAnulacion,
+          usuario: currentUser.email || 'Admin'
+        }
+      };
+
+      // Recalcular totales (solo productos NO anulados)
+      const nuevoTotal = updatedItems
+        .filter(item => !item.anulado)
+        .reduce((sum, item) => sum + item.subtotal, 0);
+
+      // DEVOLVER stock total (porque ya se había descontado al vender)
+      const productoRef = doc(db, 'products', itemToAnular.productoId);
+      batch.update(productoRef, {
+        stockTotal: increment(itemToAnular.cantidad), // +cantidad (devolver)
+        updatedAt: serverTimestamp()
+      });
+
+      // Actualizar factura
+      batch.update(facturaRef, {
+        items: updatedItems,
+        total: nuevoTotal,
+        updatedAt: serverTimestamp()
+      });
+
+      // Crear transacción de ajuste (movimiento financiero negativo)
+      const diferenciaTotal = itemToAnular.subtotal;
+      const transactionRef = doc(collection(db, 'transactions'));
+      batch.set(transactionRef, {
+        tipo: 'ajuste_factura',
+        monto: -diferenciaTotal, // NEGATIVO - representa salida de efectivo (ajuste)
+        metodoPago: facturaSeleccionada.metodoPago || 'Ajuste',
+        ventaId: facturaSeleccionada.id,
+        numeroFactura: facturaSeleccionada.numeroFactura,
+        descripcion: `Anulación producto en Factura #${facturaSeleccionada.numeroFactura}: ${itemToAnular.nombre}`,
+        motivo: motivoAnulacion,
+        clienteId: facturaSeleccionada.clienteId,
+        clienteNombre: facturaSeleccionada.clienteNombre,
+        productoAnulado: {
+          nombre: itemToAnular.nombre,
+          cantidad: itemToAnular.cantidad,
+          precioUnitario: itemToAnular.precioUnitario,
+          subtotal: itemToAnular.subtotal
+        },
+        fecha: serverTimestamp(),
+        userId: currentUser.email || currentUser.uid
+      });
+
+      await batch.commit();
+
+      alert(`✅ Producto anulado exitosamente.\n\nNuevo total de factura: $${nuevoTotal.toLocaleString()}\n\n⚠️ Recuerda: Esta modificación debe ser reportada correctamente para fines contables y fiscales.`);
+
+      // Recargar facturas
+      const querySnapshot = await getDocs(collection(db, 'sales'));
+      const facturas = querySnapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      }));
+      facturas.sort((a, b) => (b.numeroFactura || 0) - (a.numeroFactura || 0));
+      setTodasFacturas(facturas);
+
+      // Actualizar factura seleccionada
+      const facturaActualizada = facturas.find(f => f.id === facturaSeleccionada.id);
+      if (facturaActualizada) {
+        const fechaLegible = facturaActualizada.createdAt?.toDate?.()
+          ? facturaActualizada.createdAt.toDate().toLocaleDateString('es-CO')
+          : new Date().toLocaleDateString('es-CO');
+        setFacturaSeleccionada({
+          ...facturaActualizada,
+          fecha: fechaLegible
+        });
+      }
+
+      handleCloseAnularProducto();
+
+    } catch (error) {
+      console.error('Error al anular producto:', error);
+      alert('❌ Error al anular producto: ' + error.message);
+    } finally {
+      setAnulandoProducto(false);
+    }
+  };
+
+  const handleRestaurarProducto = async (itemIndex) => {
+    if (!facturaSeleccionada) return;
+
+    const itemToRestaurar = facturaSeleccionada.items[itemIndex];
+
+    const confirmar = window.confirm(
+      `🔄 RESTAURAR PRODUCTO EN FACTURA\n\n` +
+      `Producto: ${itemToRestaurar.nombre}\n` +
+      `Cantidad: ${itemToRestaurar.cantidad}\n` +
+      `Subtotal: $${itemToRestaurar.subtotal?.toLocaleString()}\n\n` +
+      `Esta acción:\n` +
+      `• Volverá a descontar ${itemToRestaurar.cantidad} unidad(es) del stock total\n` +
+      `• Aumentará el total de la factura\n\n` +
+      `¿Continuar?`
+    );
+
+    if (!confirmar) return;
+
+    try {
+      const batch = writeBatch(db);
+      const facturaRef = doc(db, 'sales', facturaSeleccionada.id);
+
+      // Quitar marca de anulado
+      const updatedItems = [...facturaSeleccionada.items];
+      const { anulado, anulacion, ...itemSinAnulacion } = itemToRestaurar;
+      updatedItems[itemIndex] = itemSinAnulacion;
+
+      // Recalcular totales
+      const nuevoTotal = updatedItems
+        .filter(item => !item.anulado)
+        .reduce((sum, item) => sum + item.subtotal, 0);
+
+      // Volver a descontar del stock
+      const productoRef = doc(db, 'products', itemToRestaurar.productoId);
+      batch.update(productoRef, {
+        stockTotal: increment(-itemToRestaurar.cantidad), // -cantidad (descontar)
+        updatedAt: serverTimestamp()
+      });
+
+      // Actualizar factura
+      batch.update(facturaRef, {
+        items: updatedItems,
+        total: nuevoTotal,
+        updatedAt: serverTimestamp()
+      });
+
+      // Crear transacción de ajuste POSITIVA (reversión de anulación)
+      const diferenciaTotal = itemToRestaurar.subtotal;
+      const transactionRef = doc(collection(db, 'transactions'));
+      batch.set(transactionRef, {
+        tipo: 'restauracion_factura',
+        monto: diferenciaTotal, // POSITIVO - representa entrada de efectivo
+        metodoPago: facturaSeleccionada.metodoPago || 'Ajuste',
+        ventaId: facturaSeleccionada.id,
+        numeroFactura: facturaSeleccionada.numeroFactura,
+        descripcion: `Restauración producto en Factura #${facturaSeleccionada.numeroFactura}: ${itemToRestaurar.nombre}`,
+        clienteId: facturaSeleccionada.clienteId,
+        clienteNombre: facturaSeleccionada.clienteNombre,
+        productoRestaurado: {
+          nombre: itemToRestaurar.nombre,
+          cantidad: itemToRestaurar.cantidad,
+          precioUnitario: itemToRestaurar.precioUnitario,
+          subtotal: itemToRestaurar.subtotal
+        },
+        fecha: serverTimestamp(),
+        userId: currentUser.email || currentUser.uid
+      });
+
+      await batch.commit();
+
+      alert(`✅ Producto restaurado exitosamente.\n\nNuevo total: $${nuevoTotal.toLocaleString()}`);
+
+      // Recargar facturas
+      const querySnapshot = await getDocs(collection(db, 'sales'));
+      const facturas = querySnapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      }));
+      facturas.sort((a, b) => (b.numeroFactura || 0) - (a.numeroFactura || 0));
+      setTodasFacturas(facturas);
+
+      // Actualizar factura seleccionada
+      const facturaActualizada = facturas.find(f => f.id === facturaSeleccionada.id);
+      if (facturaActualizada) {
+        const fechaLegible = facturaActualizada.createdAt?.toDate?.()
+          ? facturaActualizada.createdAt.toDate().toLocaleDateString('es-CO')
+          : new Date().toLocaleDateString('es-CO');
+        setFacturaSeleccionada({
+          ...facturaActualizada,
+          fecha: fechaLegible
+        });
+      }
+
+    } catch (error) {
+      console.error('Error al restaurar producto:', error);
+      alert('❌ Error al restaurar producto: ' + error.message);
     }
   };
 
@@ -847,24 +1166,54 @@ const BuscadorFacturas = () => {
                   </thead>
                   <tbody>
                     {facturaSeleccionada.items.map((item, index) => (
-                      <tr key={index}>
+                      <tr key={index} className={item.anulado ? 'bg-gray-100' : ''}>
                         <td className="py-1">
-                          <div className="font-medium">{item.nombre}</div>
-                          <div className="text-gray-600 text-[10px]">
+                          <div className={`font-medium ${item.anulado ? 'text-gray-400 line-through' : ''}`}>
+                            {item.nombre}
+                          </div>
+                          <div className={`text-[10px] ${item.anulado ? 'text-gray-400 line-through' : 'text-gray-600'}`}>
                             {item.talla && `Talla: ${item.talla} | `}
                             ${(item.precioUnitario || 0).toLocaleString('es-CO')}
                           </div>
+                          {item.anulado && (
+                            <div className="text-[9px] text-red-600 mt-1">
+                              ❌ ANULADO - {item.anulacion?.motivo}
+                            </div>
+                          )}
                         </td>
-                        <td className="text-center">{item.cantidad}</td>
-                        <td className="text-right">${(item.subtotal || 0).toLocaleString('es-CO')}</td>
+                        <td className={`text-center ${item.anulado ? 'text-gray-400 line-through' : ''}`}>
+                          {item.cantidad}
+                        </td>
+                        <td className={`text-right ${item.anulado ? 'text-gray-400 line-through' : ''}`}>
+                          {item.anulado ? '[ANULADO]' : `$${(item.subtotal || 0).toLocaleString('es-CO')}`}
+                        </td>
                         <td className="text-center no-print">
-                          <button
-                            onClick={() => handleOpenCorreccionModal(index)}
-                            className="px-2 py-1 bg-blue-500 text-white text-[10px] rounded hover:bg-blue-600"
-                            title="Corregir producto"
-                          >
-                            <Edit2 size={12} className="inline" />
-                          </button>
+                          {!item.anulado ? (
+                            <div className="flex gap-1 justify-center">
+                              <button
+                                onClick={() => handleOpenCorreccionModal(index)}
+                                className="px-2 py-1 bg-blue-500 text-white text-[10px] rounded hover:bg-blue-600"
+                                title="Corregir producto"
+                              >
+                                <Edit2 size={12} className="inline" />
+                              </button>
+                              <button
+                                onClick={() => handleOpenAnularProducto(index)}
+                                className="px-2 py-1 bg-red-500 text-white text-[10px] rounded hover:bg-red-600"
+                                title="Anular producto"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => handleRestaurarProducto(index)}
+                              className="px-2 py-1 bg-green-500 text-white text-[10px] rounded hover:bg-green-600"
+                              title="Restaurar producto"
+                            >
+                              ↻
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1000,8 +1349,8 @@ const BuscadorFacturas = () => {
             </div>
 
             {/* Producto actual */}
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-              <h3 className="font-semibold text-red-800 mb-2">Producto Incorrecto:</h3>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+              <h3 className="font-semibold text-blue-800 mb-2">Producto Actual:</h3>
               <p className="text-gray-800">
                 <strong>{facturaSeleccionada.items[itemIndexToCorrect].nombre}</strong>
                 {facturaSeleccionada.items[itemIndexToCorrect].talla &&
@@ -1016,8 +1365,11 @@ const BuscadorFacturas = () => {
             {/* Buscador de producto nuevo */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Buscar Producto Correcto:
+                Cambiar Producto (opcional):
               </label>
+              <p className="text-xs text-gray-500 mb-2">
+                Deja vacío si solo quieres cambiar la cantidad
+              </p>
               <input
                 type="text"
                 value={searchProductoCorreccion}
@@ -1074,17 +1426,34 @@ const BuscadorFacturas = () => {
                   {productoNuevoSeleccionado.talla && ` - Talla: ${productoNuevoSeleccionado.talla}`}
                 </p>
                 <p className="text-sm text-gray-600">
-                  Precio: ${productoNuevoSeleccionado.precio?.toLocaleString()} × {facturaSeleccionada.items[itemIndexToCorrect].cantidad} = ${(productoNuevoSeleccionado.precio * facturaSeleccionada.items[itemIndexToCorrect].cantidad)?.toLocaleString()}
+                  Precio: ${productoNuevoSeleccionado.precio?.toLocaleString()} × {nuevaCantidad} = ${(productoNuevoSeleccionado.precio * nuevaCantidad)?.toLocaleString()}
                 </p>
                 <p className="text-sm font-semibold mt-2">
                   Diferencia: {
-                    ((productoNuevoSeleccionado.precio * facturaSeleccionada.items[itemIndexToCorrect].cantidad) - facturaSeleccionada.items[itemIndexToCorrect].subtotal) >= 0 ? '+' : ''
+                    ((productoNuevoSeleccionado.precio * nuevaCantidad) - facturaSeleccionada.items[itemIndexToCorrect].subtotal) >= 0 ? '+' : ''
                   }${
-                    ((productoNuevoSeleccionado.precio * facturaSeleccionada.items[itemIndexToCorrect].cantidad) - facturaSeleccionada.items[itemIndexToCorrect].subtotal).toLocaleString()
+                    ((productoNuevoSeleccionado.precio * nuevaCantidad) - facturaSeleccionada.items[itemIndexToCorrect].subtotal).toLocaleString()
                   }
                 </p>
               </div>
             )}
+
+            {/* Campo de cantidad */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Cantidad:
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={nuevaCantidad}
+                onChange={(e) => setNuevaCantidad(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Cantidad actual: {facturaSeleccionada.items[itemIndexToCorrect].cantidad}
+              </p>
+            </div>
 
             {/* Notas de corrección */}
             <div className="mb-4">
@@ -1114,6 +1483,97 @@ const BuscadorFacturas = () => {
                 onClick={handleCloseCorreccionModal}
                 disabled={corrigiendo}
                 className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE ANULACIÓN DE PRODUCTO */}
+      {showAnularProductoModal && facturaSeleccionada && itemIndexToAnular !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-xl font-bold mb-4 text-gray-800">
+              ⚠️ Anular Producto de Factura
+            </h3>
+
+            {/* Advertencia Fiscal */}
+            <div className="bg-red-50 border border-red-300 rounded-lg p-4 mb-4">
+              <p className="text-sm text-red-800 font-semibold mb-2">
+                ⚠️ ADVERTENCIA FISCAL
+              </p>
+              <p className="text-xs text-red-700">
+                Las facturas tienen valor legal y tributario. Esta acción debe usarse solo en casos excepcionales
+                y debe ser correctamente reportada para fines contables.
+              </p>
+            </div>
+
+            {/* Información del producto a anular */}
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-4">
+              <h4 className="font-semibold text-gray-800 mb-2">Producto a Anular:</h4>
+              <div className="space-y-1 text-sm">
+                <div>
+                  <span className="text-gray-600">Producto:</span>{' '}
+                  <span className="font-semibold">{facturaSeleccionada.items[itemIndexToAnular].nombre}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Talla:</span>{' '}
+                  <span className="font-semibold">{facturaSeleccionada.items[itemIndexToAnular].talla}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Cantidad:</span>{' '}
+                  <span className="font-semibold">{facturaSeleccionada.items[itemIndexToAnular].cantidad}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Subtotal:</span>{' '}
+                  <span className="font-semibold">${facturaSeleccionada.items[itemIndexToAnular].subtotal?.toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Información de la acción */}
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
+              <p className="text-sm text-yellow-800">
+                <strong>Esta acción:</strong>
+              </p>
+              <ul className="text-xs text-yellow-700 mt-2 space-y-1 list-disc list-inside">
+                <li>Devolverá el producto al inventario (stock total)</li>
+                <li>Reducirá el total de la factura</li>
+                <li>Quedará marcado como ANULADO (visible para auditoría)</li>
+                <li>Se guardará en historial con fecha y motivo</li>
+              </ul>
+            </div>
+
+            {/* Campo de motivo */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Motivo de la Anulación (requerido):
+              </label>
+              <textarea
+                value={motivoAnulacion}
+                onChange={(e) => setMotivoAnulacion(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                rows="3"
+                placeholder="Ej: Error en la facturación, producto incorrecto, cliente devolvió mercancía..."
+                required
+              />
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-2">
+              <button
+                onClick={handleAnularProducto}
+                disabled={anulandoProducto}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-opacity disabled:opacity-50"
+              >
+                {anulandoProducto ? 'Anulando...' : 'Anular Producto'}
+              </button>
+              <button
+                onClick={handleCloseAnularProducto}
+                disabled={anulandoProducto}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50"
               >
                 Cancelar
               </button>
