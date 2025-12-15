@@ -62,7 +62,7 @@ const Pedidos = () => {
   const [selectedClient, setSelectedClient] = useState(null);
   const [cartItems, setCartItems] = useState([]);
   const [observaciones, setObservaciones] = useState('');
-  const [abono, setAbono] = useState(0);
+  const [abono, setAbono] = useState('');
   const [metodoPago, setMetodoPago] = useState('Efectivo');
 
   // Estados para búsqueda
@@ -81,12 +81,12 @@ const Pedidos = () => {
 
   // Estados para gestión de pedido
   const [selectedItemsForDelivery, setSelectedItemsForDelivery] = useState([]);
-  const [nuevoAbono, setNuevoAbono] = useState(0);
+  const [nuevoAbono, setNuevoAbono] = useState('');
   const [nuevoMetodoPago, setNuevoMetodoPago] = useState('Efectivo');
   const [showAbonoForm, setShowAbonoForm] = useState(false);
 
   // Estados para abonos adicionales (sin entrega)
-  const [abonoAdicionalMonto, setAbonoAdicionalMonto] = useState(0);
+  const [abonoAdicionalMonto, setAbonoAdicionalMonto] = useState('');
   const [abonoAdicionalMetodo, setAbonoAdicionalMetodo] = useState('Efectivo');
 
   // Estado para datos de la empresa

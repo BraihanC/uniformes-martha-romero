@@ -41,6 +41,14 @@ const POS = () => {
   const [aplicarIVA, setAplicarIVA] = useState(false);
   const [metodoPago, setMetodoPago] = useState('Efectivo');
 
+  // Payment states (NUEVO)
+  const [pagoMixto, setPagoMixto] = useState(false);
+  const [metodoPago1, setMetodoPago1] = useState('Efectivo');
+  const [metodoPago2, setMetodoPago2] = useState('Nequi');
+  const [montoPago1, setMontoPago1] = useState(0);
+  const [montoPago2, setMontoPago2] = useState(0);
+  const [montoPagadoEfectivo, setMontoPagadoEfectivo] = useState(''); // Para calcular cambio
+
   // General discount states
   const [descuentoGeneral, setDescuentoGeneral] = useState(0);
   const [tipoDescuentoGeneral, setTipoDescuentoGeneral] = useState('%'); // '%' or '$'
@@ -308,6 +316,14 @@ const POS = () => {
     setDescuentoGeneral(0);
     setTipoDescuentoGeneral('%');
 
+    // Limpiar estados de pago (NUEVO)
+    setPagoMixto(false);
+    setMetodoPago1('Efectivo');
+    setMetodoPago2('Nequi');
+    setMontoPago1(0);
+    setMontoPago2(0);
+    setMontoPagadoEfectivo('');
+
     // Return to catalog tab on mobile after clearing cart
     if (window.innerWidth < 1024) {
       setActiveTab('catalogo');
@@ -360,6 +376,20 @@ const POS = () => {
 
   const calculateTotal = () => {
     return calculateSubtotal() - calculateTotalDiscountItems() - calculateGeneralDiscount() + calculateIVA();
+  };
+
+  // ====== PAYMENT HELPERS (NUEVO) ======
+  const calculateCambio = () => {
+    if (metodoPago !== 'Efectivo' || pagoMixto) return 0;
+    const montoPagado = parseFloat(montoPagadoEfectivo) || 0;
+    return Math.max(0, montoPagado - calculateTotal());
+  };
+
+  const validarPagoMixto = () => {
+    if (!pagoMixto) return true;
+    const total = calculateTotal();
+    const sumaPagos = montoPago1 + montoPago2;
+    return Math.abs(sumaPagos - total) < 0.01; // Tolerancia de 1 centavo por redondeo
   };
 
   // ====== CLIENT SEARCH ======
@@ -441,6 +471,33 @@ const POS = () => {
       return;
     }
 
+    // Validar pago mixto (NUEVO)
+    if (pagoMixto) {
+      if (!validarPagoMixto()) {
+        const total = calculateTotal();
+        const sumaPagos = montoPago1 + montoPago2;
+        alert(`Error en pago mixto:\n\nTotal a pagar: $${total.toLocaleString('es-CO')}\nSuma de pagos: $${sumaPagos.toLocaleString('es-CO')}\n\nLos montos no coinciden.`);
+        return;
+      }
+      if (montoPago1 <= 0 || montoPago2 <= 0) {
+        alert('Ambos métodos de pago deben tener un monto mayor a 0');
+        return;
+      }
+      if (metodoPago1 === metodoPago2) {
+        alert('Los métodos de pago deben ser diferentes');
+        return;
+      }
+    }
+
+    // Validar pago en efectivo (NUEVO)
+    if (!pagoMixto && metodoPago === 'Efectivo') {
+      const montoPagado = parseFloat(montoPagadoEfectivo) || 0;
+      if (montoPagado < calculateTotal()) {
+        alert(`El monto pagado ($${montoPagado.toLocaleString('es-CO')}) es menor al total ($${calculateTotal().toLocaleString('es-CO')})`);
+        return;
+      }
+    }
+
     setLoading(true); // Activar loading
     try {
       // Usar runTransaction para garantizar atomicidad y verificación de stock
@@ -516,7 +573,20 @@ const POS = () => {
           ivaAplicado: aplicarIVA,
           ivaPorcentaje: aplicarIVA ? (companyConfig?.iva || 19) : 0,
           totalPagado: totalVenta,
-          metodoPago: metodoPago,
+          metodoPago: pagoMixto ? 'Mixto' : metodoPago,
+          // Información de pago mixto (NUEVO)
+          pagoMixto: pagoMixto,
+          ...(pagoMixto && {
+            metodoPago1: metodoPago1,
+            metodoPago2: metodoPago2,
+            montoPago1: montoPago1,
+            montoPago2: montoPago2
+          }),
+          // Información de pago en efectivo (NUEVO)
+          ...(!pagoMixto && metodoPago === 'Efectivo' && {
+            montoPagadoEfectivo: montoPagadoEfectivo,
+            cambio: calculateCambio()
+          }),
           vendedorId: currentUser.uid,
           createdAt: serverTimestamp(),
         };
@@ -532,19 +602,54 @@ const POS = () => {
           });
         });
 
-        // 6. Registrar transacción financiera
-        const transactionRef = doc(collection(db, 'transactions'));
-        transaction.set(transactionRef, {
-          tipo: 'venta',
-          monto: totalVenta,
-          metodoPago: metodoPago,
-          ventaId: saleRef.id,
-          descripcion: `Venta #${nextNumero}`,
-          clienteId: selectedClient.id,
-          clienteNombre: selectedClient.nombreCompleto,
-          fecha: serverTimestamp(),
-          userId: currentUser.uid
-        });
+        // 6. Registrar transacción(es) financiera(s) (ACTUALIZADO - soporte pago mixto)
+        if (pagoMixto) {
+          // Crear DOS transacciones para pago mixto
+          const transactionRef1 = doc(collection(db, 'transactions'));
+          transaction.set(transactionRef1, {
+            tipo: 'venta',
+            monto: montoPago1,
+            metodoPago: metodoPago1,
+            ventaId: saleRef.id,
+            numeroFactura: nextNumero,
+            descripcion: `Venta #${nextNumero} - ${metodoPago1} (Pago mixto 1/2)`,
+            clienteId: selectedClient.id,
+            clienteNombre: selectedClient.nombreCompleto,
+            pagoMixto: true,
+            fecha: serverTimestamp(),
+            userId: currentUser.uid
+          });
+
+          const transactionRef2 = doc(collection(db, 'transactions'));
+          transaction.set(transactionRef2, {
+            tipo: 'venta',
+            monto: montoPago2,
+            metodoPago: metodoPago2,
+            ventaId: saleRef.id,
+            numeroFactura: nextNumero,
+            descripcion: `Venta #${nextNumero} - ${metodoPago2} (Pago mixto 2/2)`,
+            clienteId: selectedClient.id,
+            clienteNombre: selectedClient.nombreCompleto,
+            pagoMixto: true,
+            fecha: serverTimestamp(),
+            userId: currentUser.uid
+          });
+        } else {
+          // Crear UNA transacción para pago simple
+          const transactionRef = doc(collection(db, 'transactions'));
+          transaction.set(transactionRef, {
+            tipo: 'venta',
+            monto: totalVenta,
+            metodoPago: metodoPago,
+            ventaId: saleRef.id,
+            numeroFactura: nextNumero,
+            descripcion: `Venta #${nextNumero}`,
+            clienteId: selectedClient.id,
+            clienteNombre: selectedClient.nombreCompleto,
+            fecha: serverTimestamp(),
+            userId: currentUser.uid
+          });
+        }
 
         // Retornar datos para usar fuera de la transacción
         return {
@@ -1079,23 +1184,159 @@ const POS = () => {
           </div>
 
           {/* Payment Controls */}
-          <div className="p-2 md:p-3 space-y-2">
-            <div>
-              <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
-                Método de Pago
+          <div className="p-2 md:p-3 space-y-3">
+            {/* Toggle Pago Mixto */}
+            <div className="flex items-center gap-2 pb-2 border-b">
+              <input
+                type="checkbox"
+                id="pagoMixto"
+                checked={pagoMixto}
+                onChange={(e) => {
+                  setPagoMixto(e.target.checked);
+                  if (e.target.checked) {
+                    // Inicializar montos al 50% cada uno
+                    const total = calculateTotal();
+                    setMontoPago1(Math.round(total / 2));
+                    setMontoPago2(Math.round(total / 2));
+                  }
+                }}
+                className="w-4 h-4 text-orange-500 rounded focus:ring-2 focus:ring-orange-500"
+              />
+              <label htmlFor="pagoMixto" className="text-xs md:text-sm font-medium text-gray-700 cursor-pointer">
+                Pago con dos métodos
               </label>
-              <select
-                value={metodoPago}
-                onChange={(e) => setMetodoPago(e.target.value)}
-                className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
-              >
-                <option>Efectivo</option>
-                <option>Nequi</option>
-                <option>Daviplata</option>
-                <option>Nu</option>
-                <option>Tarjeta</option>
-              </select>
             </div>
+
+            {/* Pago Simple */}
+            {!pagoMixto && (
+              <>
+                <div>
+                  <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">
+                    Método de Pago
+                  </label>
+                  <select
+                    value={metodoPago}
+                    onChange={(e) => setMetodoPago(e.target.value)}
+                    className="w-full px-2 md:px-3 py-2 text-sm md:text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  >
+                    <option>Efectivo</option>
+                    <option>Nequi</option>
+                    <option>Daviplata</option>
+                    <option>Nu</option>
+                    <option>Tarjeta</option>
+                  </select>
+                </div>
+
+                {/* Campo para efectivo - NUEVO */}
+                {metodoPago === 'Efectivo' && (
+                  <div className="bg-green-50 border border-green-200 rounded-md p-3 space-y-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Monto Recibido
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={montoPagadoEfectivo}
+                        onChange={(e) => setMontoPagadoEfectivo(e.target.value)}
+                        placeholder="Ingrese el monto recibido"
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                      />
+                    </div>
+                    {montoPagadoEfectivo !== '' && parseFloat(montoPagadoEfectivo) > 0 && (
+                      <div className="flex justify-between items-center pt-2 border-t border-green-200">
+                        <span className="text-xs font-medium text-gray-700">Cambio:</span>
+                        <span className={`text-base font-bold ${calculateCambio() >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          ${calculateCambio().toLocaleString('es-CO')}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Pago Mixto - NUEVO */}
+            {pagoMixto && (
+              <div className="space-y-3 bg-blue-50 border border-blue-200 rounded-md p-3">
+                <p className="text-xs text-blue-700 font-medium">💳 Pago dividido en dos métodos:</p>
+
+                {/* Método 1 */}
+                <div className="bg-white rounded p-2 space-y-2">
+                  <label className="block text-xs font-medium text-gray-700">
+                    Método 1
+                  </label>
+                  <select
+                    value={metodoPago1}
+                    onChange={(e) => setMetodoPago1(e.target.value)}
+                    className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option>Efectivo</option>
+                    <option>Nequi</option>
+                    <option>Daviplata</option>
+                    <option>Nu</option>
+                    <option>Tarjeta</option>
+                  </select>
+                  <input
+                    type="number"
+                    min="0"
+                    value={montoPago1}
+                    onChange={(e) => setMontoPago1(parseFloat(e.target.value) || 0)}
+                    placeholder="Monto"
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                {/* Método 2 */}
+                <div className="bg-white rounded p-2 space-y-2">
+                  <label className="block text-xs font-medium text-gray-700">
+                    Método 2
+                  </label>
+                  <select
+                    value={metodoPago2}
+                    onChange={(e) => setMetodoPago2(e.target.value)}
+                    className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option>Efectivo</option>
+                    <option>Nequi</option>
+                    <option>Daviplata</option>
+                    <option>Nu</option>
+                    <option>Tarjeta</option>
+                  </select>
+                  <input
+                    type="number"
+                    min="0"
+                    value={montoPago2}
+                    onChange={(e) => setMontoPago2(parseFloat(e.target.value) || 0)}
+                    placeholder="Monto"
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                {/* Validación visual */}
+                <div className="pt-2 border-t border-blue-200">
+                  <div className="flex justify-between text-xs mb-1">
+                    <span>Total a pagar:</span>
+                    <span className="font-medium">${calculateTotal().toLocaleString('es-CO')}</span>
+                  </div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span>Suma de pagos:</span>
+                    <span className={`font-medium ${validarPagoMixto() ? 'text-green-600' : 'text-red-600'}`}>
+                      ${(montoPago1 + montoPago2).toLocaleString('es-CO')}
+                    </span>
+                  </div>
+                  {!validarPagoMixto() && (
+                    <p className="text-xs text-red-600 mt-1">⚠️ Los montos no coinciden</p>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Buttons */}
+          <div className="p-2 md:p-3 border-t">
+
 
             <div className="flex gap-2">
               <button

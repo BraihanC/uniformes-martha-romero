@@ -72,7 +72,7 @@ const Apartados = () => {
   const [selectedProductos, setSelectedProductos] = useState([]);
   const [tallasSeleccionadas, setTallasSeleccionadas] = useState({});
   const [plazoSeleccionado, setPlazoSeleccionado] = useState(30);
-  const [abonoInicial, setAbonoInicial] = useState('0');
+  const [abonoInicial, setAbonoInicial] = useState('');
   const [metodoPago, setMetodoPago] = useState('Efectivo');
   const [notasApartado, setNotasApartado] = useState('');
 

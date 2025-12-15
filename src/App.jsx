@@ -114,17 +114,17 @@ function App() {
                   <Route path="proveedor" element={<EntradaProveedor />} />
                 </Route>
 
-                {/* Admin only routes */}
+                {/* Inventory - Vendedor puede ver (solo lectura), Admin puede modificar */}
                 <Route
                   path="inventory"
                   element={
-                    <PrivateRoute requireAdmin>
+                    <PrivateRoute>
                       <Inventory />
                     </PrivateRoute>
                   }
                 />
 
-                {/* Reportes - Accesible para vendedor (Cierre y Facturas) y admin (todos) */}
+                {/* Reportes - Accesible para vendedor (Cierre, Facturas y Corte) y admin (todos) */}
                 <Route path="reportes" element={<ReportesLayout />}>
                   {/* Ruta por defecto (cuando entras a /reportes) */}
                   <Route index element={<CierreCaja />} />
@@ -132,16 +132,9 @@ function App() {
                   {/* Rutas accesibles para vendedor y admin */}
                   <Route path="cierre" element={<CierreCaja />} />
                   <Route path="facturas" element={<BuscadorFacturas />} />
+                  <Route path="corte" element={<ReporteCorte />} />
 
                   {/* Rutas solo para admin */}
-                  <Route
-                    path="corte"
-                    element={
-                      <PrivateRoute requireAdmin>
-                        <ReporteCorte />
-                      </PrivateRoute>
-                    }
-                  />
                   <Route
                     path="cuentas-por-pagar"
                     element={
