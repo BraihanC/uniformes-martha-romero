@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { Search, Printer, FileText, Edit2, X, CreditCard } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 
 // (Copia de la función de POS.jsx)
 const formatCurrency = (value) => {
@@ -26,6 +27,7 @@ const formatCurrency = (value) => {
 };
 
 const BuscadorFacturas = () => {
+  const { isAdmin } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [todasFacturas, setTodasFacturas] = useState([]);
   const [facturasEncontradas, setFacturasEncontradas] = useState([]);
@@ -1161,7 +1163,7 @@ const BuscadorFacturas = () => {
                       <th className="text-left py-1">Producto</th>
                       <th className="text-center">Cant</th>
                       <th className="text-right">Total</th>
-                      <th className="text-center no-print">Acción</th>
+                      {isAdmin && <th className="text-center no-print">Acción</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -1187,34 +1189,36 @@ const BuscadorFacturas = () => {
                         <td className={`text-right ${item.anulado ? 'text-gray-400 line-through' : ''}`}>
                           {item.anulado ? '[ANULADO]' : `$${(item.subtotal || 0).toLocaleString('es-CO')}`}
                         </td>
-                        <td className="text-center no-print">
-                          {!item.anulado ? (
-                            <div className="flex gap-1 justify-center">
+                        {isAdmin && (
+                          <td className="text-center no-print">
+                            {!item.anulado ? (
+                              <div className="flex gap-1 justify-center">
+                                <button
+                                  onClick={() => handleOpenCorreccionModal(index)}
+                                  className="px-2 py-1 bg-blue-500 text-white text-[10px] rounded hover:bg-blue-600"
+                                  title="Corregir producto"
+                                >
+                                  <Edit2 size={12} className="inline" />
+                                </button>
+                                <button
+                                  onClick={() => handleOpenAnularProducto(index)}
+                                  className="px-2 py-1 bg-red-500 text-white text-[10px] rounded hover:bg-red-600"
+                                  title="Anular producto"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ) : (
                               <button
-                                onClick={() => handleOpenCorreccionModal(index)}
-                                className="px-2 py-1 bg-blue-500 text-white text-[10px] rounded hover:bg-blue-600"
-                                title="Corregir producto"
+                                onClick={() => handleRestaurarProducto(index)}
+                                className="px-2 py-1 bg-green-500 text-white text-[10px] rounded hover:bg-green-600"
+                                title="Restaurar producto"
                               >
-                                <Edit2 size={12} className="inline" />
+                                ↻
                               </button>
-                              <button
-                                onClick={() => handleOpenAnularProducto(index)}
-                                className="px-2 py-1 bg-red-500 text-white text-[10px] rounded hover:bg-red-600"
-                                title="Anular producto"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => handleRestaurarProducto(index)}
-                              className="px-2 py-1 bg-green-500 text-white text-[10px] rounded hover:bg-green-600"
-                              title="Restaurar producto"
-                            >
-                              ↻
-                            </button>
-                          )}
-                        </td>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>

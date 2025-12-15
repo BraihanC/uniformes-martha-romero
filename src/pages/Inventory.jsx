@@ -2,8 +2,10 @@ import { useState, useEffect, useRef } from 'react';
 import { db } from '../services/firebase';
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, writeBatch, serverTimestamp } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
+import { useAuth } from '../context/AuthContext';
 
 const Inventory = () => {
+  const { isAdmin } = useAuth();
   const [products, setProducts] = useState([]);
   const [filteredProducts, setFilteredProducts] = useState([]);
   const [colegios, setColegios] = useState([]);
@@ -553,34 +555,36 @@ const Inventory = () => {
           <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Inventario</h1>
           <p className="text-gray-600 mt-1">Gestión de productos y stock</p>
         </div>
-        <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
-          <button
-            onClick={handlePriceUpdateClick}
-            disabled={loading}
-            style={{ backgroundColor: '#C5D6EF', color: '#1F2937' }}
-            className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <span className="hidden sm:inline">Actualizar Precios</span>
-            <span className="sm:hidden">Precios</span>
-          </button>
-          <button
-            onClick={handleImportClick}
-            disabled={loading}
-            style={{ backgroundColor: '#EA5C2E' }}
-            className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <span className="hidden sm:inline">Importar Inventario</span>
-            <span className="sm:hidden">Importar</span>
-          </button>
-          <button
-            onClick={handleOpenModal}
-            style={{ backgroundColor: '#D50565' }}
-            className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base text-white font-medium rounded-lg hover:opacity-90 transition-opacity"
-          >
-            <span className="hidden sm:inline">+ Añadir Nuevo Producto</span>
-            <span className="sm:hidden">+ Añadir</span>
-          </button>
-        </div>
+        {isAdmin && (
+          <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+            <button
+              onClick={handlePriceUpdateClick}
+              disabled={loading}
+              style={{ backgroundColor: '#C5D6EF', color: '#1F2937' }}
+              className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span className="hidden sm:inline">Actualizar Precios</span>
+              <span className="sm:hidden">Precios</span>
+            </button>
+            <button
+              onClick={handleImportClick}
+              disabled={loading}
+              style={{ backgroundColor: '#EA5C2E' }}
+              className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <span className="hidden sm:inline">Importar Inventario</span>
+              <span className="sm:hidden">Importar</span>
+            </button>
+            <button
+              onClick={handleOpenModal}
+              style={{ backgroundColor: '#D50565' }}
+              className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base text-white font-medium rounded-lg hover:opacity-90 transition-opacity"
+            >
+              <span className="hidden sm:inline">+ Añadir Nuevo Producto</span>
+              <span className="sm:hidden">+ Añadir</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Input file oculto para importar Excel */}
@@ -774,23 +778,25 @@ const Inventory = () => {
                         </div>
                       </div>
 
-                      {/* Botones de acción */}
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handleEdit(product)}
-                          disabled={loading}
-                          className="flex-1 px-3 py-2 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 transition-colors disabled:opacity-50"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          onClick={() => handleDelete(product.id, product.nombre)}
-                          disabled={loading}
-                          className="flex-1 px-3 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600 transition-colors disabled:opacity-50"
-                        >
-                          Eliminar
-                        </button>
-                      </div>
+                      {/* Botones de acción - Solo Admin */}
+                      {isAdmin && (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleEdit(product)}
+                            disabled={loading}
+                            className="flex-1 px-3 py-2 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 transition-colors disabled:opacity-50"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            onClick={() => handleDelete(product.id, product.nombre)}
+                            disabled={loading}
+                            className="flex-1 px-3 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600 transition-colors disabled:opacity-50"
+                          >
+                            Eliminar
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 });
@@ -832,9 +838,11 @@ const Inventory = () => {
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Stock Total
                     </th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Acciones
-                    </th>
+                    {isAdmin && (
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Acciones
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -890,22 +898,24 @@ const Inventory = () => {
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 font-medium">
                         {product.stockTotal}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-right text-sm space-x-2">
-                        <button
-                          onClick={() => handleEdit(product)}
-                          disabled={loading}
-                          className="px-3 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors disabled:opacity-50"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          onClick={() => handleDelete(product.id, product.nombre)}
-                          disabled={loading}
-                          className="px-3 py-1.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors disabled:opacity-50"
-                        >
-                          Eliminar
-                        </button>
-                      </td>
+                      {isAdmin && (
+                        <td className="px-4 py-3 whitespace-nowrap text-right text-sm space-x-2">
+                          <button
+                            onClick={() => handleEdit(product)}
+                            disabled={loading}
+                            className="px-3 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors disabled:opacity-50"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            onClick={() => handleDelete(product.id, product.nombre)}
+                            disabled={loading}
+                            className="px-3 py-1.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors disabled:opacity-50"
+                          >
+                            Eliminar
+                          </button>
+                        </td>
+                      )}
                         </tr>
                       );
                     });
