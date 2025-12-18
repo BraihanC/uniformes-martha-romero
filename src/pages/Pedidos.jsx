@@ -274,6 +274,30 @@ const Pedidos = () => {
     setClientSearchResults(filtered);
   }, [clientSearchTerm, allClients]);
 
+  // Función para ordenar productos por talla
+  const ordenarPorTalla = (productos) => {
+    const ordenTallas = {
+      '4': 1, '6': 2, '8': 3, '10': 4, '12': 5, '14': 6, '16': 7,
+      'S': 8, 'M': 9, 'L': 10, 'XL': 11, 'XXL': 12,
+      'SX': 8, 'XS': 8
+    };
+
+    return [...productos].sort((a, b) => {
+      const tallaA = (a.talla || '').toUpperCase().trim();
+      const tallaB = (b.talla || '').toUpperCase().trim();
+
+      const ordenA = ordenTallas[tallaA] || 999;
+      const ordenB = ordenTallas[tallaB] || 999;
+
+      if (ordenA !== ordenB) {
+        return ordenA - ordenB;
+      }
+
+      // Si tienen el mismo orden, ordenar alfabéticamente
+      return tallaA.localeCompare(tallaB);
+    });
+  };
+
   // Búsqueda de productos en tiempo real
   useEffect(() => {
     if (!productSearchTerm.trim()) {
@@ -282,14 +306,30 @@ const Pedidos = () => {
     }
 
     const searchLower = productSearchTerm.toLowerCase();
-    const filtered = allProducts.filter(product => {
+    let filtered = allProducts.filter(product => {
       const nombreMatch = product.nombre?.toLowerCase().includes(searchLower);
       const referenciaMatch = product.referencia?.toLowerCase().includes(searchLower);
-      return nombreMatch || referenciaMatch;
+      const textMatch = nombreMatch || referenciaMatch;
+
+      // Si hay un colegio seleccionado, filtrar por colegio
+      if (selectedColegioId && selectedColegioId !== 'GENERAL') {
+        // Buscar el colegio seleccionado en la lista de colegios para obtener su código
+        const colegioSeleccionado = allColegios.find(c => c.id === selectedColegioId);
+        const codigoColegio = colegioSeleccionado?.codigo || selectedColegioId;
+
+        // Comparar el código del colegio con el campo colegio del producto
+        const colegioMatch = product.colegio === codigoColegio;
+        return textMatch && colegioMatch;
+      }
+
+      return textMatch;
     });
 
+    // Ordenar por talla
+    filtered = ordenarPorTalla(filtered);
+
     setProductSearchResults(filtered);
-  }, [productSearchTerm, allProducts]);
+  }, [productSearchTerm, allProducts, selectedColegioId, allColegios]);
 
   // Funciones para el formulario de creación
   const handleSelectClient = (client) => {
@@ -1038,7 +1078,7 @@ const Pedidos = () => {
           detalleCorreccion: {
             productoAnterior: itemActual.nombre || itemActual.productoNombre,
             cantidadAnterior: cantidadAnterior,
-            subtotalAnterior: itemActual.subtotal,
+            subtotalAnterior: itemActual.subtotal || 0,
             productoNuevo: productoParaUsar.nombre,
             cantidadNueva: cantidadNueva,
             subtotalNuevo: subtotalNuevo,
@@ -1175,8 +1215,8 @@ const Pedidos = () => {
           productoAnulado: {
             nombre: itemToAnular.nombre,
             cantidad: itemToAnular.cantidad,
-            precio: itemToAnular.precio,
-            subtotal: itemToAnular.subtotal
+            precio: itemToAnular.precio || 0,
+            subtotal: itemToAnular.subtotal || 0
           },
           fecha: serverTimestamp(),
           userId: currentUser.uid

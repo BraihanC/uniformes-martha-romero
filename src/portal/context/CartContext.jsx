@@ -49,12 +49,12 @@ export const CartProvider = ({ children }) => {
       } else {
         // Si no existe, agregar nuevo item
         return [...prevItems, {
-          id: producto.id,
-          codigo: producto.codigo,
-          descripcion: producto.descripcion,
-          talla: producto.talla,
-          precio: producto.precio,
-          cantidad: cantidad,
+          id: producto.id || '',
+          codigo: producto.codigo || '',
+          descripcion: producto.descripcion || '',
+          talla: producto.talla || '',
+          precio: producto.precio || 0,
+          cantidad: cantidad || 0,
           tipo: producto.tipo || '',
           categoria: producto.categoria || ''
         }];

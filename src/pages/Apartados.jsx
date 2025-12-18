@@ -250,6 +250,30 @@ const Apartados = () => {
     return colors[estado] || 'bg-gray-100 text-gray-800';
   };
 
+  // Función para ordenar productos por talla
+  const ordenarPorTalla = (productos) => {
+    const ordenTallas = {
+      '4': 1, '6': 2, '8': 3, '10': 4, '12': 5, '14': 6, '16': 7,
+      'XS': 8, 'S': 9, 'M': 10, 'L': 11, 'XL': 12, 'XXL': 13,
+      'SX': 8
+    };
+
+    return [...productos].sort((a, b) => {
+      const tallaA = (a.talla || '').toUpperCase().trim();
+      const tallaB = (b.talla || '').toUpperCase().trim();
+
+      const ordenA = ordenTallas[tallaA] || 999;
+      const ordenB = ordenTallas[tallaB] || 999;
+
+      if (ordenA !== ordenB) {
+        return ordenA - ordenB;
+      }
+
+      // Si tienen el mismo orden, ordenar alfabéticamente
+      return tallaA.localeCompare(tallaB);
+    });
+  };
+
   // Filtrar clientes
   const clientesFiltrados = clientes.filter(cliente => {
     const searchLower = searchCliente.toLowerCase();
@@ -263,12 +287,14 @@ const Apartados = () => {
   });
 
   // Filtrar productos
-  const productosFiltrados = productos.filter(producto => {
-    const stockDisponible = (producto.stockTotal || 0) - (producto.stockReservadoApartados || 0);
-    const matchSearch = producto.nombre?.toLowerCase().includes(searchProducto.toLowerCase()) ||
-                       producto.referencia?.toLowerCase().includes(searchProducto.toLowerCase());
-    return matchSearch && stockDisponible > 0;
-  });
+  const productosFiltrados = ordenarPorTalla(
+    productos.filter(producto => {
+      const stockDisponible = (producto.stockTotal || 0) - (producto.stockReservadoApartados || 0);
+      const matchSearch = producto.nombre?.toLowerCase().includes(searchProducto.toLowerCase()) ||
+                         producto.referencia?.toLowerCase().includes(searchProducto.toLowerCase());
+      return matchSearch && stockDisponible > 0;
+    })
+  );
 
   // Agregar producto al apartado
   const agregarProducto = (producto) => {
@@ -918,8 +944,8 @@ const Apartados = () => {
             productoAnterior: {
               nombre: itemActual.nombre,
               cantidad: cantidadAnterior,
-              precio: itemActual.precio,
-              subtotal: itemActual.subtotal
+              precio: itemActual.precio || 0,
+              subtotal: itemActual.subtotal || 0
             },
             productoNuevo: {
               nombre: productoParaUsar.nombre,
@@ -1067,8 +1093,8 @@ const Apartados = () => {
           productoAnulado: {
             nombre: itemToAnular.nombre,
             cantidad: itemToAnular.cantidad,
-            precio: itemToAnular.precio,
-            subtotal: itemToAnular.subtotal
+            precio: itemToAnular.precio || 0,
+            subtotal: itemToAnular.subtotal || 0
           },
           fecha: serverTimestamp(),
           userId: currentUser.email || 'Admin'
@@ -3216,8 +3242,8 @@ const Apartados = () => {
             {/* Lista de productos filtrados */}
             {searchProductoCorreccion && (
               <div className="mb-4 border border-gray-300 rounded-lg max-h-60 overflow-y-auto">
-                {productos
-                  .filter(p => {
+                {ordenarPorTalla(
+                  productos.filter(p => {
                     const searchLower = searchProductoCorreccion.toLowerCase();
                     return (
                       p.nombre?.toLowerCase().includes(searchLower) ||
@@ -3225,7 +3251,7 @@ const Apartados = () => {
                       p.talla?.toLowerCase().includes(searchLower)
                     );
                   })
-                  .map(producto => (
+                ).map(producto => (
                     <div
                       key={producto.id}
                       onClick={() => {

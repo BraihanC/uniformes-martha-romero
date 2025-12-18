@@ -37,6 +37,7 @@ import Catalogo from './portal/pages/Catalogo';
 import CrearPedido from './portal/pages/CrearPedido';
 import MisPedidos from './portal/pages/MisPedidos';
 import ReportarImperfecto from './portal/pages/ReportarImperfecto';
+import CambiarContrasena from './portal/pages/CambiarContrasena';
 
 function App() {
   return (
@@ -66,6 +67,7 @@ function App() {
                     <Route path="crear-pedido" element={<CrearPedido />} />
                     <Route path="mis-pedidos" element={<MisPedidos />} />
                     <Route path="reportar-imperfecto" element={<ReportarImperfecto />} />
+                    <Route path="cambiar-contrasena" element={<CambiarContrasena />} />
                   </Route>
 
                   {/* Catch all portal - redirect to dashboard */}

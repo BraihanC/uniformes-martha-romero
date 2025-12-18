@@ -12,7 +12,8 @@ import {
   X,
   User,
   Bell,
-  LayoutDashboard
+  LayoutDashboard,
+  Settings
 } from 'lucide-react';
 
 const PortalLayout = () => {
@@ -20,25 +21,30 @@ const PortalLayout = () => {
   const { notificaciones, noLeidas, marcarComoLeida, marcarTodasComoLeidas } = useNotificaciones();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notificacionesOpen, setNotificacionesOpen] = useState(false);
+  const [perfilOpen, setPerfilOpen] = useState(false);
   const navigate = useNavigate();
   const notificacionesRef = useRef(null);
+  const perfilRef = useRef(null);
 
-  // Cerrar dropdown al hacer click fuera
+  // Cerrar dropdowns al hacer click fuera
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (notificacionesRef.current && !notificacionesRef.current.contains(event.target)) {
         setNotificacionesOpen(false);
       }
+      if (perfilRef.current && !perfilRef.current.contains(event.target)) {
+        setPerfilOpen(false);
+      }
     };
 
-    if (notificacionesOpen) {
+    if (notificacionesOpen || perfilOpen) {
       document.addEventListener('mousedown', handleClickOutside);
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [notificacionesOpen]);
+  }, [notificacionesOpen, perfilOpen]);
 
   const handleLogout = async () => {
     if (window.confirm('¿Seguro que deseas cerrar sesión?')) {
@@ -189,19 +195,88 @@ const PortalLayout = () => {
                 )}
               </div>
 
-              <div className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-lg">
-                <User size={18} className="text-gray-600" />
-                <span className="text-sm font-medium text-gray-700">
-                  {clienteCorporativo?.contacto || 'Usuario'}
-                </span>
+              {/* Dropdown de Perfil */}
+              <div className="relative" ref={perfilRef}>
+                <button
+                  onClick={() => setPerfilOpen(!perfilOpen)}
+                  className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                >
+                  <User size={18} className="text-gray-600" />
+                  <span className="text-sm font-medium text-gray-700">
+                    {clienteCorporativo?.contacto || 'Usuario'}
+                  </span>
+                </button>
+
+                {/* Dropdown Menu */}
+                {perfilOpen && (
+                  <div className="absolute right-0 mt-2 w-72 bg-white rounded-lg shadow-xl border border-gray-200 z-50">
+                    {/* Información del Perfil */}
+                    <div className="p-4 border-b border-gray-200">
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg" style={{ backgroundColor: '#D50565' }}>
+                          {(clienteCorporativo?.contacto || 'U').charAt(0).toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-gray-900 truncate">
+                            {clienteCorporativo?.contacto || 'Usuario'}
+                          </p>
+                          <p className="text-xs text-gray-500 truncate">
+                            {clienteCorporativo?.nombre || 'Institución'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Datos del Perfil */}
+                      <div className="space-y-2 text-sm">
+                        <div>
+                          <span className="text-gray-500">Email:</span>
+                          <p className="font-medium text-gray-900 truncate">
+                            {clienteCorporativo?.credenciales?.email || 'No disponible'}
+                          </p>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Código:</span>
+                          <p className="font-medium text-gray-900">
+                            {clienteCorporativo?.codigoColegio || 'N/A'}
+                          </p>
+                        </div>
+                        {clienteCorporativo?.telefono && (
+                          <div>
+                            <span className="text-gray-500">Teléfono:</span>
+                            <p className="font-medium text-gray-900">
+                              {clienteCorporativo.telefono}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Opciones */}
+                    <div className="py-2">
+                      <button
+                        onClick={() => {
+                          setPerfilOpen(false);
+                          navigate('/portal/cambiar-contrasena');
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        <Settings size={16} />
+                        <span>Cambiar Contraseña</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setPerfilOpen(false);
+                          handleLogout();
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                      >
+                        <LogOut size={16} />
+                        <span>Cerrar Sesión</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-              <button
-                onClick={handleLogout}
-                className="flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors"
-              >
-                <LogOut size={18} />
-                <span>Salir</span>
-              </button>
             </div>
 
             {/* Mobile Menu Button */}
@@ -218,12 +293,34 @@ const PortalLayout = () => {
         {menuOpen && (
           <div className="md:hidden border-t border-gray-200 bg-white">
             <div className="px-4 py-4 space-y-2">
-              {/* User Info Mobile */}
-              <div className="flex items-center gap-2 px-4 py-3 bg-gray-50 rounded-lg mb-4">
-                <User size={18} className="text-gray-600" />
-                <span className="text-sm font-medium text-gray-700">
-                  {clienteCorporativo?.contacto || 'Usuario'}
-                </span>
+              {/* Perfil Mobile */}
+              <div className="bg-gradient-to-r from-pink-50 to-purple-50 rounded-lg p-4 mb-4">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg" style={{ backgroundColor: '#D50565' }}>
+                    {(clienteCorporativo?.contacto || 'U').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-gray-900 truncate">
+                      {clienteCorporativo?.contacto || 'Usuario'}
+                    </p>
+                    <p className="text-xs text-gray-600 truncate">
+                      {clienteCorporativo?.nombre || 'Institución'}
+                    </p>
+                  </div>
+                </div>
+                <div className="space-y-1 text-xs text-gray-600">
+                  <p className="truncate">
+                    <span className="font-medium">Email:</span> {clienteCorporativo?.credenciales?.email || 'No disponible'}
+                  </p>
+                  <p>
+                    <span className="font-medium">Código:</span> {clienteCorporativo?.codigoColegio || 'N/A'}
+                  </p>
+                  {clienteCorporativo?.telefono && (
+                    <p>
+                      <span className="font-medium">Tel:</span> {clienteCorporativo.telefono}
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Notificaciones Mobile */}
@@ -265,6 +362,18 @@ const PortalLayout = () => {
                   <span className="font-medium">{item.label}</span>
                 </NavLink>
               ))}
+
+              {/* Opciones de Perfil Mobile */}
+              <button
+                onClick={() => {
+                  setMenuOpen(false);
+                  navigate('/portal/cambiar-contrasena');
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <Settings size={20} />
+                <span className="font-medium">Cambiar Contraseña</span>
+              </button>
 
               {/* Logout Mobile */}
               <button

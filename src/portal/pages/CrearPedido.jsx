@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { usePortalAuth } from '../context/PortalAuthContext';
 import { useCart } from '../context/CartContext';
 import { db } from '../../services/firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { ShoppingBag, Package, ArrowLeft, Send } from 'lucide-react';
 
 const CrearPedido = () => {
@@ -34,21 +34,39 @@ const CrearPedido = () => {
 
     setLoading(true);
     try {
+      // Obtener el número de pedido consecutivo
+      const q = query(collection(db, 'pedidos_b2b'), orderBy('numeroPedido', 'desc'), limit(1));
+      const snapshot = await getDocs(q);
+      let nextNumero = 1;
+      if (!snapshot.empty) {
+        const lastPedido = snapshot.docs[0].data();
+        nextNumero = (lastPedido.numeroPedido || 0) + 1;
+      }
+
       // Crear el pedido en Firestore
       const pedidoData = {
-        clienteId: clienteCorporativo.id,
-        clienteNombre: clienteCorporativo.nombre,
-        codigoColegio: clienteCorporativo.codigoColegio,
+        numeroPedido: nextNumero,
+        clienteId: clienteCorporativo?.id || '',
+        clienteNombre: clienteCorporativo?.nombre || '',
+        codigoColegio: clienteCorporativo?.codigoColegio || '',
         productos: cartItems.map(item => ({
-          productoId: item.id,
-          codigo: item.codigo,
-          descripcion: item.descripcion,
-          talla: item.talla,
-          cantidad: item.cantidad,
-          precioUnitario: item.precio,
-          subtotal: item.precio * item.cantidad,
+          productoId: item.id || '',
+          codigo: item.codigo || '',
+          descripcion: item.descripcion || '',
+          talla: item.talla || '',
+          cantidad: item.cantidad || 0,
+          precioUnitario: item.precio || 0,
+          subtotal: (item.precio || 0) * (item.cantidad || 0),
           tipo: item.tipo || '',
-          categoria: item.categoria || ''
+          categoria: item.categoria || '',
+          // Control de producción y envío
+          cantidadAlistada: 0,
+          cantidadEnviada: 0,
+          cantidadRecibida: 0,
+          estadoProduccion: 'pendiente',
+          fechaAlistado: null,
+          fechaEnvio: null,
+          fechaRecepcion: null
         })),
         total: getTotalPrice(),
         notas: notas.trim(),
@@ -63,10 +81,11 @@ const CrearPedido = () => {
       await addDoc(collection(db, 'notificaciones_admin'), {
         tipo: 'nuevo_pedido_b2b',
         titulo: 'Nuevo Pedido B2B',
-        mensaje: `${clienteCorporativo.nombre} ha creado un pedido por ${formatCurrency(getTotalPrice())}`,
+        mensaje: `${clienteCorporativo?.nombre || 'Cliente'} ha creado el pedido #${String(nextNumero).padStart(4, '0')} por ${formatCurrency(getTotalPrice())}`,
         leida: false,
-        pedidoId: pedidoRef.id,
-        clienteNombre: clienteCorporativo.nombre,
+        pedidoId: pedidoRef.id || '',
+        numeroPedido: nextNumero,
+        clienteNombre: clienteCorporativo?.nombre || '',
         createdAt: serverTimestamp()
       });
 
@@ -74,7 +93,7 @@ const CrearPedido = () => {
       clearCart();
 
       // Mostrar mensaje de éxito
-      alert('¡Pedido creado exitosamente! El administrador será notificado.');
+      alert(`¡Pedido #${String(nextNumero).padStart(4, '0')} creado exitosamente! El administrador será notificado.`);
 
       // Redirigir a Mis Pedidos
       navigate('/portal/mis-pedidos');

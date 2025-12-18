@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { usePortalAuth } from '../context/PortalAuthContext';
 import { db } from '../../services/firebase';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
-import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard, Filter, Download, X, Search, FileSpreadsheet } from 'lucide-react';
+import { collection, query, where, getDocs, orderBy, doc, updateDoc, serverTimestamp, addDoc } from 'firebase/firestore';
+import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard, Filter, Download, X, Search, FileSpreadsheet, CheckCircle, AlertTriangle, ShoppingBag } from 'lucide-react';
 
 const MisPedidos = () => {
   const { clienteCorporativo } = usePortalAuth();
@@ -20,6 +20,12 @@ const MisPedidos = () => {
   const [montoMax, setMontoMax] = useState('');
   const [busqueda, setBusqueda] = useState('');
   const [ordenamiento, setOrdenamiento] = useState('fecha-desc');
+
+  // Estados para confirmación de recepción
+  const [showConfirmarRecepcionModal, setShowConfirmarRecepcionModal] = useState(false);
+  const [productoConfirmar, setProductoConfirmar] = useState(null);
+  const [cantidadRecibida, setCantidadRecibida] = useState('');
+  const [observaciones, setObservaciones] = useState('');
 
   useEffect(() => {
     if (clienteCorporativo) {
@@ -89,6 +95,10 @@ const MisPedidos = () => {
         return 'bg-yellow-100 text-yellow-800 border-yellow-300';
       case 'En Preparación':
         return 'bg-blue-100 text-blue-800 border-blue-300';
+      case 'Enviado Parcial':
+        return 'bg-orange-100 text-orange-800 border-orange-300';
+      case 'Enviado':
+        return 'bg-purple-100 text-purple-800 border-purple-300';
       case 'Despachado':
         return 'bg-purple-100 text-purple-800 border-purple-300';
       case 'Entregado':
@@ -138,6 +148,76 @@ const MisPedidos = () => {
     setOrdenamiento('fecha-desc');
   };
 
+  const handleConfirmarRecepcion = async () => {
+    const cantidad = parseInt(cantidadRecibida);
+    const cantidadEnviada = productoConfirmar.cantidadEnviada || 0;
+
+    if (!cantidad || cantidad <= 0) {
+      alert('Ingresa una cantidad válida');
+      return;
+    }
+
+    if (cantidad > cantidadEnviada) {
+      alert(`No puedes confirmar más de ${cantidadEnviada} unidades enviadas`);
+      return;
+    }
+
+    try {
+      const pedidoRef = doc(db, 'pedidos_b2b', productoConfirmar.pedidoId);
+
+      // Actualizar el producto específico
+      const pedido = pedidos.find(p => p.id === productoConfirmar.pedidoId);
+      const productosActualizados = pedido.productos.map((p, idx) => {
+        if (idx === productoConfirmar.index) {
+          const nuevaCantidadRecibida = (p.cantidadRecibida || 0) + cantidad;
+          return {
+            ...p,
+            cantidadRecibida: nuevaCantidadRecibida,
+            estadoProduccion: nuevaCantidadRecibida >= p.cantidad ? 'recibido' : p.estadoProduccion,
+            fechaRecepcion: new Date(),
+            observacionesRecepcion: observaciones.trim() || null
+          };
+        }
+        return p;
+      });
+
+      // Verificar si todos los productos fueron recibidos completamente
+      const todosRecibidos = productosActualizados.every(p =>
+        (p.cantidadRecibida || 0) >= p.cantidad
+      );
+
+      await updateDoc(pedidoRef, {
+        productos: productosActualizados,
+        estado: todosRecibidos ? 'Completado' : pedido.estado,
+        updatedAt: serverTimestamp()
+      });
+
+      // Crear notificación para admin si hay discrepancia
+      const discrepancia = cantidad < cantidadEnviada;
+      if (discrepancia || observaciones.trim()) {
+        await addDoc(collection(db, 'notificaciones_admin'), {
+          tipo: 'recepcion_producto',
+          titulo: discrepancia ? 'Discrepancia en Recepción' : 'Producto Recibido con Observaciones',
+          mensaje: `${clienteCorporativo.nombre} reporta recepción de ${productoConfirmar.descripcion}: ${cantidad}/${cantidadEnviada} unidades. ${observaciones.trim() ? 'Observaciones: ' + observaciones : ''}`,
+          leida: false,
+          pedidoId: productoConfirmar.pedidoId,
+          clienteId: clienteCorporativo.id,
+          createdAt: serverTimestamp()
+        });
+      }
+
+      alert(`Recepción confirmada: ${cantidad} unidad(es) de ${productoConfirmar.descripcion}`);
+      setShowConfirmarRecepcionModal(false);
+      setCantidadRecibida('');
+      setObservaciones('');
+      setProductoConfirmar(null);
+      fetchPedidos();
+    } catch (error) {
+      console.error('Error al confirmar recepción:', error);
+      alert('Error al confirmar recepción: ' + error.message);
+    }
+  };
+
   // Aplicar filtros y ordenamiento
   const pedidosFiltrados = useMemo(() => {
     let resultado = [...pedidos];
@@ -145,6 +225,7 @@ const MisPedidos = () => {
     // Filtro por búsqueda (número de pedido)
     if (busqueda.trim()) {
       resultado = resultado.filter(p =>
+        String(p.numeroPedido || '').includes(busqueda) ||
         p.id.toLowerCase().includes(busqueda.toLowerCase())
       );
     }
@@ -226,7 +307,7 @@ const MisPedidos = () => {
       const saldo = pedido.total - totalAbonado;
       const productos = pedido.productos?.map(p => `${p.descripcion} (${p.talla})`).join('; ') || '';
 
-      csv += `"#${pedido.id.slice(-6).toUpperCase()}",`;
+      csv += `"#${String(pedido.numeroPedido || 0).padStart(4, '0')}",`;
       csv += `"${formatDateShort(pedido.createdAt)}",`;
       csv += `"${pedido.estado}",`;
       csv += `"${calcularEstadoPago(pedido.total, pedido.abonos)}",`;
@@ -276,7 +357,7 @@ const MisPedidos = () => {
       const totalAbonado = calcularTotalAbonado(pedido.abonos);
       const saldo = pedido.total - totalAbonado;
 
-      contenido += `\nPedido: #${pedido.id.slice(-6).toUpperCase()}\n`;
+      contenido += `\nPedido: #${String(pedido.numeroPedido || 0).padStart(4, '0')}\n`;
       contenido += `Fecha: ${formatDate(pedido.createdAt)}\n`;
       contenido += `Estado: ${pedido.estado}\n`;
       contenido += `Total: ${formatCurrency(pedido.total)}\n`;
@@ -566,7 +647,7 @@ const MisPedidos = () => {
                   <div className="flex-1">
                     <div className="flex items-center gap-3 mb-2 flex-wrap">
                       <h3 className="text-lg font-bold text-gray-800">
-                        Pedido #{pedido.id.slice(-6).toUpperCase()}
+                        Pedido #{String(pedido.numeroPedido || 0).padStart(4, '0')}
                       </h3>
                       <span
                         className={`px-3 py-1 rounded-full text-xs font-semibold border ${getEstadoBadgeColor(
@@ -583,6 +664,14 @@ const MisPedidos = () => {
                         <CreditCard size={12} />
                         {calcularEstadoPago(pedido.total, pedido.abonos)}
                       </span>
+                      {pedido.origenPedido === 'tienda' && (
+                        <span
+                          className="px-3 py-1 rounded-full text-xs font-semibold border flex items-center gap-1 bg-indigo-100 text-indigo-800 border-indigo-300"
+                        >
+                          <ShoppingBag size={12} />
+                          Creado en Tienda
+                        </span>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm text-gray-600">
@@ -619,36 +708,104 @@ const MisPedidos = () => {
               {/* Detalles del Pedido (Expandible) */}
               {expandedPedido === pedido.id && (
                 <div className="border-t border-gray-200 bg-gray-50 p-6">
-                  {/* Productos */}
+                  {/* Productos con Estado de Envío */}
                   <div className="mb-6">
                     <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
                       <Package size={18} />
                       Productos
                     </h4>
-                    <div className="space-y-2">
-                      {pedido.productos?.map((producto, index) => (
-                        <div
-                          key={index}
-                          className="flex justify-between items-center bg-white p-3 rounded-lg border border-gray-200"
-                        >
-                          <div className="flex-1">
-                            <p className="font-medium text-gray-800">
-                              {producto.descripcion}
-                            </p>
-                            <p className="text-sm text-gray-500">
-                              Talla: {producto.talla} • Cantidad: {producto.cantidad}
-                            </p>
+                    <div className="space-y-3">
+                      {pedido.productos?.map((producto, index) => {
+                        const cantidadPedida = producto.cantidad || 0;
+                        const cantidadEnviada = producto.cantidadEnviada || 0;
+                        const cantidadRecibida = producto.cantidadRecibida || 0;
+                        const cantidadPendienteRecibir = cantidadEnviada - cantidadRecibida;
+                        const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+
+                        return (
+                          <div
+                            key={index}
+                            className="bg-white p-4 rounded-lg border border-gray-200"
+                          >
+                            {/* Header del Producto */}
+                            <div className="flex justify-between items-start mb-3">
+                              <div className="flex-1">
+                                <p className="font-semibold text-gray-800">
+                                  {producto.descripcion}
+                                </p>
+                                <p className="text-sm text-gray-500 mt-1">
+                                  Talla: {producto.talla} • Código: {producto.codigo}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="font-semibold text-gray-800">
+                                  {formatCurrency(producto.subtotal)}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {formatCurrency(producto.precioUnitario)} c/u
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Cantidades - Solo mostrar si hay productos enviados */}
+                            {cantidadEnviada > 0 && (
+                              <div className="grid grid-cols-3 gap-2 mb-3">
+                                <div className="bg-gray-50 rounded-lg p-2 text-center border">
+                                  <p className="text-xs text-gray-500">Pedidas</p>
+                                  <p className="text-base font-bold text-gray-800">{cantidadPedida}</p>
+                                </div>
+                                <div className="bg-purple-50 rounded-lg p-2 text-center border border-purple-200">
+                                  <p className="text-xs text-purple-600">Enviadas</p>
+                                  <p className="text-base font-bold text-purple-700">{cantidadEnviada}</p>
+                                </div>
+                                <div className="bg-green-50 rounded-lg p-2 text-center border border-green-200">
+                                  <p className="text-xs text-green-600">Recibidas</p>
+                                  <p className="text-base font-bold text-green-700">{cantidadRecibida}</p>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Alerta de discrepancia */}
+                            {hayDiscrepancia && producto.observacionesRecepcion && (
+                              <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2">
+                                <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0 mt-0.5" />
+                                <div className="text-xs text-yellow-800">
+                                  <p className="font-semibold">Observaciones:</p>
+                                  <p>{producto.observacionesRecepcion}</p>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Botón Confirmar Recepción */}
+                            {cantidadPendienteRecibir > 0 && (
+                              <button
+                                onClick={() => {
+                                  setProductoConfirmar({
+                                    ...producto,
+                                    index,
+                                    pedidoId: pedido.id
+                                  });
+                                  setCantidadRecibida(cantidadPendienteRecibir.toString());
+                                  setShowConfirmarRecepcionModal(true);
+                                }}
+                                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-white rounded-lg hover:opacity-90 transition-colors"
+                                style={{ backgroundColor: '#D50565' }}
+                              >
+                                <CheckCircle size={16} />
+                                Confirmar Recepción ({cantidadPendienteRecibir} unidad{cantidadPendienteRecibir !== 1 ? 'es' : ''})
+                              </button>
+                            )}
+
+                            {/* Badge de producto completamente recibido */}
+                            {cantidadRecibida >= cantidadPedida && cantidadRecibida > 0 && (
+                              <div className="flex items-center justify-center gap-2 text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg py-2">
+                                <CheckCircle size={14} />
+                                Producto completamente recibido
+                              </div>
+                            )}
                           </div>
-                          <div className="text-right">
-                            <p className="font-semibold text-gray-800">
-                              {formatCurrency(producto.subtotal)}
-                            </p>
-                            <p className="text-xs text-gray-500">
-                              {formatCurrency(producto.precioUnitario)} c/u
-                            </p>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -740,6 +897,136 @@ const MisPedidos = () => {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Modal Confirmar Recepción */}
+      {showConfirmarRecepcionModal && productoConfirmar && (
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+            <div className="bg-white border-b px-4 md:px-6 py-4 flex justify-between items-center rounded-t-lg">
+              <h2 className="text-lg md:text-xl font-bold text-gray-800">Confirmar Recepción</h2>
+              <button
+                onClick={() => {
+                  setShowConfirmarRecepcionModal(false);
+                  setCantidadRecibida('');
+                  setObservaciones('');
+                  setProductoConfirmar(null);
+                }}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 md:p-6 space-y-4">
+              {/* Info del Producto */}
+              <div className="bg-gray-50 p-3 rounded-lg">
+                <p className="text-sm font-semibold text-gray-800 mb-2">
+                  {productoConfirmar.descripcion}
+                </p>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-gray-600">Talla:</span>
+                    <span className="ml-2 font-medium">{productoConfirmar.talla}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Código:</span>
+                    <span className="ml-2 font-medium">{productoConfirmar.codigo}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Estado Actual */}
+              <div className="bg-purple-50 border border-purple-200 p-3 rounded-lg">
+                <h4 className="font-semibold text-purple-900 mb-2 text-sm">Estado de Envío</h4>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div>
+                    <p className="text-gray-600">Pedidas</p>
+                    <p className="font-bold text-gray-800">{productoConfirmar.cantidad}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Enviadas</p>
+                    <p className="font-bold text-purple-700">{productoConfirmar.cantidadEnviada || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Ya Recibidas</p>
+                    <p className="font-bold text-green-700">{productoConfirmar.cantidadRecibida || 0}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cantidad Recibida */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Cantidad Recibida *
+                </label>
+                <input
+                  type="number"
+                  value={cantidadRecibida}
+                  onChange={(e) => setCantidadRecibida(e.target.value)}
+                  min="1"
+                  max={(productoConfirmar.cantidadEnviada || 0) - (productoConfirmar.cantidadRecibida || 0)}
+                  placeholder="0"
+                  className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Máximo: {(productoConfirmar.cantidadEnviada || 0) - (productoConfirmar.cantidadRecibida || 0)} unidades
+                </p>
+              </div>
+
+              {/* Observaciones */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Observaciones (opcional)
+                </label>
+                <textarea
+                  value={observaciones}
+                  onChange={(e) => setObservaciones(e.target.value)}
+                  placeholder="Ej: Productos recibidos en perfecto estado, alguna unidad con defecto, etc."
+                  rows={3}
+                  className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 resize-none"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Si hay alguna diferencia con lo enviado o problema con los productos, descríbelo aquí
+                </p>
+              </div>
+
+              {/* Advertencia de discrepancia */}
+              {parseInt(cantidadRecibida) > 0 &&
+               parseInt(cantidadRecibida) < ((productoConfirmar.cantidadEnviada || 0) - (productoConfirmar.cantidadRecibida || 0)) && (
+                <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2">
+                  <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0 mt-0.5" />
+                  <div className="text-xs text-yellow-800">
+                    <p className="font-semibold">Discrepancia detectada</p>
+                    <p>Estás reportando menos unidades de las enviadas. El administrador será notificado.</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Botones */}
+              <div className="flex flex-col sm:flex-row gap-3 pt-4">
+                <button
+                  onClick={() => {
+                    setShowConfirmarRecepcionModal(false);
+                    setCantidadRecibida('');
+                    setObservaciones('');
+                    setProductoConfirmar(null);
+                  }}
+                  className="w-full sm:flex-1 px-4 py-2 text-sm md:text-base bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleConfirmarRecepcion}
+                  className="w-full sm:flex-1 px-4 py-2 text-sm md:text-base text-white rounded-lg hover:opacity-90"
+                  style={{ backgroundColor: '#D50565' }}
+                >
+                  Confirmar Recepción
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -31,15 +31,21 @@ const ReportarImperfecto = () => {
       const q = query(
         pedidosRef,
         where('clienteId', '==', clienteCorporativo.id),
-        where('estado', '==', 'Entregado'),
         orderBy('createdAt', 'desc')
       );
 
       const querySnapshot = await getDocs(q);
-      const pedidosData = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+
+      // Filtrar pedidos que tengan al menos un producto recibido
+      const pedidosData = querySnapshot.docs
+        .map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }))
+        .filter(pedido => {
+          // Solo incluir pedidos que tengan productos con cantidadRecibida > 0
+          return pedido.productos?.some(p => (p.cantidadRecibida || 0) > 0);
+        });
 
       setPedidos(pedidosData);
     } catch (error) {
@@ -152,7 +158,8 @@ const ReportarImperfecto = () => {
       contenido += `PRODUCTO:\n`;
       contenido += `  - Descripción: ${reporte.producto.descripcion}\n`;
       contenido += `  - Talla: ${reporte.producto.talla}\n`;
-      contenido += `  - Cantidad Total: ${reporte.producto.cantidadTotal}\n`;
+      contenido += `  - Cantidad Total Pedido: ${reporte.producto.cantidadTotal}\n`;
+      contenido += `  - Cantidad Recibida: ${reporte.producto.cantidadRecibida || reporte.producto.cantidadTotal}\n`;
       contenido += `  - Cantidad Defectuosa: ${reporte.producto.cantidadDefectuosa}\n`;
       contenido += `  - Precio Unitario: ${formatCurrency(reporte.producto.precioUnitario)}\n`;
       contenido += `\n`;
@@ -194,8 +201,9 @@ const ReportarImperfecto = () => {
       return;
     }
 
-    if (cantidadDefectuosa < 1 || cantidadDefectuosa > selectedProducto.cantidad) {
-      alert('La cantidad defectuosa debe ser entre 1 y ' + selectedProducto.cantidad);
+    const maxCantidad = selectedProducto.cantidadRecibida || selectedProducto.cantidad;
+    if (cantidadDefectuosa < 1 || cantidadDefectuosa > maxCantidad) {
+      alert('La cantidad defectuosa debe ser entre 1 y ' + maxCantidad);
       return;
     }
 
@@ -209,7 +217,7 @@ const ReportarImperfecto = () => {
 
       const reporte = {
         pedidoId: selectedPedido.id,
-        pedidoNumero: selectedPedido.id.slice(-6).toUpperCase(),
+        pedidoNumero: selectedPedido.numeroPedido || selectedPedido.id.slice(-6).toUpperCase(),
         clienteId: clienteCorporativo.id,
         clienteNombre: clienteCorporativo.nombre,
         codigoColegio: clienteCorporativo.codigoColegio,
@@ -219,6 +227,7 @@ const ReportarImperfecto = () => {
           descripcion: selectedProducto.descripcion,
           talla: selectedProducto.talla,
           cantidadTotal: selectedProducto.cantidad,
+          cantidadRecibida: selectedProducto.cantidadRecibida || selectedProducto.cantidad,
           cantidadDefectuosa: cantidadDefectuosa,
           precioUnitario: selectedProducto.precioUnitario
         },
@@ -230,6 +239,18 @@ const ReportarImperfecto = () => {
       };
 
       await addDoc(collection(db, 'reportes_imperfectos'), reporte);
+
+      // Crear notificación para el administrador
+      await addDoc(collection(db, 'notificaciones_admin'), {
+        tipo: 'reporte_imperfecto',
+        titulo: 'Nuevo Reporte de Producto Imperfecto',
+        mensaje: `${clienteCorporativo.nombre} reporta ${cantidadDefectuosa} unidad(es) defectuosa(s) de "${selectedProducto.descripcion}" (Talla ${selectedProducto.talla}) del Pedido #${String(selectedPedido.numeroPedido || 0).padStart(4, '0')}`,
+        leida: false,
+        pedidoId: selectedPedido.id,
+        clienteId: clienteCorporativo.id,
+        reporteId: reporte.pedidoId,
+        createdAt: serverTimestamp()
+      });
 
       setSuccessMessage('Reporte enviado exitosamente. Nos pondremos en contacto contigo pronto.');
 
@@ -332,9 +353,9 @@ const ReportarImperfecto = () => {
               {pedidos.length === 0 ? (
                 <div className="bg-gray-50 border border-gray-200 rounded-lg p-6 text-center">
                   <Package size={48} className="mx-auto text-gray-300 mb-3" />
-                  <p className="text-gray-600">No tienes pedidos entregados</p>
+                  <p className="text-gray-600">No tienes productos recibidos</p>
                   <p className="text-gray-500 text-sm mt-1">
-                    Solo puedes reportar imperfecciones en pedidos que ya fueron entregados
+                    Solo puedes reportar imperfecciones en productos que ya hayas recibido
                   </p>
                 </div>
               ) : (
@@ -349,11 +370,15 @@ const ReportarImperfecto = () => {
                   required
                 >
                   <option value="">-- Selecciona un pedido --</option>
-                  {pedidos.map(pedido => (
-                    <option key={pedido.id} value={pedido.id}>
-                      Pedido #{pedido.id.slice(-6).toUpperCase()} - {formatDate(pedido.createdAt)} - {formatCurrency(pedido.total)}
-                    </option>
-                  ))}
+                  {pedidos.map(pedido => {
+                    const productosRecibidos = pedido.productos?.filter(p => (p.cantidadRecibida || 0) > 0).length || 0;
+                    const totalProductos = pedido.productos?.length || 0;
+                    return (
+                      <option key={pedido.id} value={pedido.id}>
+                        Pedido #{String(pedido.numeroPedido || 0).padStart(4, '0')} - {formatDate(pedido.createdAt)} - {pedido.estado} ({productosRecibidos}/{totalProductos} productos recibidos)
+                      </option>
+                    );
+                  })}
                 </select>
               )}
             </div>
@@ -364,23 +389,33 @@ const ReportarImperfecto = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Selecciona el Producto con Imperfección *
                 </label>
-                <select
-                  value={selectedProducto ? JSON.stringify(selectedProducto) : ''}
-                  onChange={(e) => {
-                    const producto = JSON.parse(e.target.value);
-                    setSelectedProducto(producto);
-                    setCantidadDefectuosa(1);
-                  }}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
-                  required
-                >
-                  <option value="">-- Selecciona un producto --</option>
-                  {selectedPedido.productos?.map((producto, index) => (
-                    <option key={index} value={JSON.stringify(producto)}>
-                      {producto.descripcion} - Talla {producto.talla} (Cantidad: {producto.cantidad})
-                    </option>
-                  ))}
-                </select>
+                {selectedPedido.productos?.filter(p => (p.cantidadRecibida || 0) > 0).length === 0 ? (
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    <p className="text-gray-600 text-sm">
+                      No hay productos recibidos en este pedido todavía
+                    </p>
+                  </div>
+                ) : (
+                  <select
+                    value={selectedProducto ? JSON.stringify(selectedProducto) : ''}
+                    onChange={(e) => {
+                      const producto = JSON.parse(e.target.value);
+                      setSelectedProducto(producto);
+                      setCantidadDefectuosa(1);
+                    }}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                    required
+                  >
+                    <option value="">-- Selecciona un producto --</option>
+                    {selectedPedido.productos
+                      ?.filter(p => (p.cantidadRecibida || 0) > 0)
+                      .map((producto, index) => (
+                        <option key={index} value={JSON.stringify(producto)}>
+                          {producto.descripcion} - Talla {producto.talla} (Recibidas: {producto.cantidadRecibida || 0})
+                        </option>
+                      ))}
+                  </select>
+                )}
               </div>
             )}
 
@@ -393,14 +428,14 @@ const ReportarImperfecto = () => {
                 <input
                   type="number"
                   min="1"
-                  max={selectedProducto.cantidad}
+                  max={selectedProducto.cantidadRecibida || selectedProducto.cantidad}
                   value={cantidadDefectuosa}
                   onChange={(e) => setCantidadDefectuosa(parseInt(e.target.value) || 1)}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
                   required
                 />
                 <p className="text-sm text-gray-500 mt-1">
-                  Máximo: {selectedProducto.cantidad} piezas
+                  Máximo: {selectedProducto.cantidadRecibida || selectedProducto.cantidad} piezas recibidas
                 </p>
               </div>
             )}
@@ -459,7 +494,8 @@ const ReportarImperfecto = () => {
               Información Importante
             </h3>
             <ul className="text-blue-700 text-sm space-y-1">
-              <li>• Solo puedes reportar imperfecciones en pedidos ya entregados</li>
+              <li>• Puedes reportar imperfecciones en productos que ya hayas recibido, incluso si el pedido está parcialmente entregado</li>
+              <li>• Solo verás los productos que ya confirmaste haber recibido</li>
               <li>• Revisaremos tu reporte y nos comunicaremos contigo lo antes posible</li>
               <li>• Guarda los productos con imperfecciones hasta que resolvamos el caso</li>
               <li>• Si es posible, toma fotos de las imperfecciones para futura referencia</li>
@@ -538,8 +574,12 @@ const ReportarImperfecto = () => {
                       <div>
                         <span className="text-gray-600">Cantidad Defectuosa:</span>
                         <p className="font-medium text-red-600">
-                          {reporte.producto.cantidadDefectuosa} de {reporte.producto.cantidadTotal}
+                          {reporte.producto.cantidadDefectuosa} de {reporte.producto.cantidadRecibida || reporte.producto.cantidadTotal} recibidas
                         </p>
+                      </div>
+                      <div>
+                        <span className="text-gray-600">Total Pedido:</span>
+                        <p className="font-medium text-gray-800">{reporte.producto.cantidadTotal}</p>
                       </div>
                     </div>
                   </div>
