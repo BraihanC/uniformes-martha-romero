@@ -859,20 +859,20 @@ const Apartados = () => {
       const apartadoRef = doc(db, 'apartados', selectedApartado.id);
 
       // Producto a usar (nuevo o el mismo)
-      const productoNuevoId = productoParaUsar.id || productoParaUsar.productoId;
-      const precioNuevo = productoParaUsar.precio;
-      const subtotalNuevo = precioNuevo * cantidadNueva;
+      const productoNuevoId = productoParaUsar.id || productoParaUsar.productoId || itemActual.productoId;
+      const precioNuevo = productoParaUsar.precio || 0;
+      const subtotalNuevo = (precioNuevo || 0) * (cantidadNueva || 0);
 
       // Crear copia de items actualizada
       const updatedItems = [...selectedApartado.items];
       updatedItems[itemIndexToCorrect] = {
-        productoId: productoNuevoId,
-        nombre: productoParaUsar.nombre,
-        referencia: productoParaUsar.referencia || '',
-        talla: productoParaUsar.talla || '',
-        precio: precioNuevo,
-        cantidad: cantidadNueva,
-        subtotal: subtotalNuevo
+        productoId: productoNuevoId || '',
+        nombre: productoParaUsar.nombre || '',
+        referencia: productoParaUsar.referencia || itemActual.referencia || '',
+        talla: productoParaUsar.talla || itemActual.talla || '',
+        precio: precioNuevo || 0,
+        cantidad: cantidadNueva || 0,
+        subtotal: subtotalNuevo || 0
       };
 
       // Recalcular total del apartado
@@ -910,14 +910,14 @@ const Apartados = () => {
       // Actualizar el apartado
       batch.update(apartadoRef, {
         items: updatedItems,
-        totalApartado: nuevoTotal,
-        saldoPendiente: nuevoSaldoPendiente,
+        totalApartado: nuevoTotal || 0,
+        saldoPendiente: nuevoSaldoPendiente || 0,
         correccion: {
           fecha: serverTimestamp(),
-          itemIndex: itemIndexToCorrect,
-          productoAnterior: `${itemActual.nombre} (${cantidadAnterior} unidades)`,
-          productoNuevo: `${productoParaUsar.nombre} (${cantidadNueva} unidades)`,
-          notas: notasCorreccion
+          itemIndex: itemIndexToCorrect || 0,
+          productoAnterior: `${itemActual.nombre || 'Producto'} (${cantidadAnterior || 0} unidades)`,
+          productoNuevo: `${productoParaUsar.nombre || 'Producto'} (${cantidadNueva || 0} unidades)`,
+          notas: notasCorreccion || ''
         },
         updatedAt: serverTimestamp()
       });
@@ -1042,11 +1042,17 @@ const Apartados = () => {
       // Marcar producto como anulado
       const updatedItems = [...selectedApartado.items];
       updatedItems[itemIndexToAnular] = {
-        ...itemToAnular,
+        productoId: itemToAnular.productoId || '',
+        nombre: itemToAnular.nombre || '',
+        referencia: itemToAnular.referencia || '',
+        talla: itemToAnular.talla || '',
+        precio: itemToAnular.precio || 0,
+        cantidad: itemToAnular.cantidad || 0,
+        subtotal: itemToAnular.subtotal || 0,
         anulado: true,
         anulacion: {
           fecha: serverTimestamp(),
-          motivo: motivoAnulacion,
+          motivo: motivoAnulacion || '',
           usuario: currentUser.email || 'Admin'
         }
       };
@@ -2312,14 +2318,14 @@ const Apartados = () => {
                               <div className="flex gap-2 justify-center">
                                 <button
                                   onClick={() => handleOpenCorreccionProducto(index)}
-                                  className="text-blue-600 hover:text-blue-800 text-sm underline"
+                                  className="px-3 py-1 bg-orange-500 text-white text-xs rounded hover:bg-orange-600 transition-colors"
                                   title="Corregir producto o cantidad"
                                 >
                                   Corregir
                                 </button>
                                 <button
                                   onClick={() => handleOpenAnularProducto(index)}
-                                  className="text-red-600 hover:text-red-800 text-sm underline"
+                                  className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition-colors"
                                   title="Anular este producto"
                                 >
                                   Anular
@@ -2328,7 +2334,7 @@ const Apartados = () => {
                             ) : (
                               <button
                                 onClick={() => handleRestaurarProducto(index)}
-                                className="text-green-600 hover:text-green-800 text-sm underline"
+                                className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition-colors"
                                 title="Restaurar producto anulado"
                               >
                                 Restaurar
@@ -3342,8 +3348,7 @@ const Apartados = () => {
               <button
                 onClick={handleCorregirProductoApartado}
                 disabled={corrigiendoProducto}
-                className="flex-1 px-4 py-2 text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
-                style={{ backgroundColor: '#D50565' }}
+                className="flex-1 px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-opacity disabled:opacity-50"
               >
                 {corrigiendoProducto ? 'Corrigiendo...' : 'Corregir Apartado'}
               </button>

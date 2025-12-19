@@ -1,15 +1,34 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePortalAuth } from '../context/PortalAuthContext';
+import { db } from '../../services/firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [logoUrl, setLogoUrl] = useState('');
 
   const { login } = usePortalAuth();
   const navigate = useNavigate();
+
+  // Cargar el logo de la empresa
+  useEffect(() => {
+    const fetchLogo = async () => {
+      try {
+        const docRef = doc(db, 'config', 'company');
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists() && docSnap.data().logoUrl) {
+          setLogoUrl(docSnap.data().logoUrl);
+        }
+      } catch (error) {
+        console.error('Error al cargar el logo:', error);
+      }
+    };
+    fetchLogo();
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -39,9 +58,19 @@ const Login = () => {
         {/* Logo y Título */}
         <div className="text-center mb-8">
           <div className="mb-6">
-            <h1 className="text-4xl font-bold text-gray-800 mb-2">
-              Uniformes Martha Romero
-            </h1>
+            {logoUrl ? (
+              <div className="flex items-center justify-center mb-4">
+                <img
+                  src={logoUrl}
+                  alt="Logo Martha Romero"
+                  className="w-full h-auto max-w-[280px] object-contain"
+                />
+              </div>
+            ) : (
+              <h1 className="text-4xl font-bold text-gray-800 mb-2">
+                Uniformes Martha Romero
+              </h1>
+            )}
             <p className="text-xl text-gray-600">Portal Corporativo</p>
           </div>
           <div className="w-20 h-1 mx-auto rounded-full" style={{ backgroundColor: '#D50565' }}></div>

@@ -77,6 +77,8 @@ const Header = () => {
     // Navigate to relevant page based on notification type
     if (notif.tipo === 'nuevo_pedido_b2b') {
       navigate('/pedidos-b2b');
+    } else if (notif.tipo === 'reporte_imperfecto') {
+      navigate('/reportes-imperfectos');
     }
   };
 

@@ -989,23 +989,22 @@ const Pedidos = () => {
       const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
 
       // Producto a usar (nuevo o el mismo)
-      const productoNuevoId = productoParaUsar.id || productoParaUsar.productoId;
-      const precioNuevo = productoParaUsar.precio;
-      const subtotalNuevo = precioNuevo * cantidadNueva;
+      const productoNuevoId = productoParaUsar.id || productoParaUsar.productoId || '';
+      const precioNuevo = productoParaUsar.precio || 0;
+      const subtotalNuevo = (precioNuevo || 0) * (cantidadNueva || 0);
 
       // Crear copia de items actualizada
       const updatedItems = [...selectedPedido.items];
       updatedItems[itemIndexToCorrect] = {
-        ...updatedItems[itemIndexToCorrect],
-        productoId: productoNuevoId,
-        productoNombre: productoParaUsar.nombre,
-        nombre: productoParaUsar.nombre,
+        productoId: productoNuevoId || '',
+        productoNombre: productoParaUsar.nombre || '',
+        nombre: productoParaUsar.nombre || '',
         productoRef: productoParaUsar.referencia || '',
         referencia: productoParaUsar.referencia || '',
         talla: productoParaUsar.talla || '',
-        precio: precioNuevo,
-        cantidad: cantidadNueva,
-        subtotal: subtotalNuevo,
+        precio: precioNuevo || 0,
+        cantidad: cantidadNueva || 0,
+        subtotal: subtotalNuevo || 0,
         categoria: productoParaUsar.categoria || ''
       };
 
@@ -1167,11 +1166,20 @@ const Pedidos = () => {
       // Marcar producto como anulado
       const updatedItems = [...selectedPedido.items];
       updatedItems[itemIndexToAnular] = {
-        ...itemToAnular,
+        productoId: itemToAnular.productoId || '',
+        productoNombre: itemToAnular.productoNombre || itemToAnular.nombre || '',
+        nombre: itemToAnular.nombre || itemToAnular.productoNombre || '',
+        productoRef: itemToAnular.productoRef || itemToAnular.referencia || '',
+        referencia: itemToAnular.referencia || itemToAnular.productoRef || '',
+        talla: itemToAnular.talla || '',
+        precio: itemToAnular.precio || 0,
+        cantidad: itemToAnular.cantidad || 0,
+        subtotal: itemToAnular.subtotal || 0,
+        categoria: itemToAnular.categoria || '',
         anulado: true,
         anulacion: {
           fecha: serverTimestamp(),
-          motivo: motivoAnulacion,
+          motivo: motivoAnulacion || '',
           usuario: currentUser.email || 'Admin'
         }
       };

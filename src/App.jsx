@@ -13,6 +13,7 @@ import Apartados from './pages/Apartados';
 import Devoluciones from './pages/Devoluciones';
 import Egresos from './pages/Egresos';
 import ProductosReparacion from './pages/ProductosReparacion';
+import ReportesImperfectos from './pages/ReportesImperfectos';
 import EntradasLayout from './pages/Entradas';
 import EntradaSatelite from './components/entradas/EntradaSatelite';
 import EntradaProveedor from './components/entradas/EntradaProveedor';
@@ -103,6 +104,7 @@ function App() {
                 <Route path="apartados" element={<Apartados />} />
                 <Route path="devoluciones" element={<Devoluciones />} />
                 <Route path="productos-reparacion" element={<ProductosReparacion />} />
+                <Route path="reportes-imperfectos" element={<ReportesImperfectos />} />
                 <Route path="egresos" element={<Egresos />} />
                 <Route path="perfil" element={<Perfil />} />
 

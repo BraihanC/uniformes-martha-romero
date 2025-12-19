@@ -143,7 +143,7 @@ const ReportarImperfecto = () => {
     }
 
     let contenido = `HISTORIAL DE REPORTES DE IMPERFECTOS\n`;
-    contenido += `${clienteCorporativo.nombre}\n`;
+    contenido += `${clienteCorporativo?.nombre || 'Cliente'}\n`;
     contenido += `Fecha de Exportación: ${new Date().toLocaleDateString('es-CO')}\n`;
     contenido += `\n`;
     contenido += `${'='.repeat(80)}\n`;
@@ -152,19 +152,19 @@ const ReportarImperfecto = () => {
       contenido += `\nREPORTE #${index + 1}\n`;
       contenido += `${'-'.repeat(80)}\n`;
       contenido += `Fecha: ${formatDate(reporte.createdAt)}\n`;
-      contenido += `Pedido: #${reporte.pedidoNumero}\n`;
-      contenido += `Estado: ${reporte.estado}\n`;
+      contenido += `Pedido: #${reporte.pedidoNumero || 'N/A'}\n`;
+      contenido += `Estado: ${reporte.estado || 'Pendiente'}\n`;
       contenido += `\n`;
       contenido += `PRODUCTO:\n`;
-      contenido += `  - Descripción: ${reporte.producto.descripcion}\n`;
-      contenido += `  - Talla: ${reporte.producto.talla}\n`;
-      contenido += `  - Cantidad Total Pedido: ${reporte.producto.cantidadTotal}\n`;
-      contenido += `  - Cantidad Recibida: ${reporte.producto.cantidadRecibida || reporte.producto.cantidadTotal}\n`;
-      contenido += `  - Cantidad Defectuosa: ${reporte.producto.cantidadDefectuosa}\n`;
-      contenido += `  - Precio Unitario: ${formatCurrency(reporte.producto.precioUnitario)}\n`;
+      contenido += `  - Descripción: ${reporte.producto?.descripcion || 'N/A'}\n`;
+      contenido += `  - Talla: ${reporte.producto?.talla || 'N/A'}\n`;
+      contenido += `  - Cantidad Total Pedido: ${reporte.producto?.cantidadTotal || 0}\n`;
+      contenido += `  - Cantidad Recibida: ${reporte.producto?.cantidadRecibida || reporte.producto?.cantidadTotal || 0}\n`;
+      contenido += `  - Cantidad Defectuosa: ${reporte.producto?.cantidadDefectuosa || 0}\n`;
+      contenido += `  - Precio Unitario: ${formatCurrency(reporte.producto?.precioUnitario || 0)}\n`;
       contenido += `\n`;
       contenido += `PROBLEMA REPORTADO:\n`;
-      contenido += `${reporte.descripcionProblema}\n`;
+      contenido += `${reporte.descripcionProblema || 'N/A'}\n`;
 
       if (reporte.resolucion) {
         contenido += `\n`;
@@ -186,7 +186,7 @@ const ReportarImperfecto = () => {
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
-    link.setAttribute('download', `reportes_imperfectos_${clienteCorporativo.nombre}_${new Date().toISOString().split('T')[0]}.txt`);
+    link.setAttribute('download', `reportes_imperfectos_${clienteCorporativo?.nombre || 'cliente'}_${new Date().toISOString().split('T')[0]}.txt`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -216,25 +216,25 @@ const ReportarImperfecto = () => {
       setSubmitting(true);
 
       const reporte = {
-        pedidoId: selectedPedido.id,
-        pedidoNumero: selectedPedido.numeroPedido || selectedPedido.id.slice(-6).toUpperCase(),
-        clienteId: clienteCorporativo.id,
-        clienteNombre: clienteCorporativo.nombre,
-        codigoColegio: clienteCorporativo.codigoColegio,
+        pedidoId: selectedPedido.id || '',
+        pedidoNumero: selectedPedido.numeroPedido || selectedPedido.id?.slice(-6).toUpperCase() || '0000',
+        clienteId: clienteCorporativo?.id || '',
+        clienteNombre: clienteCorporativo?.nombre || '',
+        codigoColegio: clienteCorporativo?.codigoColegio || '',
         producto: {
-          productoId: selectedProducto.productoId,
-          codigo: selectedProducto.codigo,
-          descripcion: selectedProducto.descripcion,
-          talla: selectedProducto.talla,
-          cantidadTotal: selectedProducto.cantidad,
-          cantidadRecibida: selectedProducto.cantidadRecibida || selectedProducto.cantidad,
-          cantidadDefectuosa: cantidadDefectuosa,
-          precioUnitario: selectedProducto.precioUnitario
+          productoId: selectedProducto.productoId || '',
+          codigo: selectedProducto.codigo || '',
+          descripcion: selectedProducto.descripcion || '',
+          talla: selectedProducto.talla || '',
+          cantidadTotal: selectedProducto.cantidad || 0,
+          cantidadRecibida: selectedProducto.cantidadRecibida || selectedProducto.cantidad || 0,
+          cantidadDefectuosa: cantidadDefectuosa || 0,
+          precioUnitario: selectedProducto.precioUnitario || 0
         },
-        descripcionProblema: descripcionProblema.trim(),
+        descripcionProblema: descripcionProblema.trim() || '',
         estado: 'Pendiente', // Pendiente, En Revisión, Aprobado, Rechazado
         createdAt: serverTimestamp(),
-        reportadoPor: user.email,
+        reportadoPor: user?.email || clienteCorporativo?.nombre || 'Usuario',
         resuelto: false
       };
 
@@ -542,15 +542,15 @@ const ReportarImperfecto = () => {
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-2 flex-wrap">
                         <h3 className="text-lg font-bold text-gray-800">
-                          Pedido #{reporte.pedidoNumero}
+                          Pedido #{reporte.pedidoNumero || 'N/A'}
                         </h3>
                         <span
                           className={`px-3 py-1 rounded-full text-xs font-semibold border flex items-center gap-1 ${getEstadoColor(
-                            reporte.estado
+                            reporte.estado || 'Pendiente'
                           )}`}
                         >
-                          {getEstadoIcon(reporte.estado)}
-                          {reporte.estado}
+                          {getEstadoIcon(reporte.estado || 'Pendiente')}
+                          {reporte.estado || 'Pendiente'}
                         </span>
                       </div>
                       <p className="text-sm text-gray-500">
@@ -565,21 +565,21 @@ const ReportarImperfecto = () => {
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <div>
                         <span className="text-gray-600">Descripción:</span>
-                        <p className="font-medium text-gray-800">{reporte.producto.descripcion}</p>
+                        <p className="font-medium text-gray-800">{reporte.producto?.descripcion || 'N/A'}</p>
                       </div>
                       <div>
                         <span className="text-gray-600">Talla:</span>
-                        <p className="font-medium text-gray-800">{reporte.producto.talla}</p>
+                        <p className="font-medium text-gray-800">{reporte.producto?.talla || 'N/A'}</p>
                       </div>
                       <div>
                         <span className="text-gray-600">Cantidad Defectuosa:</span>
                         <p className="font-medium text-red-600">
-                          {reporte.producto.cantidadDefectuosa} de {reporte.producto.cantidadRecibida || reporte.producto.cantidadTotal} recibidas
+                          {reporte.producto?.cantidadDefectuosa || 0} de {reporte.producto?.cantidadRecibida || reporte.producto?.cantidadTotal || 0} recibidas
                         </p>
                       </div>
                       <div>
                         <span className="text-gray-600">Total Pedido:</span>
-                        <p className="font-medium text-gray-800">{reporte.producto.cantidadTotal}</p>
+                        <p className="font-medium text-gray-800">{reporte.producto?.cantidadTotal || 0}</p>
                       </div>
                     </div>
                   </div>
@@ -588,7 +588,7 @@ const ReportarImperfecto = () => {
                   <div className="mb-4">
                     <h4 className="font-semibold text-gray-800 mb-2">Problema Reportado</h4>
                     <p className="text-gray-700 whitespace-pre-wrap bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                      {reporte.descripcionProblema}
+                      {reporte.descripcionProblema || 'N/A'}
                     </p>
                   </div>
 
