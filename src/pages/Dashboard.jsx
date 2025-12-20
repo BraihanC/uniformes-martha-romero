@@ -100,9 +100,10 @@ const Dashboard = () => {
       const lowStock = [];
       productsSnapshot.forEach((doc) => {
         const product = doc.data();
-        const disponible = (product.stockTotal || 0) -
-                           (product.stockReservadoPedidos || 0) -
-                           (product.stockReservadoApartados || 0);
+        const calc = (product.stockTotal || 0) -
+                     (product.stockReservadoPedidos || 0) -
+                     (product.stockReservadoApartados || 0);
+        const disponible = Math.max(0, calc); // Nunca muestra negativos
 
         if (disponible <= 5) { // Alerta si hay 5 o menos
           lowStock.push({

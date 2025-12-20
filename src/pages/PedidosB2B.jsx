@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, arrayUnion, serverTimestamp, query, orderBy, addDoc, where, limit } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, arrayUnion, serverTimestamp, query, orderBy, addDoc, where, limit, getDoc } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
-import { Package, DollarSign, CheckCircle, Clock, Eye, Plus, Calendar, CreditCard, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search } from 'lucide-react';
+import { Package, DollarSign, CheckCircle, Clock, Eye, Plus, Calendar, CreditCard, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer } from 'lucide-react';
+import jsPDF from 'jspdf';
 
 const PedidosB2B = () => {
   const { user } = useAuth();
@@ -379,17 +380,33 @@ const PedidosB2B = () => {
 
       // Cargar productos B2B del colegio específico
       const productosRef = collection(db, 'products');
-      const productosQuery = query(
+      const productosColegioQuery = query(
         productosRef,
         where('colegio', '==', codigoColegio),
         where('esB2B', '==', true)
       );
-      const productosSnapshot = await getDocs(productosQuery);
+      const productosColegioSnapshot = await getDocs(productosColegioQuery);
 
-      const productos = productosSnapshot.docs.map(doc => ({
+      // Cargar productos B2B "OT" (Otros) - visibles para todos los clientes
+      const productosOTQuery = query(
+        productosRef,
+        where('colegio', '==', 'OT'),
+        where('esB2B', '==', true)
+      );
+      const productosOTSnapshot = await getDocs(productosOTQuery);
+
+      // Combinar productos del colegio + productos OT
+      const productosDelColegio = productosColegioSnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
+
+      const productosOT = productosOTSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      const productos = [...productosDelColegio, ...productosOT];
 
       // Cargar precios corporativos si existen
       if (clienteId) {
@@ -406,15 +423,20 @@ const PedidosB2B = () => {
           preciosMap[data.productoId] = data.precioEspecial;
         });
 
-        // Aplicar precios corporativos a los productos
+        // Aplicar precios con prioridad: corporativo > B2B > regular
         const productosConPrecios = productos.map(p => ({
           ...p,
-          precioMostrar: preciosMap[p.id] || p.precio || 0
+          precioMostrar: preciosMap[p.id] || p.precioB2B || p.precio || 0
         }));
 
         setProductosDisponibles(productosConPrecios);
       } else {
-        setProductosDisponibles(productos);
+        // Sin precios corporativos, usar precio B2B o regular
+        const productosConPrecios = productos.map(p => ({
+          ...p,
+          precioMostrar: p.precioB2B || p.precio || 0
+        }));
+        setProductosDisponibles(productosConPrecios);
       }
     } catch (error) {
       console.error('Error al cargar productos:', error);
@@ -427,6 +449,189 @@ const PedidosB2B = () => {
   const handleAbrirModalCrearPedido = () => {
     fetchClientesCorporativos();
     setShowCrearPedidoModal(true);
+  };
+
+  // Generar PDF del pedido en formato carta
+  const generarPDFPedido = (pedido) => {
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'letter' // 216mm x 279mm (8.5" x 11")
+    });
+
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 15;
+    let yPosition = margin;
+
+    // Colores
+    const colorPrimario = [213, 5, 101]; // #D50565
+    const colorGris = [100, 100, 100];
+    const colorNegro = [0, 0, 0];
+
+    // Función auxiliar para formatear moneda
+    const formatCurrency = (amount) => {
+      return new Intl.NumberFormat('es-CO', {
+        style: 'currency',
+        currency: 'COP',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+      }).format(amount);
+    };
+
+    // Función auxiliar para formatear fecha
+    const formatDate = (timestamp) => {
+      if (!timestamp) return 'N/A';
+      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+      return new Intl.DateTimeFormat('es-CO', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }).format(date);
+    };
+
+    // Encabezado - Título
+    doc.setFontSize(22);
+    doc.setTextColor(...colorPrimario);
+    doc.setFont('helvetica', 'bold');
+    doc.text('PEDIDO DE UNIFORMES', pageWidth / 2, yPosition, { align: 'center' });
+    yPosition += 10;
+
+    // Número de pedido
+    doc.setFontSize(16);
+    doc.text(`#${String(pedido.numeroPedido || 0).padStart(4, '0')}`, pageWidth / 2, yPosition, { align: 'center' });
+    yPosition += 12;
+
+    // Información del cliente y pedido
+    doc.setFontSize(10);
+    doc.setTextColor(...colorNegro);
+    doc.setFont('helvetica', 'normal');
+
+    const fechaPedido = pedido.createdAt ? formatDate(pedido.createdAt) : 'N/A';
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Cliente:', margin, yPosition);
+    doc.setFont('helvetica', 'normal');
+    doc.text(pedido.clienteNombre || 'N/A', margin + 20, yPosition);
+    yPosition += 6;
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Fecha:', margin, yPosition);
+    doc.setFont('helvetica', 'normal');
+    doc.text(fechaPedido, margin + 20, yPosition);
+    yPosition += 6;
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Estado:', margin, yPosition);
+    doc.setFont('helvetica', 'normal');
+    doc.text(pedido.estado || 'N/A', margin + 20, yPosition);
+    yPosition += 10;
+
+    // Línea separadora
+    doc.setDrawColor(...colorPrimario);
+    doc.setLineWidth(0.5);
+    doc.line(margin, yPosition, pageWidth - margin, yPosition);
+    yPosition += 8;
+
+    // Tabla de productos - Encabezado
+    doc.setFillColor(213, 5, 101);
+    doc.rect(margin, yPosition - 5, pageWidth - (2 * margin), 8, 'F');
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('Descripción', margin + 2, yPosition);
+    doc.text('Talla', pageWidth - margin - 75, yPosition);
+    doc.text('Cant.', pageWidth - margin - 50, yPosition);
+    doc.text('Precio Unit.', pageWidth - margin - 2, yPosition, { align: 'right' });
+    yPosition += 8;
+
+    // Productos
+    doc.setTextColor(...colorNegro);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+
+    const productos = pedido.productos || [];
+    let subtotalGeneral = 0;
+
+    productos.forEach((producto, index) => {
+      // Verificar si necesitamos una nueva página
+      if (yPosition > pageHeight - 40) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      // Fondo alternado para filas
+      if (index % 2 === 0) {
+        doc.setFillColor(245, 245, 245);
+        doc.rect(margin, yPosition - 4, pageWidth - (2 * margin), 7, 'F');
+      }
+
+      // Descripción del producto (truncada si es muy larga)
+      const descripcion = producto.descripcion || '';
+      const maxLength = 45;
+      const descripcionMostrar = descripcion.length > maxLength
+        ? descripcion.substring(0, maxLength) + '...'
+        : descripcion;
+
+      doc.text(descripcionMostrar, margin + 2, yPosition);
+      doc.text(producto.talla || '-', pageWidth - margin - 60, yPosition);
+      doc.text(String(producto.cantidad || 0), pageWidth - margin - 40, yPosition);
+
+      const precioUnitario = producto.precioUnitario || producto.precio || 0;
+      const subtotal = precioUnitario * (producto.cantidad || 0);
+      subtotalGeneral += subtotal;
+
+      doc.text(formatCurrency(precioUnitario), pageWidth - margin - 2, yPosition, { align: 'right' });
+
+      yPosition += 7;
+    });
+
+    yPosition += 5;
+
+    // Línea separadora antes del total
+    doc.setDrawColor(...colorGris);
+    doc.setLineWidth(0.3);
+    doc.line(margin, yPosition, pageWidth - margin, yPosition);
+    yPosition += 8;
+
+    // Total del pedido
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(...colorPrimario);
+    doc.text('TOTAL:', pageWidth - margin - 60, yPosition);
+    doc.setFontSize(14);
+    doc.text(formatCurrency(pedido.total || 0), pageWidth - margin - 2, yPosition, { align: 'right' });
+    yPosition += 10;
+
+    // Notas del pedido (si existen)
+    if (pedido.notas && pedido.notas.trim()) {
+      yPosition += 5;
+      doc.setFontSize(10);
+      doc.setTextColor(...colorNegro);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Notas:', margin, yPosition);
+      yPosition += 5;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      const notasLineas = doc.splitTextToSize(pedido.notas, pageWidth - (2 * margin));
+      doc.text(notasLineas, margin, yPosition);
+      yPosition += (notasLineas.length * 5);
+    }
+
+    // Footer
+    doc.setFontSize(8);
+    doc.setTextColor(...colorGris);
+    doc.setFont('helvetica', 'italic');
+    const footerText = `Generado el ${new Date().toLocaleDateString('es-CO')} a las ${new Date().toLocaleTimeString('es-CO')}`;
+    doc.text(footerText, pageWidth / 2, pageHeight - 10, { align: 'center' });
+
+    // Guardar PDF
+    const nombreArchivo = `Pedido_${String(pedido.numeroPedido || 0).padStart(4, '0')}_${pedido.clienteNombre || 'Cliente'}.pdf`;
+    doc.save(nombreArchivo);
   };
 
   const handleSeleccionarCliente = async (clienteId) => {
@@ -749,6 +954,13 @@ const PedidosB2B = () => {
                               title="Ver detalles"
                             >
                               <Eye size={18} />
+                            </button>
+                            <button
+                              onClick={() => generarPDFPedido(pedido)}
+                              className="text-pink-600 hover:text-pink-900"
+                              title="Imprimir PDF"
+                            >
+                              <Printer size={18} />
                             </button>
                             <button
                               onClick={() => {

@@ -65,19 +65,36 @@ const Catalogo = () => {
 
       setPreciosCorporativos(preciosMap);
 
-      // 3. Obtener productos B2B del colegio
+      // 3. Obtener productos B2B del colegio específico
       const productosRef = collection(db, 'products');
-      const productosQuery = query(
+      const productosColegioQuery = query(
         productosRef,
         where('colegio', '==', colegioCode),
         where('esB2B', '==', true)
       );
-      const productosSnapshot = await getDocs(productosQuery);
+      const productosColegioSnapshot = await getDocs(productosColegioQuery);
 
-      const productosData = productosSnapshot.docs.map(doc => ({
+      // 4. Obtener productos B2B "OT" (Otros) - visibles para todos los clientes
+      const productosOTQuery = query(
+        productosRef,
+        where('colegio', '==', 'OT'),
+        where('esB2B', '==', true)
+      );
+      const productosOTSnapshot = await getDocs(productosOTQuery);
+
+      // 5. Combinar productos del colegio + productos OT
+      const productosDelColegio = productosColegioSnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
+
+      const productosOT = productosOTSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      // Combinar ambos arrays (OT se verá para todos los colegios)
+      const productosData = [...productosDelColegio, ...productosOT];
 
       setProductos(productosData);
     } catch (error) {
@@ -89,8 +106,11 @@ const Catalogo = () => {
   };
 
   const getPrecio = (producto) => {
-    // Si hay precio corporativo, usar ese; si no, usar precio regular
-    return preciosCorporativos[producto.id] || producto.precio || 0;
+    // Prioridad de precios:
+    // 1. Precio corporativo (específico para este cliente + producto)
+    // 2. Precio B2B (general para todos los clientes B2B)
+    // 3. Precio regular (fallback)
+    return preciosCorporativos[producto.id] || producto.precioB2B || producto.precio || 0;
   };
 
   // Función para ordenar productos por talla

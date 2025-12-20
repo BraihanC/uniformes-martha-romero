@@ -138,6 +138,7 @@ const EntradaSatelite = () => {
     setLoading(true);
     try {
       // PASO 1: Buscar pedidos pendientes del mismo producto (referencia + talla)
+      // Buscar en PEDIDOS REGULARES (POS)
       const pedidosQuery = query(
         collection(db, 'pedidos'),
         orderBy('createdAt', 'asc') // Del más antiguo al más reciente
@@ -160,11 +161,47 @@ const EntradaSatelite = () => {
         if (itemsPendientes.length > 0) {
           pedidosPendientes.push({
             id: pedidoDoc.id,
+            tipo: 'pedido', // Tipo para diferenciar
             numeroPedido: pedidoData.numeroPedido,
             clienteNombre: pedidoData.clienteNombre,
             createdAt: pedidoData.createdAt,
             items: pedidoData.items,
             itemsPendientes: itemsPendientes
+          });
+        }
+      }
+
+      // Buscar en PEDIDOS B2B (PORTAL)
+      const pedidosB2BQuery = query(
+        collection(db, 'pedidos_b2b'),
+        orderBy('createdAt', 'asc') // Del más antiguo al más reciente
+      );
+      const pedidosB2BSnapshot = await getDocs(pedidosB2BQuery);
+
+      for (const pedidoDoc of pedidosB2BSnapshot.docs) {
+        const pedidoData = pedidoDoc.data();
+
+        // Buscar productos que coincidan con el producto y estén pendientes de producción
+        const productosPendientes = (pedidoData.productos || [])
+          .map((producto, index) => ({ ...producto, index }))
+          .filter(producto => {
+            // Buscar por código o por descripción (ya que B2B usa descripcion)
+            const codigoMatch = producto.codigo === selectedProduct.referencia;
+            const tallaMatch = producto.talla === selectedProduct.talla;
+            const estadoMatch = producto.estadoProduccion === 'pendiente' || producto.estadoProduccion === 'en_produccion';
+
+            return codigoMatch && tallaMatch && estadoMatch;
+          });
+
+        if (productosPendientes.length > 0) {
+          pedidosPendientes.push({
+            id: pedidoDoc.id,
+            tipo: 'pedido_b2b', // Tipo B2B
+            numeroPedido: pedidoData.numeroPedido,
+            clienteNombre: pedidoData.clienteNombre,
+            createdAt: pedidoData.createdAt,
+            productos: pedidoData.productos, // Array de productos para B2B
+            itemsPendientes: productosPendientes
           });
         }
       }
@@ -186,6 +223,7 @@ const EntradaSatelite = () => {
 
           asignaciones.push({
             pedidoId: pedido.id,
+            tipo: pedido.tipo, // 'pedido' o 'pedido_b2b'
             numeroPedido: pedido.numeroPedido,
             clienteNombre: pedido.clienteNombre,
             itemIndex: itemPendiente.index,
@@ -211,7 +249,8 @@ const EntradaSatelite = () => {
       if (asignaciones.length > 0) {
         resumenMensaje += `✅ PRENDAS ASIGNADAS A PEDIDOS (${cantidadAsignada}):\n\n`;
         asignaciones.forEach((asig, idx) => {
-          resumenMensaje += `${idx + 1}. Pedido #${String(asig.numeroPedido).padStart(4, '0')} - ${asig.clienteNombre}\n`;
+          const tipoPedido = asig.tipo === 'pedido_b2b' ? '[B2B]' : '[POS]';
+          resumenMensaje += `${idx + 1}. ${tipoPedido} Pedido #${String(asig.numeroPedido).padStart(4, '0')} - ${asig.clienteNombre}\n`;
           resumenMensaje += `   → ${asig.cantidadAsignada} de ${asig.cantidadNecesaria} prendas`;
           if (!asig.esCompleto) {
             resumenMensaje += ` (quedan ${asig.cantidadNecesaria - asig.cantidadAsignada} pendientes)`;
@@ -244,25 +283,50 @@ const EntradaSatelite = () => {
 
       // 4.2. Actualizar pedidos con items asignados
       for (const asig of asignaciones) {
-        const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
-        const pedidoSnap = await getDoc(pedidoRef);
-        const pedidoData = pedidoSnap.data();
+        if (asig.tipo === 'pedido') {
+          // PEDIDO REGULAR (POS)
+          const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
+          const pedidoSnap = await getDoc(pedidoRef);
+          const pedidoData = pedidoSnap.data();
 
-        const updatedItems = [...pedidoData.items];
-        const item = updatedItems[asig.itemIndex];
+          const updatedItems = [...pedidoData.items];
+          const item = updatedItems[asig.itemIndex];
 
-        // Si se asignó completo, cambiar estado a "Listo para Entrega"
-        if (asig.esCompleto) {
-          updatedItems[asig.itemIndex] = {
-            ...item,
-            estadoItem: 'Listo para Entrega'
+          // Si se asignó completo, cambiar estado a "Listo para Entrega"
+          if (asig.esCompleto) {
+            updatedItems[asig.itemIndex] = {
+              ...item,
+              estadoItem: 'Listo para Entrega'
+            };
+          }
+
+          batch.update(pedidoRef, {
+            items: updatedItems,
+            updatedAt: serverTimestamp()
+          });
+
+        } else if (asig.tipo === 'pedido_b2b') {
+          // PEDIDO B2B (PORTAL)
+          const pedidoRef = doc(db, 'pedidos_b2b', asig.pedidoId);
+          const pedidoSnap = await getDoc(pedidoRef);
+          const pedidoData = pedidoSnap.data();
+
+          const updatedProductos = [...pedidoData.productos];
+          const producto = updatedProductos[asig.itemIndex];
+
+          // Actualizar cantidad alistada y estado de producción
+          updatedProductos[asig.itemIndex] = {
+            ...producto,
+            cantidadAlistada: (producto.cantidadAlistada || 0) + asig.cantidadAsignada,
+            estadoProduccion: asig.esCompleto ? 'alistado' : 'en_produccion',
+            fechaAlistado: asig.esCompleto ? serverTimestamp() : producto.fechaAlistado
           };
-        }
 
-        batch.update(pedidoRef, {
-          items: updatedItems,
-          updatedAt: serverTimestamp()
-        });
+          batch.update(pedidoRef, {
+            productos: updatedProductos,
+            updatedAt: serverTimestamp()
+          });
+        }
       }
 
       // 4.3. Crear registro de auditoría en stockEntries
@@ -385,11 +449,12 @@ const EntradaSatelite = () => {
 
   // Calcular stock total actual
   const calcularStockTotal = (product) => {
-    // BUGFIX: El stock reservado debe restarse
+    // Calcula stock disponible (nunca muestra negativos)
     const stockTotal = product.stockTotal || 0;
     const stockReservadoPedidos = product.stockReservadoPedidos || 0;
     const stockReservadoApartados = product.stockReservadoApartados || 0;
-    return stockTotal - stockReservadoPedidos - stockReservadoApartados;
+    const disponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+    return Math.max(0, disponible); // Si es negativo, muestra 0
   };
 
   return (
@@ -644,10 +709,19 @@ const EntradaSatelite = () => {
                       >
                         <div className="flex justify-between items-start mb-2">
                           <div>
-                            <p className="font-bold text-lg">
-                              Pedido #{String(asig.numeroPedido).padStart(4, '0')}
-                            </p>
-                            <p className="text-gray-700">Cliente: {asig.clienteNombre}</p>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={`px-2 py-1 text-xs font-bold rounded ${
+                                asig.tipo === 'pedido_b2b'
+                                  ? 'bg-purple-100 text-purple-800 print:bg-white print:border print:border-black'
+                                  : 'bg-blue-100 text-blue-800 print:bg-white print:border print:border-black'
+                              }`}>
+                                {asig.tipo === 'pedido_b2b' ? 'B2B' : 'POS'}
+                              </span>
+                              <p className="font-bold text-lg">
+                                Pedido #{String(asig.numeroPedido).padStart(4, '0')}
+                              </p>
+                            </div>
+                            <p className="text-gray-700 font-medium">Cliente: {asig.clienteNombre}</p>
                           </div>
                           <div className="text-right">
                             <p className="text-2xl font-bold text-green-700">

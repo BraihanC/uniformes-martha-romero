@@ -67,6 +67,8 @@ const Apartados = () => {
 
   // Estados para crear apartado
   const [selectedClienteId, setSelectedClienteId] = useState('');
+  const [selectedColegioId, setSelectedColegioId] = useState('');
+  const [colegios, setColegios] = useState([]);
   const [searchCliente, setSearchCliente] = useState('');
   const [searchProducto, setSearchProducto] = useState('');
   const [selectedProductos, setSelectedProductos] = useState([]);
@@ -107,6 +109,7 @@ const Apartados = () => {
           fetchApartados(),
           fetchProductos(),
           fetchClientes(),
+          fetchColegios(),
           fetchCompanyConfig()
         ]);
 
@@ -209,6 +212,22 @@ const Apartados = () => {
     }
   };
 
+  const fetchColegios = async () => {
+    try {
+      const colegiosRef = collection(db, 'colegios');
+      const snapshot = await getDocs(colegiosRef);
+
+      const colegiosData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      setColegios(colegiosData);
+    } catch (error) {
+      console.error('Error al cargar colegios:', error);
+    }
+  };
+
   const fetchCompanyConfig = async () => {
     try {
       const snapshot = await getDocs(collection(db, 'config'));
@@ -289,7 +308,8 @@ const Apartados = () => {
   // Filtrar productos
   const productosFiltrados = ordenarPorTalla(
     productos.filter(producto => {
-      const stockDisponible = (producto.stockTotal || 0) - (producto.stockReservadoApartados || 0);
+      const disponible = (producto.stockTotal || 0) - (producto.stockReservadoPedidos || 0) - (producto.stockReservadoApartados || 0);
+      const stockDisponible = Math.max(0, disponible); // Nunca muestra negativos
       const matchSearch = producto.nombre?.toLowerCase().includes(searchProducto.toLowerCase()) ||
                          producto.referencia?.toLowerCase().includes(searchProducto.toLowerCase());
       return matchSearch && stockDisponible > 0;
@@ -298,7 +318,8 @@ const Apartados = () => {
 
   // Agregar producto al apartado
   const agregarProducto = (producto) => {
-    const stockDisponible = (producto.stockTotal || 0) - (producto.stockReservadoApartados || 0);
+    const disponible = (producto.stockTotal || 0) - (producto.stockReservadoPedidos || 0) - (producto.stockReservadoApartados || 0);
+    const stockDisponible = Math.max(0, disponible); // Nunca muestra negativos
 
     if (stockDisponible <= 0) {
       alert('No hay stock disponible para este producto');
@@ -405,12 +426,17 @@ const Apartados = () => {
         siguienteNumero = (ultimoApartado.numeroApartado || 0) + 1;
       }
 
+      const colegio = colegios.find(c => c.id === selectedColegioId);
+      const colegioNombre = colegio ? colegio.nombre : '';
+
       const nuevoApartado = {
         numeroApartado: siguienteNumero,
         clienteId: selectedClienteId,
         clienteNombre: cliente.nombreCompleto || cliente.nombre || 'Sin nombre',
         clienteTelefono: cliente.telefono || '',
         clienteDocumento: cliente.numeroDocumento || cliente.documento || '',
+        colegioId: selectedColegioId || '',
+        colegioNombre: colegioNombre,
         items: selectedProductos.map(p => ({
           productoId: p.id,
           nombre: p.nombre,
@@ -481,6 +507,7 @@ const Apartados = () => {
 
   const resetCreateForm = () => {
     setSelectedClienteId('');
+    setSelectedColegioId('');
     setSearchCliente('');
     setSearchProducto('');
     setSelectedProductos([]);
@@ -1602,6 +1629,9 @@ const Apartados = () => {
                           </p>
                         )}
                         <p className="font-semibold text-gray-900">{apartado.clienteNombre}</p>
+                        {apartado.colegioNombre && (
+                          <p className="text-sm text-gray-600 mt-0.5">{apartado.colegioNombre}</p>
+                        )}
                         {apartado.clienteTelefono && (
                           <a
                             href={`tel:${apartado.clienteTelefono}`}
@@ -1738,6 +1768,9 @@ const Apartados = () => {
                         <td className="px-6 py-4">
                           <div>
                             <p className="font-medium text-gray-800">{apartado.clienteNombre}</p>
+                            {apartado.colegioNombre && (
+                              <p className="text-sm text-gray-600">{apartado.colegioNombre}</p>
+                            )}
                             {apartado.clienteTelefono && (
                               <a
                                 href={`tel:${apartado.clienteTelefono}`}
@@ -1931,6 +1964,25 @@ const Apartados = () => {
                 )}
               </div>
 
+              {/* Selección de colegio */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Colegio (Opcional)
+                </label>
+                <select
+                  value={selectedColegioId}
+                  onChange={(e) => setSelectedColegioId(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                >
+                  <option value="">Sin colegio</option>
+                  {colegios.map(colegio => (
+                    <option key={colegio.id} value={colegio.id}>
+                      {colegio.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Plazo */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1969,7 +2021,8 @@ const Apartados = () => {
                       <p className="text-center text-gray-500">No se encontraron productos con stock disponible</p>
                     ) : (
                       productosFiltrados.map(producto => {
-                        const stockDisponible = (producto.stockTotal || 0) - (producto.stockReservadoApartados || 0);
+                        const disponible = (producto.stockTotal || 0) - (producto.stockReservadoPedidos || 0) - (producto.stockReservadoApartados || 0);
+                        const stockDisponible = Math.max(0, disponible); // Nunca muestra negativos
                         const tallaKey = `${producto.id}`;
                         return (
                           <div key={producto.id} className="flex justify-between items-center py-3 border-b border-gray-100 last:border-0">

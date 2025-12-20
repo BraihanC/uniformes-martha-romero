@@ -348,12 +348,13 @@ const EntradaProveedor = () => {
     setSearchResults([]);
   };
 
-  // Calcular stock disponible
+  // Calcular stock disponible (nunca muestra negativos)
   const calcularStockTotal = (product) => {
     const stockTotal = product.stockTotal || 0;
     const stockReservadoPedidos = product.stockReservadoPedidos || 0;
     const stockReservadoApartados = product.stockReservadoApartados || 0;
-    return stockTotal - stockReservadoPedidos - stockReservadoApartados;
+    const disponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+    return Math.max(0, disponible); // Si es negativo, muestra 0
   };
 
   return (

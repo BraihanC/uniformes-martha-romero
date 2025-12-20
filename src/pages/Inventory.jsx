@@ -33,7 +33,9 @@ const Inventory = () => {
     talla: '',
     tipo: 'diario',
     precio: 0,
-    stockTotal: 0
+    precioB2B: 0,
+    stockTotal: 0,
+    esB2B: false
   });
 
   // Cargar productos y colegios al montar el componente
@@ -42,9 +44,10 @@ const Inventory = () => {
     fetchColegios();
   }, []);
 
-  // Calcular stock disponible
+  // Calcular stock disponible (nunca muestra negativos)
   const calcularStockDisponible = (product) => {
-    return (product.stockTotal || 0) - (product.stockReservadoPedidos || 0) - (product.stockReservadoApartados || 0);
+    const disponible = (product.stockTotal || 0) - (product.stockReservadoPedidos || 0) - (product.stockReservadoApartados || 0);
+    return Math.max(0, disponible); // Si es negativo, muestra 0
   };
 
   // Función para ordenar productos por talla
@@ -178,7 +181,9 @@ const Inventory = () => {
       talla: '',
       tipo: 'diario',
       precio: 0,
-      stockTotal: 0
+      precioB2B: 0,
+      stockTotal: 0,
+      esB2B: false
     });
     setIsModalOpen(true);
   };
@@ -193,7 +198,9 @@ const Inventory = () => {
       talla: product.talla,
       tipo: product.tipo,
       precio: product.precio,
-      stockTotal: product.stockTotal
+      precioB2B: product.precioB2B || 0,
+      stockTotal: product.stockTotal,
+      esB2B: product.esB2B || false
     });
     setIsModalOpen(true);
   };
@@ -209,7 +216,9 @@ const Inventory = () => {
       talla: '',
       tipo: 'diario',
       precio: 0,
-      stockTotal: 0
+      precioB2B: 0,
+      stockTotal: 0,
+      esB2B: false
     });
   };
 
@@ -242,7 +251,9 @@ const Inventory = () => {
           talla: formData.talla.trim(),
           tipo: formData.tipo,
           precio: Number(formData.precio),
+          precioB2B: Number(formData.precioB2B) || 0,
           stockTotal: Number(formData.stockTotal),
+          esB2B: formData.esB2B,
           updatedAt: serverTimestamp()
         });
         alert('Producto actualizado correctamente.');
@@ -263,7 +274,9 @@ const Inventory = () => {
           talla: formData.talla.trim(),
           tipo: formData.tipo,
           precio: Number(formData.precio),
+          precioB2B: Number(formData.precioB2B) || 0,
           stockTotal: Number(formData.stockTotal),
+          esB2B: formData.esB2B,
           stockReservadoPedidos: 0,
           stockReservadoApartados: 0,
           createdAt: serverTimestamp()
@@ -827,6 +840,9 @@ const Inventory = () => {
                       Precio
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Precio B2B
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Stock Disp.
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -837,6 +853,9 @@ const Inventory = () => {
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Stock Total
+                    </th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      B2B
                     </th>
                     {isAdmin && (
                       <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -881,6 +900,15 @@ const Inventory = () => {
                         {formatPrice(product.precio)}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm">
+                        {product.precioB2B ? (
+                          <span className="text-pink-600 font-medium">
+                            {formatPrice(product.precioB2B)}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 text-xs">-</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm">
                         <span className={`font-semibold ${
                           stockDisponible <= 0 ? 'text-red-600' :
                           stockDisponible <= 5 ? 'text-yellow-600' :
@@ -897,6 +925,15 @@ const Inventory = () => {
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900 font-medium">
                         {product.stockTotal}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-center text-sm">
+                        {product.esB2B ? (
+                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-pink-100 text-pink-800 border border-pink-200">
+                            ✓ B2B
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 text-xs">-</span>
+                        )}
                       </td>
                       {isAdmin && (
                         <td className="px-4 py-3 whitespace-nowrap text-right text-sm space-x-2">
@@ -1061,7 +1098,7 @@ const Inventory = () => {
                 {/* Precio */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Precio <span className="text-red-500">*</span>
+                    Precio Regular <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="number"
@@ -1073,6 +1110,28 @@ const Inventory = () => {
                     disabled={loading}
                     required
                   />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Precio para POS, Pedidos y Apartados
+                  </p>
+                </div>
+
+                {/* Precio B2B */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Precio B2B
+                  </label>
+                  <input
+                    type="number"
+                    value={formData.precioB2B}
+                    onChange={(e) => setFormData({ ...formData, precioB2B: e.target.value })}
+                    placeholder="Ej: 45000"
+                    min="0"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-transparent"
+                    disabled={loading}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Precio para Portal Corporativo (opcional)
+                  </p>
                 </div>
 
                 {/* Stock Total */}
@@ -1090,6 +1149,25 @@ const Inventory = () => {
                     disabled={loading}
                     required
                   />
+                </div>
+
+                {/* Producto B2B */}
+                <div>
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formData.esB2B}
+                      onChange={(e) => setFormData({ ...formData, esB2B: e.target.checked })}
+                      className="w-4 h-4 text-pink-600 border-gray-300 rounded focus:ring-2 focus:ring-pink-500"
+                      disabled={loading}
+                    />
+                    <span className="text-sm font-medium text-gray-700">
+                      Producto B2B (Visible en Portal Corporativo)
+                    </span>
+                  </label>
+                  <p className="text-xs text-gray-500 mt-1 ml-6">
+                    Marca esta opción si el producto estará disponible para pedidos B2B de clientes corporativos
+                  </p>
                 </div>
               </div>
 

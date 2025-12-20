@@ -21,7 +21,9 @@
       "Bash(firebase functions:secrets:set:*)",
       "Bash(firebase functions:log:*)",
       "Bash(npm run build:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(copy .htaccess dist.htaccess)",
+      "Bash(node investigar-reservas.js:*)"
     ],
     "deny": [],
     "ask": []

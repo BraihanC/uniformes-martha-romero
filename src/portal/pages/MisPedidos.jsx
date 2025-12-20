@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { usePortalAuth } from '../context/PortalAuthContext';
 import { db } from '../../services/firebase';
 import { collection, query, where, getDocs, orderBy, doc, updateDoc, serverTimestamp, addDoc } from 'firebase/firestore';
-import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard, Filter, Download, X, Search, FileSpreadsheet, CheckCircle, AlertTriangle, ShoppingBag } from 'lucide-react';
+import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard, Filter, Download, X, Search, FileSpreadsheet, CheckCircle, AlertTriangle, ShoppingBag, Printer } from 'lucide-react';
+import jsPDF from 'jspdf';
 
 const MisPedidos = () => {
   const { clienteCorporativo } = usePortalAuth();
@@ -329,61 +330,303 @@ const MisPedidos = () => {
     document.body.removeChild(link);
   };
 
-  // Exportar Estado de Cuenta
+  // Exportar Estado de Cuenta en PDF
   const exportarEstadoCuenta = () => {
     if (pedidosFiltrados.length === 0) {
       alert('No hay pedidos para exportar');
       return;
     }
 
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'letter'
+    });
+
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 15;
+    let yPosition = margin;
+
+    const colorPrimario = [213, 5, 101];
+    const colorGris = [100, 100, 100];
+    const colorNegro = [0, 0, 0];
+
     const totalComprado = pedidosFiltrados.reduce((sum, p) => sum + p.total, 0);
     const totalAbonado = pedidosFiltrados.reduce((sum, p) => sum + calcularTotalAbonado(p.abonos), 0);
     const saldoTotal = totalComprado - totalAbonado;
 
-    // Crear contenido del estado de cuenta
-    let contenido = `ESTADO DE CUENTA\n`;
-    contenido += `${clienteCorporativo.nombre}\n`;
-    contenido += `Fecha: ${new Date().toLocaleDateString('es-CO')}\n`;
-    contenido += `\n`;
-    contenido += `RESUMEN GENERAL\n`;
-    contenido += `Total Comprado: ${formatCurrency(totalComprado)}\n`;
-    contenido += `Total Abonado: ${formatCurrency(totalAbonado)}\n`;
-    contenido += `Saldo Pendiente: ${formatCurrency(saldoTotal)}\n`;
-    contenido += `\n`;
-    contenido += `DETALLE DE PEDIDOS\n`;
-    contenido += `${'='.repeat(80)}\n`;
+    // Encabezado
+    doc.setFontSize(20);
+    doc.setTextColor(...colorPrimario);
+    doc.setFont('helvetica', 'bold');
+    doc.text('ESTADO DE CUENTA', pageWidth / 2, yPosition, { align: 'center' });
+    yPosition += 10;
 
-    pedidosFiltrados.forEach(pedido => {
-      const totalAbonado = calcularTotalAbonado(pedido.abonos);
-      const saldo = pedido.total - totalAbonado;
+    doc.setFontSize(12);
+    doc.setTextColor(...colorNegro);
+    doc.text(clienteCorporativo?.nombre || '', pageWidth / 2, yPosition, { align: 'center' });
+    yPosition += 6;
 
-      contenido += `\nPedido: #${String(pedido.numeroPedido || 0).padStart(4, '0')}\n`;
-      contenido += `Fecha: ${formatDate(pedido.createdAt)}\n`;
-      contenido += `Estado: ${pedido.estado}\n`;
-      contenido += `Total: ${formatCurrency(pedido.total)}\n`;
-      contenido += `Abonado: ${formatCurrency(totalAbonado)}\n`;
-      contenido += `Saldo: ${formatCurrency(saldo)}\n`;
+    doc.setFontSize(9);
+    doc.setTextColor(...colorGris);
+    doc.text(`Generado: ${new Date().toLocaleDateString('es-CO')}`, pageWidth / 2, yPosition, { align: 'center' });
+    yPosition += 12;
 
-      if (pedido.abonos && pedido.abonos.length > 0) {
-        contenido += `\nHistorial de Abonos:\n`;
-        pedido.abonos.forEach((abono, i) => {
-          contenido += `  ${i + 1}. ${formatCurrency(abono.monto)} - ${formatDateShort(abono.fecha)} - ${abono.notas || ''}\n`;
-        });
+    // Resumen General
+    doc.setFillColor(213, 5, 101);
+    doc.rect(margin, yPosition - 5, pageWidth - (2 * margin), 8, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('RESUMEN GENERAL', margin + 2, yPosition);
+    yPosition += 10;
+
+    doc.setTextColor(...colorNegro);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+
+    doc.text('Total Comprado:', margin + 5, yPosition);
+    doc.text(formatCurrency(totalComprado), pageWidth - margin - 5, yPosition, { align: 'right' });
+    yPosition += 6;
+
+    doc.text('Total Abonado:', margin + 5, yPosition);
+    doc.setTextColor(0, 150, 0);
+    doc.text(formatCurrency(totalAbonado), pageWidth - margin - 5, yPosition, { align: 'right' });
+    yPosition += 6;
+
+    doc.setTextColor(...colorPrimario);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Saldo Pendiente:', margin + 5, yPosition);
+    doc.setFontSize(12);
+    doc.text(formatCurrency(saldoTotal), pageWidth - margin - 5, yPosition, { align: 'right' });
+    yPosition += 12;
+
+    // Detalle de Pedidos
+    doc.setFillColor(213, 5, 101);
+    doc.rect(margin, yPosition - 5, pageWidth - (2 * margin), 8, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('DETALLE DE PEDIDOS', margin + 2, yPosition);
+    yPosition += 10;
+
+    pedidosFiltrados.forEach((pedido, index) => {
+      const totalAbonadoPedido = calcularTotalAbonado(pedido.abonos);
+      const saldoPedido = pedido.total - totalAbonadoPedido;
+
+      // Verificar si necesitamos nueva página
+      if (yPosition > pageHeight - 50) {
+        doc.addPage();
+        yPosition = margin;
       }
 
-      contenido += `${'-'.repeat(80)}\n`;
+      // Fondo del pedido
+      if (index % 2 === 0) {
+        doc.setFillColor(245, 245, 245);
+        doc.rect(margin, yPosition - 3, pageWidth - (2 * margin), 35, 'F');
+      }
+
+      doc.setTextColor(...colorNegro);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text(`Pedido #${String(pedido.numeroPedido || 0).padStart(4, '0')}`, margin + 3, yPosition);
+      yPosition += 6;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text(`Fecha: ${formatDateShort(pedido.createdAt)}`, margin + 5, yPosition);
+      doc.text(`Estado: ${pedido.estado}`, margin + 70, yPosition);
+      yPosition += 5;
+
+      doc.text(`Total:`, margin + 5, yPosition);
+      doc.text(formatCurrency(pedido.total), margin + 40, yPosition);
+      yPosition += 5;
+
+      doc.setTextColor(0, 150, 0);
+      doc.text(`Abonado:`, margin + 5, yPosition);
+      doc.text(formatCurrency(totalAbonadoPedido), margin + 40, yPosition);
+      yPosition += 5;
+
+      doc.setTextColor(...colorPrimario);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`Saldo:`, margin + 5, yPosition);
+      doc.text(formatCurrency(saldoPedido), margin + 40, yPosition);
+      yPosition += 8;
+
+      doc.setTextColor(...colorNegro);
+      doc.setFont('helvetica', 'normal');
     });
 
-    // Descargar
-    const blob = new Blob([contenido], { type: 'text/plain;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `estado_cuenta_${clienteCorporativo.nombre}_${new Date().toISOString().split('T')[0]}.txt`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Footer
+    doc.setFontSize(8);
+    doc.setTextColor(...colorGris);
+    doc.setFont('helvetica', 'italic');
+    const footerText = `Documento generado el ${new Date().toLocaleDateString('es-CO')} a las ${new Date().toLocaleTimeString('es-CO')}`;
+    doc.text(footerText, pageWidth / 2, pageHeight - 10, { align: 'center' });
+
+    // Guardar
+    doc.save(`Estado_Cuenta_${clienteCorporativo?.nombre || 'Cliente'}_${new Date().toISOString().split('T')[0]}.pdf`);
+  };
+
+  // Generar PDF del pedido en formato carta
+  const generarPDFPedido = (pedido) => {
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'letter' // 216mm x 279mm (8.5" x 11")
+    });
+
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 15;
+    let yPosition = margin;
+
+    // Colores
+    const colorPrimario = [213, 5, 101]; // #D50565
+    const colorGris = [100, 100, 100];
+    const colorNegro = [0, 0, 0];
+
+    // Encabezado - Título
+    doc.setFontSize(22);
+    doc.setTextColor(...colorPrimario);
+    doc.setFont('helvetica', 'bold');
+    doc.text('PEDIDO DE UNIFORMES', pageWidth / 2, yPosition, { align: 'center' });
+    yPosition += 10;
+
+    // Número de pedido
+    doc.setFontSize(16);
+    doc.text(`#${String(pedido.numeroPedido || 0).padStart(4, '0')}`, pageWidth / 2, yPosition, { align: 'center' });
+    yPosition += 12;
+
+    // Información del cliente y pedido
+    doc.setFontSize(10);
+    doc.setTextColor(...colorNegro);
+    doc.setFont('helvetica', 'normal');
+
+    const fechaPedido = pedido.createdAt ? formatDate(pedido.createdAt) : 'N/A';
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Cliente:', margin, yPosition);
+    doc.setFont('helvetica', 'normal');
+    doc.text(clienteCorporativo?.nombre || '', margin + 20, yPosition);
+    yPosition += 6;
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Fecha:', margin, yPosition);
+    doc.setFont('helvetica', 'normal');
+    doc.text(fechaPedido, margin + 20, yPosition);
+    yPosition += 6;
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Estado:', margin, yPosition);
+    doc.setFont('helvetica', 'normal');
+    doc.text(pedido.estado || 'N/A', margin + 20, yPosition);
+    yPosition += 10;
+
+    // Línea separadora
+    doc.setDrawColor(...colorPrimario);
+    doc.setLineWidth(0.5);
+    doc.line(margin, yPosition, pageWidth - margin, yPosition);
+    yPosition += 8;
+
+    // Tabla de productos - Encabezado
+    doc.setFillColor(213, 5, 101);
+    doc.rect(margin, yPosition - 5, pageWidth - (2 * margin), 8, 'F');
+
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('Descripción', margin + 2, yPosition);
+    doc.text('Talla', pageWidth - margin - 75, yPosition);
+    doc.text('Cant.', pageWidth - margin - 50, yPosition);
+    doc.text('Precio Unit.', pageWidth - margin - 2, yPosition, { align: 'right' });
+    yPosition += 8;
+
+    // Productos
+    doc.setTextColor(...colorNegro);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+
+    const productos = pedido.productos || [];
+    let subtotalGeneral = 0;
+
+    productos.forEach((producto, index) => {
+      // Verificar si necesitamos una nueva página
+      if (yPosition > pageHeight - 40) {
+        doc.addPage();
+        yPosition = margin;
+      }
+
+      // Fondo alternado para filas
+      if (index % 2 === 0) {
+        doc.setFillColor(245, 245, 245);
+        doc.rect(margin, yPosition - 4, pageWidth - (2 * margin), 7, 'F');
+      }
+
+      // Descripción del producto (truncada si es muy larga)
+      const descripcion = producto.descripcion || '';
+      const maxLength = 45;
+      const descripcionMostrar = descripcion.length > maxLength
+        ? descripcion.substring(0, maxLength) + '...'
+        : descripcion;
+
+      doc.text(descripcionMostrar, margin + 2, yPosition);
+      doc.text(producto.talla || '-', pageWidth - margin - 60, yPosition);
+      doc.text(String(producto.cantidad || 0), pageWidth - margin - 40, yPosition);
+
+      const precioUnitario = producto.precioUnitario || producto.precio || 0;
+      const subtotal = precioUnitario * (producto.cantidad || 0);
+      subtotalGeneral += subtotal;
+
+      doc.text(formatCurrency(precioUnitario), pageWidth - margin - 2, yPosition, { align: 'right' });
+
+      yPosition += 7;
+    });
+
+    yPosition += 5;
+
+    // Línea separadora antes del total
+    doc.setDrawColor(...colorGris);
+    doc.setLineWidth(0.3);
+    doc.line(margin, yPosition, pageWidth - margin, yPosition);
+    yPosition += 8;
+
+    // Total del pedido
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(...colorPrimario);
+    doc.text('TOTAL:', pageWidth - margin - 60, yPosition);
+    doc.setFontSize(14);
+    doc.text(formatCurrency(pedido.total || 0), pageWidth - margin - 2, yPosition, { align: 'right' });
+    yPosition += 10;
+
+    // Notas del pedido (si existen)
+    if (pedido.notas && pedido.notas.trim()) {
+      yPosition += 5;
+      doc.setFontSize(10);
+      doc.setTextColor(...colorNegro);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Notas:', margin, yPosition);
+      yPosition += 5;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      const notasLineas = doc.splitTextToSize(pedido.notas, pageWidth - (2 * margin));
+      doc.text(notasLineas, margin, yPosition);
+      yPosition += (notasLineas.length * 5);
+    }
+
+    // Footer
+    doc.setFontSize(8);
+    doc.setTextColor(...colorGris);
+    doc.setFont('helvetica', 'italic');
+    const footerText = `Generado el ${new Date().toLocaleDateString('es-CO')} a las ${new Date().toLocaleTimeString('es-CO')}`;
+    doc.text(footerText, pageWidth / 2, pageHeight - 10, { align: 'center' });
+
+    // Guardar PDF
+    const nombreArchivo = `Pedido_${String(pedido.numeroPedido || 0).padStart(4, '0')}_${clienteCorporativo?.nombre || 'Cliente'}.pdf`;
+    doc.save(nombreArchivo);
   };
 
   if (loading) {
@@ -432,30 +675,13 @@ const MisPedidos = () => {
               {filtrosActivos && <span className="bg-white text-pink-600 rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold">!</span>}
             </button>
 
-            <div className="relative group">
-              <button
-                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"
-              >
-                <Download size={18} />
-                Exportar
-              </button>
-              <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-lg shadow-xl border border-gray-200 py-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
-                <button
-                  onClick={exportarExcel}
-                  className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                >
-                  <FileSpreadsheet size={16} />
-                  Exportar a Excel
-                </button>
-                <button
-                  onClick={exportarEstadoCuenta}
-                  className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                >
-                  <FileText size={16} />
-                  Estado de Cuenta
-                </button>
-              </div>
-            </div>
+            <button
+              onClick={exportarEstadoCuenta}
+              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"
+            >
+              <FileText size={18} />
+              Estado de Cuenta (PDF)
+            </button>
           </div>
         </div>
       </div>
@@ -639,12 +865,12 @@ const MisPedidos = () => {
               className="bg-white rounded-lg shadow-md overflow-hidden"
             >
               {/* Header del Pedido */}
-              <div
-                className="p-6 cursor-pointer hover:bg-gray-50 transition-colors"
-                onClick={() => togglePedido(pedido.id)}
-              >
+              <div className="p-6">
                 <div className="flex justify-between items-start mb-4">
-                  <div className="flex-1">
+                  <div
+                    className="flex-1 cursor-pointer hover:bg-gray-50 -m-6 p-6 rounded-lg transition-colors"
+                    onClick={() => togglePedido(pedido.id)}
+                  >
                     <div className="flex items-center gap-3 mb-2 flex-wrap">
                       <h3 className="text-lg font-bold text-gray-800">
                         Pedido #{String(pedido.numeroPedido || 0).padStart(4, '0')}
@@ -695,13 +921,29 @@ const MisPedidos = () => {
                     </div>
                   </div>
 
-                  <button className="ml-4 p-2 hover:bg-gray-100 rounded-full transition-colors">
-                    {expandedPedido === pedido.id ? (
-                      <ChevronUp size={24} className="text-gray-600" />
-                    ) : (
-                      <ChevronDown size={24} className="text-gray-600" />
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2 ml-4">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        generarPDFPedido(pedido);
+                      }}
+                      className="p-2 text-white rounded-lg hover:opacity-90 transition-colors"
+                      style={{ backgroundColor: '#D50565' }}
+                      title="Imprimir PDF"
+                    >
+                      <Printer size={20} />
+                    </button>
+                    <button
+                      onClick={() => togglePedido(pedido.id)}
+                      className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                    >
+                      {expandedPedido === pedido.id ? (
+                        <ChevronUp size={24} className="text-gray-600" />
+                      ) : (
+                        <ChevronDown size={24} className="text-gray-600" />
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
 

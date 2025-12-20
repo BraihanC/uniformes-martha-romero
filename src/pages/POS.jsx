@@ -167,9 +167,6 @@ const POS = () => {
   const filterProducts = () => {
     let filtered = [...products];
 
-    // Filter out B2B-only products (for corporate portal)
-    filtered = filtered.filter(p => !p.esB2B);
-
     // Filter by colegio (using 'colegio' field which contains the colegio code)
     if (selectedColegio) {
       filtered = filtered.filter(p => p.colegio === selectedColegio);
@@ -228,7 +225,8 @@ const POS = () => {
     const stockTotal = product.stockTotal || 0;
     const stockReservadoPedidos = product.stockReservadoPedidos || 0;
     const stockReservadoApartados = product.stockReservadoApartados || 0;
-    return stockTotal - stockReservadoPedidos - stockReservadoApartados;
+    const disponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+    return Math.max(0, disponible); // Nunca muestra negativos
   };
 
   const handleAddToCart = (product) => {

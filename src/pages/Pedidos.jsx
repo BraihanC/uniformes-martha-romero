@@ -1704,6 +1704,9 @@ const Pedidos = () => {
                         #{String(pedido.numeroPedido).padStart(4, '0')}
                       </span>
                       <p className="font-medium text-gray-900 mt-1">{pedido.clienteNombre}</p>
+                      {pedido.colegioNombre && (
+                        <p className="text-sm text-gray-600 mt-0.5">{pedido.colegioNombre}</p>
+                      )}
                       {(() => {
                         const telefono = allClients.find(c => c.id === pedido.clienteId)?.telefono;
                         return telefono ? (
@@ -1780,6 +1783,9 @@ const Pedidos = () => {
                       </td>
                       <td className="px-6 py-4">
                         <p className="font-medium text-gray-800">{pedido.clienteNombre}</p>
+                        {pedido.colegioNombre && (
+                          <p className="text-sm text-gray-600">{pedido.colegioNombre}</p>
+                        )}
                         {(() => {
                           const telefono = allClients.find(c => c.id === pedido.clienteId)?.telefono;
                           return telefono ? (
