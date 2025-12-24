@@ -23,7 +23,8 @@
       "Bash(npm run build:*)",
       "Bash(dir:*)",
       "Bash(copy .htaccess dist.htaccess)",
-      "Bash(node investigar-reservas.js:*)"
+      "Bash(node investigar-reservas.js:*)",
+      "Bash(copy dist.htaccess dist.htaccess)"
     ],
     "deny": [],
     "ask": []

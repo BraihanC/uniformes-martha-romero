@@ -23,6 +23,7 @@ import BuscadorFacturas from './components/reportes/BuscadorFacturas';
 import ReporteCorte from './components/reportes/ReporteCorte';
 import CuentasPorPagar from './components/reportes/CuentasPorPagar';
 import ReporteUtilidad from './components/reportes/ReporteUtilidad';
+import ReporteVentas from './components/reportes/ReporteVentas';
 import Config from './pages/Config';
 import Perfil from './pages/Perfil';
 
@@ -152,6 +153,14 @@ function App() {
                     element={
                       <PrivateRoute requireAdmin>
                         <ReporteUtilidad />
+                      </PrivateRoute>
+                    }
+                  />
+                  <Route
+                    path="ventas"
+                    element={
+                      <PrivateRoute requireAdmin>
+                        <ReporteVentas />
                       </PrivateRoute>
                     }
                   />

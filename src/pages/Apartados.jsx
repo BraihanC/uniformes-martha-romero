@@ -73,7 +73,7 @@ const Apartados = () => {
   const [searchProducto, setSearchProducto] = useState('');
   const [selectedProductos, setSelectedProductos] = useState([]);
   const [tallasSeleccionadas, setTallasSeleccionadas] = useState({});
-  const [plazoSeleccionado, setPlazoSeleccionado] = useState(30);
+  const [plazoSeleccionado, setPlazoSeleccionado] = useState(5);
   const [abonoInicial, setAbonoInicial] = useState('');
   const [metodoPago, setMetodoPago] = useState('Efectivo');
   const [notasApartado, setNotasApartado] = useState('');
@@ -512,7 +512,7 @@ const Apartados = () => {
     setSearchProducto('');
     setSelectedProductos([]);
     setTallasSeleccionadas({});
-    setPlazoSeleccionado(30);
+    setPlazoSeleccionado(5);
     setAbonoInicial('0');
     setMetodoPago('Efectivo');
     setNotasApartado('');
@@ -1993,6 +1993,7 @@ const Apartados = () => {
                   onChange={(e) => setPlazoSeleccionado(parseInt(e.target.value))}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
                 >
+                  <option value={5}>5 días</option>
                   <option value={15}>15 días</option>
                   <option value={30}>30 días</option>
                   <option value={45}>45 días</option>

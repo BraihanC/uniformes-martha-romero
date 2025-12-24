@@ -70,7 +70,7 @@ const Dashboard = () => {
             ultimosAbonos.push({
               ...abono,
               pedidoId: pedido.id,
-              pedidoNumero: pedido.id.slice(-6).toUpperCase()
+              pedidoNumero: String(pedido.numeroPedido || 0).padStart(4, '0')
             });
           });
         }
@@ -358,7 +358,7 @@ const Dashboard = () => {
                   <div className="flex justify-between items-start mb-2">
                     <div>
                       <p className="font-semibold text-gray-800">
-                        #{pedido.id.slice(-6).toUpperCase()}
+                        #{String(pedido.numeroPedido || 0).padStart(4, '0')}
                       </p>
                       <p className="text-xs text-gray-500">
                         {formatDate(pedido.createdAt)}

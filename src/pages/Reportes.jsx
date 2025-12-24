@@ -1,5 +1,5 @@
 import { Outlet, NavLink } from 'react-router-dom';
-import { DollarSign, Search, Scissors, Users, TrendingUp } from 'lucide-react';
+import { DollarSign, Search, Scissors, Users, TrendingUp, BarChart3 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 // Estilo base para las pestañas de navegación
@@ -66,6 +66,14 @@ const ReportesLayout = () => {
               <TrendingUp size={16} className="sm:w-[18px] sm:h-[18px]" />
               <span className="hidden sm:inline">Utilidad Productos</span>
               <span className="sm:hidden whitespace-nowrap">Utilidad</span>
+            </NavLink>
+            <NavLink
+              to="/reportes/ventas"
+              className={({ isActive }) => `${navLinkStyle} ${isActive ? activeStyle : inactiveStyle}`}
+            >
+              <BarChart3 size={16} className="sm:w-[18px] sm:h-[18px]" />
+              <span className="hidden sm:inline">Reporte de Ventas</span>
+              <span className="sm:hidden whitespace-nowrap">Ventas</span>
             </NavLink>
           </>
         )}
