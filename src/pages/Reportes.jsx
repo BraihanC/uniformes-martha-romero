@@ -39,18 +39,18 @@ const ReportesLayout = () => {
           <span className="hidden sm:inline">Buscador de Facturas</span>
           <span className="sm:hidden whitespace-nowrap">Facturas</span>
         </NavLink>
+        <NavLink
+          to="/reportes/corte"
+          className={({ isActive }) => `${navLinkStyle} ${isActive ? activeStyle : inactiveStyle}`}
+        >
+          <Scissors size={16} className="sm:w-[18px] sm:h-[18px]" />
+          <span className="hidden sm:inline">Reporte de Corte</span>
+          <span className="sm:hidden whitespace-nowrap">Corte</span>
+        </NavLink>
 
         {/* Pestañas solo para administradores */}
         {isAdmin && (
           <>
-            <NavLink
-              to="/reportes/corte"
-              className={({ isActive }) => `${navLinkStyle} ${isActive ? activeStyle : inactiveStyle}`}
-            >
-              <Scissors size={16} className="sm:w-[18px] sm:h-[18px]" />
-              <span className="hidden sm:inline">Reporte de Corte</span>
-              <span className="sm:hidden whitespace-nowrap">Corte</span>
-            </NavLink>
             <NavLink
               to="/reportes/cuentas-por-pagar"
               className={({ isActive }) => `${navLinkStyle} ${isActive ? activeStyle : inactiveStyle}`}

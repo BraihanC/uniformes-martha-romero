@@ -355,17 +355,20 @@ const CierreCaja = () => { // <--- Nombre cambiado
           <h1 className="text-xl sm:text-2xl font-bold text-gray-800">Cierre de Caja</h1>
           <p className="text-gray-600 mt-1 text-sm sm:text-base">Analiza el flujo de efectivo por rango de fechas.</p>
         </div>
-        {!isVendedor && (
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowRetiroModal(true)}
-              className="px-3 sm:px-4 py-2 text-sm sm:text-base text-white rounded-lg hover:opacity-90 flex items-center justify-center gap-2"
-              style={{ backgroundColor: '#EA5C2E' }}
-            >
-              <HandCoins size={16} className="sm:w-[18px] sm:h-[18px]" />
-              <span className="hidden sm:inline">Registrar Retiro</span>
-              <span className="sm:hidden">Retiro</span>
-            </button>
+        <div className="flex gap-2">
+          {/* Botón Registrar Retiro - Disponible para todos */}
+          <button
+            onClick={() => setShowRetiroModal(true)}
+            className="px-3 sm:px-4 py-2 text-sm sm:text-base text-white rounded-lg hover:opacity-90 flex items-center justify-center gap-2"
+            style={{ backgroundColor: '#EA5C2E' }}
+          >
+            <HandCoins size={16} className="sm:w-[18px] sm:h-[18px]" />
+            <span className="hidden sm:inline">Registrar Retiro</span>
+            <span className="sm:hidden">Retiro</span>
+          </button>
+
+          {/* Botón Imprimir - Solo para Administradores */}
+          {!isVendedor && (
             <button
               onClick={handlePrintReport}
               className="px-3 sm:px-4 py-2 text-sm sm:text-base text-white rounded-lg hover:opacity-90 flex items-center justify-center gap-2"
@@ -375,10 +378,11 @@ const CierreCaja = () => { // <--- Nombre cambiado
               <span className="hidden sm:inline">Imprimir Reporte</span>
               <span className="sm:hidden">Imprimir</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
+      {/* Filtros de fecha - Solo para Administradores */}
       {!isVendedor && (
         <div className="bg-white rounded-lg shadow-md p-4 mb-6 print:hidden">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-end">
@@ -444,63 +448,65 @@ const CierreCaja = () => { // <--- Nombre cambiado
               {loading ? 'Generando...' : 'Generar Reporte'}
             </button>
           </div>
-
-          {/* Base Inicial de Caja */}
-          <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Wallet size={20} className="text-blue-600" />
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-800">Base Inicial de Caja</h3>
-                  <p className="text-xs text-gray-600">Dinero con el que inicia el día</p>
-                </div>
-              </div>
-
-              {!editandoBase ? (
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl font-bold text-blue-600">
-                    {formatCurrency(baseInicial)}
-                  </span>
-                  <button
-                    onClick={() => setEditandoBase(true)}
-                    className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg"
-                    title="Editar base inicial"
-                  >
-                    <Edit2 size={18} />
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    value={baseInputValue}
-                    onChange={(e) => setBaseInputValue(e.target.value)}
-                    className="w-32 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                    placeholder="0"
-                  />
-                  <button
-                    onClick={handleSaveBaseInicial}
-                    className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                    title="Guardar"
-                  >
-                    <Save size={18} />
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEditandoBase(false);
-                      setBaseInputValue(baseInicial.toString());
-                    }}
-                    className="p-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-                    title="Cancelar"
-                  >
-                    ✕
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
         </div>
       )}
+
+      {/* Base Inicial de Caja - Disponible para todos */}
+      <div className="bg-white rounded-lg shadow-md p-4 mb-6 print:hidden">
+        <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Wallet size={20} className="text-blue-600" />
+              <div>
+                <h3 className="text-sm font-semibold text-gray-800">Base Inicial de Caja</h3>
+                <p className="text-xs text-gray-600">Dinero con el que inicia el día</p>
+              </div>
+            </div>
+
+            {!editandoBase ? (
+              <div className="flex items-center gap-3">
+                <span className="text-2xl font-bold text-blue-600">
+                  {formatCurrency(baseInicial)}
+                </span>
+                <button
+                  onClick={() => setEditandoBase(true)}
+                  className="p-2 text-blue-600 hover:bg-blue-100 rounded-lg"
+                  title="Editar base inicial"
+                >
+                  <Edit2 size={18} />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={baseInputValue}
+                  onChange={(e) => setBaseInputValue(e.target.value)}
+                  className="w-32 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  placeholder="0"
+                />
+                <button
+                  onClick={handleSaveBaseInicial}
+                  className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  title="Guardar"
+                >
+                  <Save size={18} />
+                </button>
+                <button
+                  onClick={() => {
+                    setEditandoBase(false);
+                    setBaseInputValue(baseInicial.toString());
+                  }}
+                  className="p-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                  title="Cancelar"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* --- Contenido del Reporte (Sección Imprimible) --- */}
       <div id="reporte-print">

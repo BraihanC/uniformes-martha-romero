@@ -273,11 +273,11 @@ const EntradaSatelite = () => {
       // PASO 4: Ejecutar todas las actualizaciones en batch
       const batch = writeBatch(db);
 
-      // 4.1. Actualizar stockTotal y stockReservadoPedidos del producto
+      // 4.1. Actualizar solo stockTotal del producto
+      // stockReservadoPedidos ya se incrementó al crear el pedido
       const productRef = doc(db, 'products', selectedProduct.id);
       batch.update(productRef, {
         stockTotal: increment(numCantidad),
-        stockReservadoPedidos: increment(cantidadAsignada),
         updatedAt: serverTimestamp()
       });
 

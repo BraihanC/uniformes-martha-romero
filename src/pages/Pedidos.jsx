@@ -515,9 +515,15 @@ const Pedidos = () => {
 
       batch.set(pedidoRef, pedidoData);
 
-      // Paso B: NO actualizar stockTotal (las prendas no existen aún)
-      // Solo se registra el pedido con items en estado "En Producción"
-      // El stock se asignará automáticamente cuando llegue la entrada de satélite/proveedor
+      // Paso B: Reservar stock en pedidos (NO actualizar stockTotal porque las prendas no existen aún)
+      // Incrementar stockReservadoPedidos para saber cuántas prendas están comprometidas
+      for (const item of cartItems) {
+        const productRef = doc(db, 'products', item.productoId);
+        batch.update(productRef, {
+          stockReservadoPedidos: increment(item.cantidad),
+          updatedAt: serverTimestamp()
+        });
+      }
 
       // 5. (NUEVO) Registrar Transacción de Abono Inicial (si existe)
       if (abonoInicial > 0) {
