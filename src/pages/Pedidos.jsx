@@ -519,10 +519,10 @@ const Pedidos = () => {
       // Incrementar stockReservadoPedidos para saber cuántas prendas están comprometidas
       for (const item of cartItems) {
         const productRef = doc(db, 'products', item.productoId);
-        batch.update(productRef, {
+        batch.set(productRef, {
           stockReservadoPedidos: increment(item.cantidad),
           updatedAt: serverTimestamp()
-        });
+        }, { merge: true });
       }
 
       // 5. (NUEVO) Registrar Transacción de Abono Inicial (si existe)
