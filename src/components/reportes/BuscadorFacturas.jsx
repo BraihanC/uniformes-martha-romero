@@ -27,7 +27,7 @@ const formatCurrency = (value) => {
 };
 
 const BuscadorFacturas = () => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, currentUser } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [todasFacturas, setTodasFacturas] = useState([]);
   const [facturasEncontradas, setFacturasEncontradas] = useState([]);
@@ -478,7 +478,7 @@ const BuscadorFacturas = () => {
             diferencia: diferenciaSubtotal
           },
           fecha: serverTimestamp(),
-          userId: currentUser.email || currentUser.uid
+          userId: currentUser?.email || currentUser?.uid || 'Admin'
         });
       }
 
@@ -582,9 +582,9 @@ const BuscadorFacturas = () => {
         ...itemToAnular,
         anulado: true,
         anulacion: {
-          fecha: serverTimestamp(),
+          fecha: new Date().toISOString(), // No se puede usar serverTimestamp() dentro de arrays
           motivo: motivoAnulacion,
-          usuario: currentUser.email || 'Admin'
+          usuario: currentUser?.email || 'Admin'
         }
       };
 
@@ -627,7 +627,7 @@ const BuscadorFacturas = () => {
           subtotal: itemToAnular.subtotal
         },
         fecha: serverTimestamp(),
-        userId: currentUser.email || currentUser.uid
+        userId: currentUser?.email || currentUser?.uid || 'Admin'
       });
 
       await batch.commit();
@@ -730,7 +730,7 @@ const BuscadorFacturas = () => {
           subtotal: itemToRestaurar.subtotal
         },
         fecha: serverTimestamp(),
-        userId: currentUser.email || currentUser.uid
+        userId: currentUser?.email || currentUser?.uid || 'Admin'
       });
 
       await batch.commit();

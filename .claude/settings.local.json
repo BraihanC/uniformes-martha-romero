@@ -26,7 +26,9 @@
       "Bash(node investigar-reservas.js:*)",
       "Bash(copy dist.htaccess dist.htaccess)",
       "Bash(npm run migrate-pedidos:*)",
-      "Bash(npm run sync-pedidos:*)"
+      "Bash(npm run sync-pedidos:*)",
+      "Bash(npm run test:run:*)",
+      "Bash(npm uninstall:*)"
     ],
     "deny": [],
     "ask": []

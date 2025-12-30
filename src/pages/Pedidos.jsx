@@ -10,6 +10,7 @@ import {
   increment,
   serverTimestamp,
   query,
+  where,
   orderBy,
   limit,
   addDoc
@@ -518,11 +519,13 @@ const Pedidos = () => {
       // Paso B: Reservar stock en pedidos (NO actualizar stockTotal porque las prendas no existen aún)
       // Incrementar stockReservadoPedidos para saber cuántas prendas están comprometidas
       for (const item of cartItems) {
-        const productRef = doc(db, 'products', item.productoId);
-        batch.set(productRef, {
-          stockReservadoPedidos: increment(item.cantidad),
-          updatedAt: serverTimestamp()
-        }, { merge: true });
+        if (item.product && item.product.id) {
+          const productRef = doc(db, 'products', item.product.id);
+          batch.set(productRef, {
+            stockReservadoPedidos: increment(item.cantidad),
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        }
       }
 
       // 5. (NUEVO) Registrar Transacción de Abono Inicial (si existe)
@@ -1062,22 +1065,24 @@ const Pedidos = () => {
         updatedAt: serverTimestamp()
       });
 
-      // Crear transacción de ajuste SI hay diferencia de total Y el pedido tiene abonos
+      // Verificar si necesitamos crear transacción de ajuste
       const totalAnterior = selectedPedido.total || selectedPedido.totalPedido || 0;
-      const diferenciaSubtotal = nuevoTotal - totalAnterior;
       const totalAbonado = selectedPedido.totalAbonado || 0;
-      const tieneAbonos = totalAbonado > 0;
 
-      if (diferenciaSubtotal !== 0 && tieneAbonos) {
+      // Solo crear transacción si nuevo total < total abonado (hay exceso de pago)
+      if (nuevoTotal < totalAbonado) {
+        const diferenciaExceso = totalAbonado - nuevoTotal;
+
+        // Crear transacción de egreso/devolución con la fecha ACTUAL (cuando sale el dinero de caja)
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
-          tipo: diferenciaSubtotal > 0 ? 'ajuste_pedido_positivo' : 'ajuste_pedido_negativo',
-          monto: diferenciaSubtotal, // Puede ser positivo o negativo
+          tipo: 'egreso',
+          monto: diferenciaExceso,
           metodoPago: 'Ajuste',
           pedidoId: selectedPedido.id,
           numeroPedido: selectedPedido.numeroPedido,
-          descripcion: `Corrección producto Pedido #${selectedPedido.numeroPedido}: ${itemActual.nombre || itemActual.productoNombre} → ${productoParaUsar.nombre}`,
-          notas: notasCorreccion,
+          descripcion: `Egreso por corrección Pedido #${selectedPedido.numeroPedido}: Total abonado ($${totalAbonado.toLocaleString()}) excede nuevo total ($${nuevoTotal.toLocaleString()})`,
+          notas: `Corrección: ${itemActual.nombre || itemActual.productoNombre} → ${productoParaUsar.nombre}. ${notasCorreccion}`,
           clienteId: selectedPedido.clienteId,
           clienteNombre: selectedPedido.clienteNombre,
           detalleCorreccion: {
@@ -1087,9 +1092,12 @@ const Pedidos = () => {
             productoNuevo: productoParaUsar.nombre,
             cantidadNueva: cantidadNueva,
             subtotalNuevo: subtotalNuevo,
-            diferencia: diferenciaSubtotal
+            totalAnterior: totalAnterior,
+            nuevoTotal: nuevoTotal,
+            totalAbonado: totalAbonado,
+            diferenciaExceso: diferenciaExceso
           },
-          fecha: serverTimestamp(),
+          fecha: serverTimestamp(), // Fecha actual - cuando realmente sale el dinero de caja
           userId: currentUser.uid
         });
       }
@@ -1097,8 +1105,13 @@ const Pedidos = () => {
       await batch.commit();
 
       let mensaje = '✅ Pedido corregido exitosamente.\n\nInventario actualizado correctamente.';
-      if (diferenciaSubtotal !== 0 && tieneAbonos) {
-        mensaje += `\n\n📊 Transacción de ajuste creada: ${diferenciaSubtotal >= 0 ? '+' : ''}$${diferenciaSubtotal.toLocaleString()}`;
+
+      // Mostrar advertencia si hubo exceso de pago
+      if (nuevoTotal < totalAbonado) {
+        const diferenciaExceso = totalAbonado - nuevoTotal;
+        mensaje += `\n\n⚠️ ADVERTENCIA: El total abonado ($${totalAbonado.toLocaleString()}) excede el nuevo total ($${nuevoTotal.toLocaleString()})`;
+        mensaje += `\n\n💰 Se creó un egreso automático de $${diferenciaExceso.toLocaleString()} en caja`;
+        mensaje += `\n\nDebes devolver este dinero al cliente.`;
       }
       alert(mensaje);
 
@@ -1184,7 +1197,7 @@ const Pedidos = () => {
         categoria: itemToAnular.categoria || '',
         anulado: true,
         anulacion: {
-          fecha: serverTimestamp(),
+          fecha: new Date().toISOString(), // No se puede usar serverTimestamp() dentro de arrays
           motivo: motivoAnulacion || '',
           usuario: currentUser.email || 'Admin'
         }
@@ -1209,20 +1222,22 @@ const Pedidos = () => {
         updatedAt: serverTimestamp()
       });
 
-      // Crear transacción de ajuste SI el pedido tiene abonos
+      // Verificar si necesitamos crear transacción de egreso
       const totalAbonado = selectedPedido.totalAbonado || 0;
-      const tieneAbonos = totalAbonado > 0;
 
-      if (tieneAbonos) {
-        const diferenciaTotal = itemToAnular.subtotal;
+      // Solo crear transacción si nuevo total < total abonado (hay exceso de pago)
+      if (nuevoTotal < totalAbonado) {
+        const diferenciaExceso = totalAbonado - nuevoTotal;
+
+        // Crear transacción de egreso/devolución con la fecha ACTUAL (cuando sale el dinero de caja)
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
-          tipo: 'ajuste_pedido',
-          monto: -diferenciaTotal, // NEGATIVO - representa ajuste/devolución
+          tipo: 'egreso',
+          monto: diferenciaExceso,
           metodoPago: 'Ajuste',
           pedidoId: selectedPedido.id,
           numeroPedido: selectedPedido.numeroPedido,
-          descripcion: `Anulación producto en Pedido #${selectedPedido.numeroPedido}: ${itemToAnular.nombre}`,
+          descripcion: `Egreso por anulación Pedido #${selectedPedido.numeroPedido}: Total abonado ($${totalAbonado.toLocaleString()}) excede nuevo total ($${nuevoTotal.toLocaleString()})`,
           motivo: motivoAnulacion,
           clienteId: selectedPedido.clienteId,
           clienteNombre: selectedPedido.clienteNombre,
@@ -1230,9 +1245,13 @@ const Pedidos = () => {
             nombre: itemToAnular.nombre,
             cantidad: itemToAnular.cantidad,
             precio: itemToAnular.precio || 0,
-            subtotal: itemToAnular.subtotal || 0
+            subtotal: itemToAnular.subtotal || 0,
+            totalAnterior: selectedPedido.total || selectedPedido.totalPedido || 0,
+            nuevoTotal: nuevoTotal,
+            totalAbonado: totalAbonado,
+            diferenciaExceso: diferenciaExceso
           },
-          fecha: serverTimestamp(),
+          fecha: serverTimestamp(), // Fecha actual - cuando realmente sale el dinero de caja
           userId: currentUser.uid
         });
       }
@@ -1240,8 +1259,13 @@ const Pedidos = () => {
       await batch.commit();
 
       let mensaje = `✅ Producto anulado exitosamente.\n\nNuevo total: $${nuevoTotal.toLocaleString()}`;
-      if (tieneAbonos) {
-        mensaje += `\n\n📊 Transacción de ajuste creada (pedido con abonos: $${totalAbonado.toLocaleString()}).`;
+
+      // Mostrar advertencia si hubo exceso de pago
+      if (nuevoTotal < totalAbonado) {
+        const diferenciaExceso = totalAbonado - nuevoTotal;
+        mensaje += `\n\n⚠️ ADVERTENCIA: El total abonado ($${totalAbonado.toLocaleString()}) excede el nuevo total ($${nuevoTotal.toLocaleString()})`;
+        mensaje += `\n\n💰 Se creó un egreso automático de $${diferenciaExceso.toLocaleString()} en caja`;
+        mensaje += `\n\nDebes devolver este dinero al cliente.`;
       }
       alert(mensaje);
 

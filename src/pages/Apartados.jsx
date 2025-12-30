@@ -949,22 +949,24 @@ const Apartados = () => {
         updatedAt: serverTimestamp()
       });
 
-      // Crear transacción de ajuste SI hay diferencia de total Y el apartado tiene abonos
+      // Verificar si necesitamos crear transacción de ajuste
       const totalAnterior = selectedApartado.totalApartado;
-      const diferenciaSubtotal = nuevoTotal - totalAnterior;
       const totalAbonado = selectedApartado.totalAbonado || 0;
-      const tieneAbonos = totalAbonado > 0;
 
-      if (diferenciaSubtotal !== 0 && tieneAbonos) {
+      // Solo crear transacción si nuevo total < total abonado (hay exceso de pago)
+      if (nuevoTotal < totalAbonado) {
+        const diferenciaExceso = totalAbonado - nuevoTotal;
+
+        // Crear transacción de egreso/devolución con la fecha ACTUAL (cuando sale el dinero de caja)
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
-          tipo: diferenciaSubtotal > 0 ? 'ajuste_apartado_positivo' : 'ajuste_apartado_negativo',
-          monto: diferenciaSubtotal, // Puede ser positivo o negativo
+          tipo: 'egreso',
+          monto: diferenciaExceso,
           metodoPago: 'Ajuste',
           apartadoId: selectedApartado.id,
           numeroApartado: selectedApartado.numeroApartado,
-          descripcion: `Corrección producto Apartado #${selectedApartado.numeroApartado}: ${itemActual.nombre} → ${productoParaUsar.nombre}`,
-          notas: notasCorreccion,
+          descripcion: `Egreso por corrección Apartado #${selectedApartado.numeroApartado}: Total abonado ($${totalAbonado.toLocaleString()}) excede nuevo total ($${nuevoTotal.toLocaleString()})`,
+          notas: `Corrección: ${itemActual.nombre} → ${productoParaUsar.nombre}. ${notasCorreccion}`,
           clienteId: selectedApartado.clienteId,
           clienteNombre: selectedApartado.clienteNombre,
           detalleCorreccion: {
@@ -982,9 +984,10 @@ const Apartados = () => {
             },
             totalAnterior: totalAnterior,
             totalNuevo: nuevoTotal,
-            diferencia: diferenciaSubtotal
+            totalAbonado: totalAbonado,
+            diferenciaExceso: diferenciaExceso
           },
-          fecha: serverTimestamp(),
+          fecha: serverTimestamp(), // Fecha actual - cuando realmente sale el dinero de caja
           userId: currentUser.email || 'Admin'
         });
       }
@@ -992,8 +995,13 @@ const Apartados = () => {
       await batch.commit();
 
       let mensaje = '✅ Apartado corregido exitosamente.\n\nInventario actualizado correctamente.';
-      if (diferenciaSubtotal !== 0 && tieneAbonos) {
-        mensaje += `\n\n📊 Transacción de ajuste creada (diferencia: $${Math.abs(diferenciaSubtotal).toLocaleString()}).`;
+
+      // Mostrar advertencia si hubo exceso de pago
+      if (nuevoTotal < totalAbonado) {
+        const diferenciaExceso = totalAbonado - nuevoTotal;
+        mensaje += `\n\n⚠️ ADVERTENCIA: El total abonado ($${totalAbonado.toLocaleString()}) excede el nuevo total ($${nuevoTotal.toLocaleString()})`;
+        mensaje += `\n\n💰 Se creó un egreso automático de $${diferenciaExceso.toLocaleString()} en caja`;
+        mensaje += `\n\nDebes devolver este dinero al cliente.`;
       }
       alert(mensaje);
 
@@ -1078,7 +1086,7 @@ const Apartados = () => {
         subtotal: itemToAnular.subtotal || 0,
         anulado: true,
         anulacion: {
-          fecha: serverTimestamp(),
+          fecha: new Date().toISOString(), // No se puede usar serverTimestamp() dentro de arrays
           motivo: motivoAnulacion || '',
           usuario: currentUser.email || 'Admin'
         }
@@ -1106,20 +1114,22 @@ const Apartados = () => {
         updatedAt: serverTimestamp()
       });
 
-      // Crear transacción de ajuste SI el apartado tiene abonos (igual que Pedidos)
+      // Verificar si necesitamos crear transacción de egreso
       const totalAbonado = selectedApartado.totalAbonado || 0;
-      const tieneAbonos = totalAbonado > 0;
 
-      if (tieneAbonos) {
-        const diferenciaTotal = itemToAnular.subtotal;
+      // Solo crear transacción si nuevo total < total abonado (hay exceso de pago)
+      if (nuevoTotal < totalAbonado) {
+        const diferenciaExceso = totalAbonado - nuevoTotal;
+
+        // Crear transacción de egreso/devolución con la fecha ACTUAL (cuando sale el dinero de caja)
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
-          tipo: 'ajuste_apartado',
-          monto: -diferenciaTotal, // NEGATIVO - representa devolución/ajuste
+          tipo: 'egreso',
+          monto: diferenciaExceso,
           metodoPago: 'Ajuste',
           apartadoId: selectedApartado.id,
           numeroApartado: selectedApartado.numeroApartado,
-          descripcion: `Anulación producto en Apartado #${selectedApartado.numeroApartado}: ${itemToAnular.nombre}`,
+          descripcion: `Egreso por anulación Apartado #${selectedApartado.numeroApartado}: Total abonado ($${totalAbonado.toLocaleString()}) excede nuevo total ($${nuevoTotal.toLocaleString()})`,
           motivo: motivoAnulacion,
           clienteId: selectedApartado.clienteId,
           clienteNombre: selectedApartado.clienteNombre,
@@ -1127,9 +1137,13 @@ const Apartados = () => {
             nombre: itemToAnular.nombre,
             cantidad: itemToAnular.cantidad,
             precio: itemToAnular.precio || 0,
-            subtotal: itemToAnular.subtotal || 0
+            subtotal: itemToAnular.subtotal || 0,
+            totalAnterior: selectedApartado.totalApartado,
+            nuevoTotal: nuevoTotal,
+            totalAbonado: totalAbonado,
+            diferenciaExceso: diferenciaExceso
           },
-          fecha: serverTimestamp(),
+          fecha: serverTimestamp(), // Fecha actual - cuando realmente sale el dinero de caja
           userId: currentUser.email || 'Admin'
         });
       }
@@ -1137,8 +1151,13 @@ const Apartados = () => {
       await batch.commit();
 
       let mensaje = `✅ Producto anulado exitosamente.\n\nNuevo total: $${nuevoTotal.toLocaleString()}\nSaldo pendiente: $${nuevoSaldoPendiente.toLocaleString()}`;
-      if (tieneAbonos) {
-        mensaje += `\n\n📊 Transacción de ajuste creada (apartado tiene abonos).`;
+
+      // Mostrar advertencia si hubo exceso de pago
+      if (nuevoTotal < totalAbonado) {
+        const diferenciaExceso = totalAbonado - nuevoTotal;
+        mensaje += `\n\n⚠️ ADVERTENCIA: El total abonado ($${totalAbonado.toLocaleString()}) excede el nuevo total ($${nuevoTotal.toLocaleString()})`;
+        mensaje += `\n\n💰 Se creó un egreso automático de $${diferenciaExceso.toLocaleString()} en caja`;
+        mensaje += `\n\nDebes devolver este dinero al cliente.`;
       }
       alert(mensaje);
 
