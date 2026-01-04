@@ -516,13 +516,13 @@ const Pedidos = () => {
 
       batch.set(pedidoRef, pedidoData);
 
-      // Paso B: Reservar stock en pedidos (NO actualizar stockTotal porque las prendas no existen aún)
-      // Incrementar stockReservadoPedidos para saber cuántas prendas están comprometidas
+      // Paso B: Incrementar total de prendas pedidas (NO actualizar stockTotal porque las prendas no existen aún)
+      // Incrementar totalPrendasPedidas para que corte/producción sepa cuántas prendas están en pedidos
       for (const item of cartItems) {
         if (item.product && item.product.id) {
           const productRef = doc(db, 'products', item.product.id);
           batch.set(productRef, {
-            stockReservadoPedidos: increment(item.cantidad),
+            totalPrendasPedidas: increment(item.cantidad),
             updatedAt: serverTimestamp()
           }, { merge: true });
         }
@@ -618,18 +618,47 @@ const Pedidos = () => {
   const handleUpdateItemEstado = async (itemIndex, nuevoEstado) => {
     if (!selectedPedido) return;
 
+    const estadoAnterior = selectedPedido.items[itemIndex].estadoItem;
+
     // Evitar cambios si el estado ya es el mismo
-    if (selectedPedido.items[itemIndex].estadoItem === nuevoEstado) return;
+    if (estadoAnterior === nuevoEstado) return;
 
     setLoading(true);
     try {
+      const batch = writeBatch(db);
       const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
 
       // 1. Actualizar el estado del item específico
       const updatedItems = [...selectedPedido.items];
       updatedItems[itemIndex].estadoItem = nuevoEstado;
 
-      // 2. Recalcular el estado general del pedido
+      const item = selectedPedido.items[itemIndex];
+
+      // 2. Actualizar inventario según el cambio de estado
+      const productoRef = doc(db, 'products', item.productoId);
+
+      // Si cambia de "En Producción" a "Listo para Entrega"
+      if (estadoAnterior === 'En Producción' && nuevoEstado === 'Listo para Entrega') {
+        // Cambio MANUAL: asume que se usa stock existente
+        // Solo reserva el stock, NO incrementa stockTotal
+        // (El stockTotal se incrementa cuando llega físicamente por EntradaSatelite/Proveedor)
+        batch.update(productoRef, {
+          stockReservadoPedidos: increment(item.cantidad), // Reservar para este pedido
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      // Si cambia de "Listo para Entrega" a "En Producción" (poco común pero posible)
+      if (estadoAnterior === 'Listo para Entrega' && nuevoEstado === 'En Producción') {
+        // Reversa del cambio manual: libera la reserva
+        // NO decrementa stockTotal (porque el cambio manual tampoco lo incrementó)
+        batch.update(productoRef, {
+          stockReservadoPedidos: increment(-item.cantidad), // Liberar reserva
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      // 3. Recalcular el estado general del pedido
       const anyInProduction = updatedItems.some(item => item.estadoItem === 'En Producción');
 
       // Considera 'Listo' o 'Entregado' como completos para esta lógica
@@ -653,18 +682,20 @@ const Pedidos = () => {
         nuevoEstadoGeneral = 'Entregado';
       }
 
-      // 3. Actualizar el pedido en la base de datos
-      await updateDoc(pedidoRef, {
+      // 4. Actualizar el pedido en la base de datos
+      batch.update(pedidoRef, {
         items: updatedItems,
         estadoGeneral: nuevoEstadoGeneral,
         updatedAt: serverTimestamp()
       });
 
-      // 4. Recargar el estado local
+      await batch.commit();
+
+      // 5. Recargar el estado local
       const pedidoSnap = await getDoc(pedidoRef);
       setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
 
-      // 5. Refrescar la lista principal de pedidos
+      // 6. Refrescar la lista principal de pedidos
       fetchPedidos();
 
     } catch (error) {
@@ -773,9 +804,11 @@ const Pedidos = () => {
           });
         } else {
           // Solo actualizar si el producto existe
+          // Decrementar: stockTotal (sale de bodega), stockReservadoPedidos (ya no reservado), totalPrendasPedidas (ya no pedido)
           batch.update(productRef, {
             stockTotal: increment(-item.cantidad),
             stockReservadoPedidos: increment(-item.cantidad),
+            totalPrendasPedidas: increment(-item.cantidad),
             updatedAt: serverTimestamp()
           });
         }
@@ -1002,8 +1035,9 @@ const Pedidos = () => {
       const precioNuevo = productoParaUsar.precio || 0;
       const subtotalNuevo = (precioNuevo || 0) * (cantidadNueva || 0);
 
-      // Crear copia de items actualizada
+      // Crear copia de items actualizada (preservando estadoItem)
       const updatedItems = [...selectedPedido.items];
+      const estadoItemActual = itemActual.estadoItem || 'En Producción';
       updatedItems[itemIndexToCorrect] = {
         productoId: productoNuevoId || '',
         productoNombre: productoParaUsar.nombre || '',
@@ -1014,7 +1048,8 @@ const Pedidos = () => {
         precio: precioNuevo || 0,
         cantidad: cantidadNueva || 0,
         subtotal: subtotalNuevo || 0,
-        categoria: productoParaUsar.categoria || ''
+        categoria: productoParaUsar.categoria || '',
+        estadoItem: estadoItemActual // Preservar el estado
       };
 
       // Recalcular total del pedido
@@ -1022,31 +1057,55 @@ const Pedidos = () => {
       const nuevoSaldoPendiente = nuevoTotal - (selectedPedido.totalAbonado || 0);
 
       // Ajustar inventario
+      const itemEstaListo = estadoItemActual === 'Listo para Entrega';
+
       if (!cambioDeProducto) {
         // Mismo producto, solo cambió la cantidad
         const diferenciaCantidad = cantidadNueva - cantidadAnterior;
         if (diferenciaCantidad !== 0) {
           const productoRef = doc(db, 'products', itemActual.productoId);
-          batch.update(productoRef, {
-            stockReservadoPedidos: increment(diferenciaCantidad),
+          const updateData = {
+            totalPrendasPedidas: increment(diferenciaCantidad),
             updatedAt: serverTimestamp()
-          });
+          };
+
+          // Si está en "Listo para Entrega", también ajustar stock físico y reservado
+          if (itemEstaListo) {
+            updateData.stockTotal = increment(diferenciaCantidad);
+            updateData.stockReservadoPedidos = increment(diferenciaCantidad);
+          }
+
+          batch.update(productoRef, updateData);
         }
       } else {
         // Productos diferentes
-        // Liberar stock del producto anterior
+        // Liberar del producto anterior
         const productoAnteriorRef = doc(db, 'products', itemActual.productoId);
-        batch.update(productoAnteriorRef, {
-          stockReservadoPedidos: increment(-cantidadAnterior),
+        const updateDataAnterior = {
+          totalPrendasPedidas: increment(-cantidadAnterior),
           updatedAt: serverTimestamp()
-        });
+        };
 
-        // Reservar stock del producto nuevo
+        if (itemEstaListo) {
+          updateDataAnterior.stockTotal = increment(-cantidadAnterior);
+          updateDataAnterior.stockReservadoPedidos = increment(-cantidadAnterior);
+        }
+
+        batch.update(productoAnteriorRef, updateDataAnterior);
+
+        // Incrementar del producto nuevo
         const productoNuevoRef = doc(db, 'products', productoNuevoId);
-        batch.update(productoNuevoRef, {
-          stockReservadoPedidos: increment(cantidadNueva),
+        const updateDataNuevo = {
+          totalPrendasPedidas: increment(cantidadNueva),
           updatedAt: serverTimestamp()
-        });
+        };
+
+        if (itemEstaListo) {
+          updateDataNuevo.stockTotal = increment(cantidadNueva);
+          updateDataNuevo.stockReservadoPedidos = increment(cantidadNueva);
+        }
+
+        batch.update(productoNuevoRef, updateDataNuevo);
       }
 
       // Actualizar el pedido
@@ -1182,8 +1241,9 @@ const Pedidos = () => {
       const batch = writeBatch(db);
       const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
 
-      // Marcar producto como anulado
+      // Marcar producto como anulado (preservando estadoItem)
       const updatedItems = [...selectedPedido.items];
+      const estadoItemActual = itemToAnular.estadoItem || 'En Producción';
       updatedItems[itemIndexToAnular] = {
         productoId: itemToAnular.productoId || '',
         productoNombre: itemToAnular.productoNombre || itemToAnular.nombre || '',
@@ -1195,6 +1255,7 @@ const Pedidos = () => {
         cantidad: itemToAnular.cantidad || 0,
         subtotal: itemToAnular.subtotal || 0,
         categoria: itemToAnular.categoria || '',
+        estadoItem: estadoItemActual, // Preservar estado
         anulado: true,
         anulacion: {
           fecha: new Date().toISOString(), // No se puede usar serverTimestamp() dentro de arrays
@@ -1208,12 +1269,21 @@ const Pedidos = () => {
         .filter(item => !item.anulado)
         .reduce((sum, item) => sum + item.subtotal, 0);
 
-      // Liberar stock reservado
+      // Decrementar inventario
+      const itemEstabaListo = estadoItemActual === 'Listo para Entrega';
       const productoRef = doc(db, 'products', itemToAnular.productoId);
-      batch.update(productoRef, {
-        stockReservadoPedidos: increment(-itemToAnular.cantidad),
+      const updateData = {
+        totalPrendasPedidas: increment(-itemToAnular.cantidad),
         updatedAt: serverTimestamp()
-      });
+      };
+
+      // Si estaba en "Listo para Entrega", también decrementar stock físico y reservado
+      if (itemEstabaListo) {
+        updateData.stockTotal = increment(-itemToAnular.cantidad);
+        updateData.stockReservadoPedidos = increment(-itemToAnular.cantidad);
+      }
+
+      batch.update(productoRef, updateData);
 
       // Actualizar pedido
       batch.update(pedidoRef, {
@@ -1316,12 +1386,21 @@ const Pedidos = () => {
         .filter(item => !item.anulado)
         .reduce((sum, item) => sum + item.subtotal, 0);
 
-      // Reservar stock nuevamente
+      // Incrementar inventario
+      const itemEstabaListo = itemToRestaurar.estadoItem === 'Listo para Entrega';
       const productoRef = doc(db, 'products', itemToRestaurar.productoId);
-      batch.update(productoRef, {
-        stockReservadoPedidos: increment(itemToRestaurar.cantidad),
+      const updateData = {
+        totalPrendasPedidas: increment(itemToRestaurar.cantidad),
         updatedAt: serverTimestamp()
-      });
+      };
+
+      // Si estaba en "Listo para Entrega", también incrementar stock físico y reservado
+      if (itemEstabaListo) {
+        updateData.stockTotal = increment(itemToRestaurar.cantidad);
+        updateData.stockReservadoPedidos = increment(itemToRestaurar.cantidad);
+      }
+
+      batch.update(productoRef, updateData);
 
       // Actualizar pedido
       batch.update(pedidoRef, {

@@ -181,6 +181,7 @@ function App() {
           </AuthProvider>
         } />
       </Routes>
+
     </Router>
   );
 }

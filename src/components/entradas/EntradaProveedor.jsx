@@ -220,15 +220,31 @@ const EntradaProveedor = () => {
       // PASO 4: Ejecutar todas las actualizaciones en batch
       const batch = writeBatch(db);
 
-      // 4.1. Actualizar solo stockTotal del producto
-      // stockReservadoPedidos ya se incrementó al crear el pedido
-      const productRef = doc(db, 'products', selectedProduct.id);
-      batch.update(productRef, {
-        stockTotal: increment(numCantidad),
-        updatedAt: serverTimestamp()
+      // 4.1. Calcular cuánto se asigna a pedidos listos
+      let cantidadReservadaPedidos = 0;
+      asignaciones.forEach(asig => {
+        if (asig.esCompleto) {
+          cantidadReservadaPedidos += asig.cantidadAsignada;
+        }
       });
 
-      // 4.2. Actualizar pedidos con items asignados
+      // 4.2. Actualizar stockTotal del producto (inventario físico)
+      // totalPrendasPedidas se incrementa al crear el pedido
+      // stockReservadoPedidos se incrementa aquí cuando las prendas llegan y se marcan "Listo para Entrega"
+      const productRef = doc(db, 'products', selectedProduct.id);
+      const productUpdate = {
+        stockTotal: increment(numCantidad),
+        updatedAt: serverTimestamp()
+      };
+
+      // Si hay asignaciones completas a pedidos, incrementar stockReservadoPedidos
+      if (cantidadReservadaPedidos > 0) {
+        productUpdate.stockReservadoPedidos = increment(cantidadReservadaPedidos);
+      }
+
+      batch.update(productRef, productUpdate);
+
+      // 4.3. Actualizar pedidos con items asignados
       for (const asig of asignaciones) {
         const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
         const pedidoSnap = await getDoc(pedidoRef);
@@ -251,7 +267,7 @@ const EntradaProveedor = () => {
         });
       }
 
-      // 4.3. Crear registro de auditoría en stockEntries
+      // 4.4. Crear registro de auditoría en stockEntries
       const entryRef = doc(collection(db, 'stockEntries'));
       batch.set(entryRef, {
         tipoEntrada: 'proveedor',

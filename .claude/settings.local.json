@@ -28,7 +28,9 @@
       "Bash(npm run migrate-pedidos:*)",
       "Bash(npm run sync-pedidos:*)",
       "Bash(npm run test:run:*)",
-      "Bash(npm uninstall:*)"
+      "Bash(npm uninstall:*)",
+      "Bash(node migrate-stock-fields.js:*)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []

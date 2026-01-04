@@ -45,6 +45,8 @@ const Inventory = () => {
   }, []);
 
   // Calcular stock disponible (nunca muestra negativos)
+  // Solo resta stockReservadoPedidos (pedidos listos para entrega) y stockReservadoApartados
+  // NO resta totalPrendasPedidas porque son prendas que aún no existen físicamente
   const calcularStockDisponible = (product) => {
     const disponible = (product.stockTotal || 0) - (product.stockReservadoPedidos || 0) - (product.stockReservadoApartados || 0);
     return Math.max(0, disponible); // Si es negativo, muestra 0
@@ -277,6 +279,7 @@ const Inventory = () => {
           precioB2B: Number(formData.precioB2B) || 0,
           stockTotal: Number(formData.stockTotal),
           esB2B: formData.esB2B,
+          totalPrendasPedidas: 0,
           stockReservadoPedidos: 0,
           stockReservadoApartados: 0,
           createdAt: serverTimestamp()
@@ -778,15 +781,19 @@ const Inventory = () => {
                           </p>
                         </div>
                         <div className="text-center">
-                          <p className="text-gray-500 mb-1">Pedidos</p>
+                          <p className="text-gray-500 mb-1">Total Pedidas</p>
+                          <p className="font-medium text-blue-600">{product.totalPrendasPedidas || 0}</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-gray-500 mb-1">Res. Pedidos</p>
                           <p className="font-medium text-gray-700">{product.stockReservadoPedidos || 0}</p>
                         </div>
                         <div className="text-center">
-                          <p className="text-gray-500 mb-1">Apartados</p>
+                          <p className="text-gray-500 mb-1">Res. Apartados</p>
                           <p className="font-medium text-gray-700">{product.stockReservadoApartados || 0}</p>
                         </div>
                         <div className="text-center">
-                          <p className="text-gray-500 mb-1">Total</p>
+                          <p className="text-gray-500 mb-1">Stock Total</p>
                           <p className="font-bold text-gray-900">{product.stockTotal}</p>
                         </div>
                       </div>
@@ -844,6 +851,9 @@ const Inventory = () => {
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Stock Disp.
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Total Pedidas
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Res. Pedidos
@@ -916,6 +926,9 @@ const Inventory = () => {
                         }`}>
                           {stockDisponible}
                         </span>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-blue-600 font-medium">
+                        {product.totalPrendasPedidas || 0}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
                         {product.stockReservadoPedidos || 0}
