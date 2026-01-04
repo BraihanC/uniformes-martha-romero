@@ -391,11 +391,56 @@ const POS = () => {
   };
 
   // ====== CLIENT SEARCH ======
-  const filteredClients = clients.filter(client => {
-    const query = clientSearchQuery.toLowerCase();
-    return client.nombreCompleto?.toLowerCase().includes(query) ||
-           client.numeroDocumento?.toLowerCase().includes(query);
-  });
+  const filteredClients = clients
+    .filter(client => {
+      const query = clientSearchQuery.toLowerCase();
+      return client.nombreCompleto?.toLowerCase().includes(query) ||
+             client.numeroDocumento?.toLowerCase().includes(query);
+    })
+    .sort((a, b) => {
+      // Si hay búsqueda, aplicar ordenamiento inteligente
+      if (clientSearchQuery.trim()) {
+        const searchLower = clientSearchQuery.toLowerCase();
+
+        const aNombre = (a.nombreCompleto || '').toLowerCase();
+        const bNombre = (b.nombreCompleto || '').toLowerCase();
+        const aDocumento = String(a.numeroDocumento || '').toLowerCase();
+        const bDocumento = String(b.numeroDocumento || '').toLowerCase();
+
+        // Prioridad 1: Coincidencia exacta en documento
+        const aExactDoc = aDocumento === searchLower;
+        const bExactDoc = bDocumento === searchLower;
+        if (aExactDoc && !bExactDoc) return -1;
+        if (!aExactDoc && bExactDoc) return 1;
+
+        // Prioridad 2: Coincidencia exacta en nombre
+        const aExactNombre = aNombre === searchLower;
+        const bExactNombre = bNombre === searchLower;
+        if (aExactNombre && !bExactNombre) return -1;
+        if (!aExactNombre && bExactNombre) return 1;
+
+        // Prioridad 3: Documento empieza con el término
+        const aStartsDoc = aDocumento.startsWith(searchLower);
+        const bStartsDoc = bDocumento.startsWith(searchLower);
+        if (aStartsDoc && !bStartsDoc) return -1;
+        if (!aStartsDoc && bStartsDoc) return 1;
+
+        // Prioridad 4: Nombre empieza con el término
+        const aStartsNombre = aNombre.startsWith(searchLower);
+        const bStartsNombre = bNombre.startsWith(searchLower);
+        if (aStartsNombre && !bStartsNombre) return -1;
+        if (!aStartsNombre && bStartsNombre) return 1;
+
+        // Prioridad 5: Contiene en documento (ya filtrado, pero mantener orden)
+        const aContainsDoc = aDocumento.includes(searchLower);
+        const bContainsDoc = bDocumento.includes(searchLower);
+        if (aContainsDoc && !bContainsDoc) return -1;
+        if (!aContainsDoc && bContainsDoc) return 1;
+      }
+
+      // Sin búsqueda o misma prioridad: ordenar alfabéticamente por nombre
+      return (a.nombreCompleto || '').localeCompare(b.nombreCompleto || '');
+    });
 
   const handleSelectClient = (client) => {
     setSelectedClient(client);

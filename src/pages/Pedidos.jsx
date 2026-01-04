@@ -117,6 +117,10 @@ const Pedidos = () => {
   const [notasCambioCliente, setNotasCambioCliente] = useState('');
   const [cambiandoCliente, setCambiandoCliente] = useState(false);
 
+  // Estados para observaciones del pedido
+  const [nuevaObservacion, setNuevaObservacion] = useState('');
+  const [guardandoObservacion, setGuardandoObservacion] = useState(false);
+
   // Cargar datos al iniciar
   useEffect(() => {
     fetchClients();
@@ -319,7 +323,8 @@ const Pedidos = () => {
         const codigoColegio = colegioSeleccionado?.codigo || selectedColegioId;
 
         // Comparar el código del colegio con el campo colegio del producto
-        const colegioMatch = product.colegio === codigoColegio;
+        // También incluir productos OT (Otras) que aplican para todos los colegios
+        const colegioMatch = product.colegio === codigoColegio || product.colegio === 'OT';
         return textMatch && colegioMatch;
       }
 
@@ -1538,6 +1543,56 @@ const Pedidos = () => {
     }
   };
 
+  // Función para agregar observación al pedido
+  const handleAgregarObservacion = async () => {
+    if (!selectedPedido) return;
+
+    if (!nuevaObservacion.trim()) {
+      alert('Por favor, escribe una observación.');
+      return;
+    }
+
+    setGuardandoObservacion(true);
+    try {
+      const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
+
+      // Crear el objeto de observación con timestamp y usuario
+      const nuevaObs = {
+        texto: nuevaObservacion.trim(),
+        fecha: new Date().toISOString(),
+        usuario: currentUser?.email || 'Usuario'
+      };
+
+      // Obtener el historial actual de observaciones
+      const observacionesActuales = selectedPedido.observacionesHistorial || [];
+
+      // Agregar la nueva observación al inicio del array
+      const observacionesActualizadas = [nuevaObs, ...observacionesActuales];
+
+      // Actualizar en Firestore
+      await updateDoc(pedidoRef, {
+        observacionesHistorial: observacionesActualizadas,
+        updatedAt: serverTimestamp()
+      });
+
+      // Recargar el pedido
+      const pedidoSnap = await getDoc(pedidoRef);
+      setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
+
+      // Limpiar el campo de texto
+      setNuevaObservacion('');
+
+      alert('✅ Observación agregada exitosamente.');
+      fetchPedidos(); // Refrescar la lista
+
+    } catch (error) {
+      console.error('Error al agregar observación:', error);
+      alert('❌ Error al agregar observación: ' + error.message);
+    } finally {
+      setGuardandoObservacion(false);
+    }
+  };
+
   // Imprimir tirilla desde el modal de gestión
   const handleImprimirTirillaGestion = () => {
     if (!selectedPedido) {
@@ -1638,29 +1693,71 @@ const Pedidos = () => {
     }
   };
 
-  // Filtrar pedidos por estado y búsqueda
-  const filteredPedidos = pedidos.filter(pedido => {
-    // Filtro por estado
-    const matchEstado = filterEstado ? pedido.estadoGeneral === filterEstado : true;
+  // Filtrar pedidos por estado y búsqueda con ordenamiento por relevancia
+  const filteredPedidos = pedidos
+    .filter(pedido => {
+      // Filtro por estado
+      const matchEstado = filterEstado ? pedido.estadoGeneral === filterEstado : true;
 
-    // Filtro por búsqueda
-    if (!searchTerm.trim()) {
-      return matchEstado;
-    }
+      // Filtro por búsqueda
+      if (!searchTerm.trim()) {
+        return matchEstado;
+      }
 
-    const searchLower = searchTerm.toLowerCase().trim();
-    const matchNumero = String(pedido.numeroPedido || '').includes(searchTerm);
-    const matchNombre = (pedido.clienteNombre || '').toLowerCase().includes(searchLower);
-    const matchDocumento = (pedido.clienteDocumento || '').toLowerCase().includes(searchLower);
+      const searchLower = searchTerm.toLowerCase().trim();
+      const matchNumero = String(pedido.numeroPedido || '').includes(searchTerm);
+      const matchNombre = (pedido.clienteNombre || '').toLowerCase().includes(searchLower);
+      const matchDocumento = (pedido.clienteDocumento || '').toLowerCase().includes(searchLower);
 
-    // Buscar teléfono en los datos del cliente
-    const clienteData = allClients.find(c => c.id === pedido.clienteId);
-    const matchTelefono = clienteData ? (clienteData.telefono || '').includes(searchTerm) : false;
+      // Buscar teléfono en los datos del cliente
+      const clienteData = allClients.find(c => c.id === pedido.clienteId);
+      const matchTelefono = clienteData ? (clienteData.telefono || '').includes(searchTerm) : false;
 
-    const matchSearch = matchNumero || matchNombre || matchDocumento || matchTelefono;
+      const matchSearch = matchNumero || matchNombre || matchDocumento || matchTelefono;
 
-    return matchEstado && matchSearch;
-  });
+      return matchEstado && matchSearch;
+    })
+    .sort((a, b) => {
+      // Si hay búsqueda activa, ordenar por relevancia
+      if (searchTerm.trim()) {
+        const searchLower = searchTerm.toLowerCase().trim();
+        const aNumero = String(a.numeroPedido || '');
+        const bNumero = String(b.numeroPedido || '');
+
+        // Prioridad 1: Coincidencia exacta en número de pedido
+        const aExactMatch = aNumero === searchTerm;
+        const bExactMatch = bNumero === searchTerm;
+        if (aExactMatch && !bExactMatch) return -1;
+        if (!aExactMatch && bExactMatch) return 1;
+
+        // Prioridad 2: Comienza con el término de búsqueda en número de pedido
+        const aStartsWith = aNumero.startsWith(searchTerm);
+        const bStartsWith = bNumero.startsWith(searchTerm);
+        if (aStartsWith && !bStartsWith) return -1;
+        if (!aStartsWith && bStartsWith) return 1;
+
+        // Prioridad 3: Contiene el término en número de pedido
+        const aContainsNumero = aNumero.includes(searchTerm);
+        const bContainsNumero = bNumero.includes(searchTerm);
+        if (aContainsNumero && !bContainsNumero) return -1;
+        if (!aContainsNumero && bContainsNumero) return 1;
+
+        // Prioridad 4: Coincidencia exacta en nombre del cliente
+        const aNombreExact = (a.clienteNombre || '').toLowerCase() === searchLower;
+        const bNombreExact = (b.clienteNombre || '').toLowerCase() === searchLower;
+        if (aNombreExact && !bNombreExact) return -1;
+        if (!aNombreExact && bNombreExact) return 1;
+
+        // Prioridad 5: Comienza con el término en nombre del cliente
+        const aNombreStarts = (a.clienteNombre || '').toLowerCase().startsWith(searchLower);
+        const bNombreStarts = (b.clienteNombre || '').toLowerCase().startsWith(searchLower);
+        if (aNombreStarts && !bNombreStarts) return -1;
+        if (!aNombreStarts && bNombreStarts) return 1;
+      }
+
+      // Orden por defecto: pedidos más recientes primero
+      return b.numeroPedido - a.numeroPedido;
+    });
 
   // Calcular paginación
   const totalPaginas = Math.ceil(filteredPedidos.length / pedidosPorPagina);
@@ -2771,6 +2868,72 @@ const Pedidos = () => {
                           ))}
                         </tbody>
                       </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Sección de Observaciones del Pedido */}
+              <div className="mt-6 border-t border-gray-200 pt-6">
+                <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                  Observaciones del Pedido
+                </h3>
+
+                {/* Observación inicial (al crear el pedido) */}
+                {selectedPedido.observaciones && selectedPedido.observaciones.trim() && (
+                  <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-xs font-semibold text-blue-700 mb-1">Observación Inicial:</p>
+                    <p className="text-sm text-gray-800">{selectedPedido.observaciones}</p>
+                  </div>
+                )}
+
+                {/* Formulario para agregar nueva observación */}
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Agregar Nueva Observación
+                  </label>
+                  <textarea
+                    value={nuevaObservacion}
+                    onChange={(e) => setNuevaObservacion(e.target.value)}
+                    rows="3"
+                    placeholder="Escribe aquí cualquier nota o observación adicional..."
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+                    disabled={guardandoObservacion}
+                  />
+                  <button
+                    onClick={handleAgregarObservacion}
+                    disabled={guardandoObservacion || !nuevaObservacion.trim()}
+                    className="mt-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    {guardandoObservacion ? 'Guardando...' : 'Agregar Observación'}
+                  </button>
+                </div>
+
+                {/* Historial de Observaciones */}
+                {selectedPedido.observacionesHistorial && selectedPedido.observacionesHistorial.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-700 mb-2">Historial de Observaciones</h4>
+                    <div className="space-y-2">
+                      {selectedPedido.observacionesHistorial.map((obs, index) => (
+                        <div key={index} className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                          <div className="flex justify-between items-start mb-1">
+                            <p className="text-xs text-gray-500">
+                              {new Date(obs.fecha).toLocaleDateString('es-CO', {
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </p>
+                            <p className="text-xs text-gray-500">{obs.usuario}</p>
+                          </div>
+                          <p className="text-sm text-gray-800">{obs.texto}</p>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}

@@ -20,21 +20,24 @@ Esta guía te ayudará a verificar que la funcionalidad de Pedidos funciona corr
 - ✅ Se muestra un alert de confirmación
 - ✅ El pedido aparece en la lista de pedidos
 
-### 2. Reserva de Stock al Crear Pedido
+### 2. Campos de Stock al Crear Pedido
 
 #### Pasos:
-1. Antes de crear el pedido, anotar el **RES. PEDIDOS** del producto en Inventario
+1. Antes de crear el pedido, anotar **TOTAL PEDIDAS** y **RES. PEDIDOS** del producto en Inventario
 2. Crear un pedido con ese producto (por ejemplo, 2 unidades)
-3. Verificar el **RES. PEDIDOS** del producto en Inventario después
+3. Verificar los campos del producto en Inventario después
 
 #### Verificaciones:
-- ✅ **RES. PEDIDOS** aumentó en la cantidad correcta (2 unidades)
+- ✅ **TOTAL PEDIDAS** aumentó en la cantidad correcta (2 unidades) - Campo informativo para producción
+- ✅ **RES. PEDIDOS** NO cambió (permanece en 0 hasta que items estén "Listo para Entrega")
 - ✅ **STOCK TOTAL** NO cambió (las prendas no existen físicamente aún)
-- ✅ **STOCK DISP.** disminuyó correctamente
+- ✅ **STOCK DISP.** NO cambió (porque RES. PEDIDOS no aumentó)
+- ✅ Todos los items inician en estado "En Producción"
 
 #### Fórmula esperada:
 ```
 Stock Disponible = STOCK TOTAL - RES. PEDIDOS - RES. APARTADOS
+Total Pedidas = Campo informativo que NO afecta Stock Disponible
 ```
 
 ### 3. Entrada de Productos (Satélite/Proveedor)
@@ -47,10 +50,59 @@ Stock Disponible = STOCK TOTAL - RES. PEDIDOS - RES. APARTADOS
 5. Guardar la entrada
 
 #### Verificaciones:
-- ✅ **STOCK TOTAL** aumenta por la cantidad que llegó
-- ✅ **RES. PEDIDOS** NO cambia (ya estaba reservado)
+- ✅ **STOCK TOTAL** aumenta por la cantidad que llegó (inventario físico)
+- ✅ **RES. PEDIDOS** SÍ aumenta cuando items pasan a "Listo para Entrega"
+- ✅ **TOTAL PEDIDAS** NO cambia (ya se incrementó al crear el pedido)
 - ✅ El item del pedido cambia a "Listo para Entrega"
-- ✅ **STOCK DISP.** se mantiene igual o aumenta
+- ✅ **STOCK DISP.** puede disminuir o mantenerse según cuántas unidades llegaron
+
+#### Ejemplo:
+```
+ANTES de la entrada:
+- Stock Total: 5
+- Total Pedidas: 10 (hay 10 prendas pedidas)
+- Res. Pedidos: 0 (ninguna lista aún)
+- Stock Disp.: 5
+
+DESPUÉS de entrada de 3 unidades asignadas a pedido:
+- Stock Total: 8 (llegaron 3)
+- Total Pedidas: 10 (no cambia)
+- Res. Pedidos: 3 (las 3 que llegaron están "Listo para Entrega")
+- Stock Disp.: 5 (8 - 3 = 5)
+```
+
+### 3b. Cambio Manual de Estado (Sin Entrada de Productos)
+
+#### Pasos:
+1. Ir a "Pedidos"
+2. Seleccionar un pedido con items en "En Producción"
+3. Cambiar manualmente el estado de un item a "Listo para Entrega"
+4. Verificar los campos en Inventario
+
+#### Verificaciones:
+- ✅ **RES. PEDIDOS** SÍ aumenta (asume que se usa stock existente)
+- ✅ **STOCK TOTAL** NO cambia (no llegó inventario nuevo)
+- ✅ **TOTAL PEDIDAS** NO cambia
+- ✅ **STOCK DISP.** disminuye por la reserva
+
+#### Ejemplo:
+```
+ANTES del cambio manual:
+- Stock Total: 10
+- Total Pedidas: 5
+- Res. Pedidos: 0
+- Stock Disp.: 10
+
+DESPUÉS de cambiar 2 items a "Listo para Entrega":
+- Stock Total: 10 (no cambia)
+- Total Pedidas: 5 (no cambia)
+- Res. Pedidos: 2 (se reservan del stock existente)
+- Stock Disp.: 8 (10 - 2 = 8)
+```
+
+⚠️ **Diferencia clave:**
+- **Entrada de productos**: Incrementa STOCK TOTAL + RES. PEDIDOS
+- **Cambio manual**: Solo incrementa RES. PEDIDOS (usa stock existente)
 
 ### 4. Estructura de Datos del Carrito
 
@@ -126,11 +178,16 @@ SALDO PENDIENTE:                    $140,000
 4. Cambiar un producto por otro
 5. Guardar la corrección
 
-#### Verificaciones:
-- ✅ El pedido se actualiza correctamente
-- ✅ **RES. PEDIDOS** del producto anterior disminuye
-- ✅ **RES. PEDIDOS** del producto nuevo aumenta
-- ✅ El stock se ajusta correctamente
+#### Verificaciones (Producto Anterior):
+- ✅ **TOTAL PEDIDAS** disminuye
+- ✅ **RES. PEDIDOS** disminuye SI el item estaba en "Listo para Entrega"
+- ✅ **STOCK TOTAL** NO cambia
+
+#### Verificaciones (Producto Nuevo):
+- ✅ **TOTAL PEDIDAS** aumenta
+- ✅ **RES. PEDIDOS** aumenta SI el nuevo item se marca "Listo para Entrega"
+- ✅ **STOCK TOTAL** NO cambia
+- ✅ El nuevo item hereda el estado del item anterior
 
 ### 8. Anulación de Pedidos
 
@@ -141,8 +198,10 @@ SALDO PENDIENTE:                    $140,000
 
 #### Verificaciones:
 - ✅ El pedido se marca como "Anulado"
-- ✅ **RES. PEDIDOS** de todos los productos disminuye
-- ✅ **STOCK DISP.** aumenta correctamente
+- ✅ **TOTAL PEDIDAS** disminuye para todos los productos
+- ✅ **RES. PEDIDOS** disminuye SOLO para items que estaban en "Listo para Entrega"
+- ✅ **STOCK TOTAL** NO cambia
+- ✅ **STOCK DISP.** aumenta por la liberación de reservas (solo items listos)
 
 ### 9. Stock Disponible Negativo (Sobreventa)
 
@@ -162,14 +221,30 @@ STOCK DISPONIBLE: -20 unidades ✅ (esto es correcto)
 
 ### 10. Estados de Items en Pedidos
 
-#### Estados válidos:
-- "En Producción" - Cuando se crea el pedido
-- "Listo para Entrega" - Cuando llega el producto
-- "Entregado" - Cuando se entrega al cliente
+#### Estados válidos y su impacto en inventario:
+
+**"En Producción"** - Estado inicial al crear el pedido
+- ✅ **TOTAL PEDIDAS**: Se incrementa al crear
+- ✅ **RES. PEDIDOS**: NO se incrementa (aún no reserva stock)
+- ✅ **STOCK TOTAL**: NO cambia
+- ✅ **STOCK DISP.**: NO cambia
+
+**"Listo para Entrega"** - Cuando llega el producto o se marca manualmente
+- ✅ **TOTAL PEDIDAS**: Ya estaba incrementado, no cambia
+- ✅ **RES. PEDIDOS**: SE INCREMENTA al pasar a este estado
+- ✅ **STOCK TOTAL**: Aumenta si llegó por Entrada, NO cambia si fue manual
+- ✅ **STOCK DISP.**: Puede disminuir o mantenerse según el flujo
+
+**"Entregado"** - Cuando se entrega al cliente
+- ✅ **TOTAL PEDIDAS**: Disminuye al entregar
+- ✅ **RES. PEDIDOS**: Disminuye al entregar
+- ✅ **STOCK TOTAL**: Disminuye al entregar
+- ✅ **STOCK DISP.**: Puede aumentar (se libera la reserva)
 
 #### Verificaciones:
 - ✅ Items nuevos inician en "En Producción"
-- ✅ Cambian a "Listo para Entrega" al registrar entrada
+- ✅ Cambian a "Listo para Entrega" automáticamente al registrar entrada
+- ✅ Pueden cambiarse manualmente a "Listo para Entrega" (usa stock existente)
 - ✅ Cambian a "Entregado" al completar la entrega
 
 ## 🐛 Problemas Comunes y Soluciones
@@ -197,11 +272,14 @@ const stockDisponible = stockTotal - stockReservadoPedidos - stockReservadoApart
 Cuando hagas cambios en el código, usa esta lista para verificar:
 
 - [ ] Los pedidos se crean sin errores
-- [ ] El stock se reserva al crear el pedido
-- [ ] El stock NO se reserva doble al recibir productos
+- [ ] **TOTAL PEDIDAS** se incrementa al crear el pedido
+- [ ] **RES. PEDIDOS** NO se incrementa al crear (solo al pasar a "Listo")
+- [ ] **RES. PEDIDOS** SÍ se incrementa al marcar "Listo para Entrega"
+- [ ] Entrada de productos incrementa **STOCK TOTAL** + **RES. PEDIDOS**
+- [ ] Cambio manual solo incrementa **RES. PEDIDOS** (no STOCK TOTAL)
 - [ ] Los cálculos de totales son correctos
-- [ ] Las correcciones ajustan el stock correctamente
-- [ ] Las anulaciones liberan el stock
+- [ ] Las correcciones ajustan ambos campos correctamente
+- [ ] Las anulaciones liberan ambos campos correctamente
 - [ ] La interfaz muestra los datos correctos
 
 ## 🔍 Depuración
@@ -231,16 +309,20 @@ console.log('Pedidos:', pedidos);
 
 Un cambio en el código es EXITOSO si:
 
-1. ✅ Puedes crear un pedido nuevo
-2. ✅ El stock se reserva correctamente
-3. ✅ No aparecen errores en la consola
-4. ✅ Los cálculos son precisos
-5. ✅ El inventario refleja los cambios
-6. ✅ Puedes corregir y anular pedidos
-7. ✅ La interfaz es responsive
+1. ✅ Puedes crear un pedido nuevo sin errores
+2. ✅ **TOTAL PEDIDAS** se incrementa correctamente al crear
+3. ✅ **RES. PEDIDOS** solo se incrementa al pasar a "Listo para Entrega"
+4. ✅ Entrada de productos actualiza ambos: STOCK TOTAL y RES. PEDIDOS
+5. ✅ Cambio manual solo actualiza RES. PEDIDOS (no STOCK TOTAL)
+6. ✅ Los cálculos de totales y saldos son precisos
+7. ✅ El inventario refleja correctamente los 3 campos (TOTAL PEDIDAS, RES. PEDIDOS, STOCK TOTAL)
+8. ✅ Stock Disponible = STOCK TOTAL - RES. PEDIDOS - RES. APARTADOS
+9. ✅ Puedes corregir y anular pedidos liberando ambos campos
+10. ✅ No aparecen errores en la consola del navegador
+11. ✅ La interfaz es responsive y muestra los datos correctos
 
 ---
 
-**Fecha:** 27 de diciembre de 2025
-**Versión:** 1.0
+**Fecha:** 4 de enero de 2026
+**Versión:** 2.0 - Actualizado con sistema dual de campos (TOTAL PEDIDAS + RES. PEDIDOS)
 **Mantenido por:** Claude Code

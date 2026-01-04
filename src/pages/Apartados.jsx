@@ -312,6 +312,18 @@ const Apartados = () => {
       const stockDisponible = Math.max(0, disponible); // Nunca muestra negativos
       const matchSearch = producto.nombre?.toLowerCase().includes(searchProducto.toLowerCase()) ||
                          producto.referencia?.toLowerCase().includes(searchProducto.toLowerCase());
+
+      // Si hay un colegio seleccionado, filtrar por colegio
+      if (selectedColegioId && selectedColegioId !== 'GENERAL') {
+        // Buscar el colegio seleccionado para obtener su código
+        const colegioSeleccionado = colegios.find(c => c.id === selectedColegioId);
+        const codigoColegio = colegioSeleccionado?.codigo || selectedColegioId;
+
+        // Incluir productos del colegio seleccionado O productos OT (generales)
+        const colegioMatch = producto.colegio === codigoColegio || producto.colegio === 'OT';
+        return matchSearch && stockDisponible > 0 && colegioMatch;
+      }
+
       return matchSearch && stockDisponible > 0;
     })
   );
@@ -1523,16 +1535,61 @@ const Apartados = () => {
     }
   };
 
-  // Filtrar apartados
-  const apartadosFiltrados = apartados.filter(apartado => {
-    const matchSearch = apartado.clienteNombre?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                       apartado.clienteTelefono?.includes(searchTerm) ||
-                       apartado.clienteDocumento?.includes(searchTerm);
+  // Filtrar apartados con ordenamiento por relevancia
+  const apartadosFiltrados = apartados
+    .filter(apartado => {
+      const searchLower = searchTerm.toLowerCase();
+      const matchNumero = String(apartado.numeroApartado || '').includes(searchTerm);
+      const matchNombre = apartado.clienteNombre?.toLowerCase().includes(searchLower);
+      const matchTelefono = apartado.clienteTelefono?.includes(searchTerm);
+      const matchDocumento = apartado.clienteDocumento?.includes(searchTerm);
 
-    const matchEstado = filtroEstado === 'Todos' || apartado.estadoGeneral === filtroEstado;
+      const matchSearch = matchNumero || matchNombre || matchTelefono || matchDocumento;
+      const matchEstado = filtroEstado === 'Todos' || apartado.estadoGeneral === filtroEstado;
 
-    return matchSearch && matchEstado;
-  });
+      return matchSearch && matchEstado;
+    })
+    .sort((a, b) => {
+      // Si hay búsqueda activa, ordenar por relevancia
+      if (searchTerm.trim()) {
+        const searchLower = searchTerm.toLowerCase().trim();
+        const aNumero = String(a.numeroApartado || '');
+        const bNumero = String(b.numeroApartado || '');
+
+        // Prioridad 1: Coincidencia exacta en número de apartado
+        const aExactMatch = aNumero === searchTerm;
+        const bExactMatch = bNumero === searchTerm;
+        if (aExactMatch && !bExactMatch) return -1;
+        if (!aExactMatch && bExactMatch) return 1;
+
+        // Prioridad 2: Comienza con el término de búsqueda en número de apartado
+        const aStartsWith = aNumero.startsWith(searchTerm);
+        const bStartsWith = bNumero.startsWith(searchTerm);
+        if (aStartsWith && !bStartsWith) return -1;
+        if (!aStartsWith && bStartsWith) return 1;
+
+        // Prioridad 3: Contiene el término en número de apartado
+        const aContainsNumero = aNumero.includes(searchTerm);
+        const bContainsNumero = bNumero.includes(searchTerm);
+        if (aContainsNumero && !bContainsNumero) return -1;
+        if (!aContainsNumero && bContainsNumero) return 1;
+
+        // Prioridad 4: Coincidencia exacta en nombre del cliente
+        const aNombreExact = (a.clienteNombre || '').toLowerCase() === searchLower;
+        const bNombreExact = (b.clienteNombre || '').toLowerCase() === searchLower;
+        if (aNombreExact && !bNombreExact) return -1;
+        if (!aNombreExact && bNombreExact) return 1;
+
+        // Prioridad 5: Comienza con el término en nombre del cliente
+        const aNombreStarts = (a.clienteNombre || '').toLowerCase().startsWith(searchLower);
+        const bNombreStarts = (b.clienteNombre || '').toLowerCase().startsWith(searchLower);
+        if (aNombreStarts && !bNombreStarts) return -1;
+        if (!aNombreStarts && bNombreStarts) return 1;
+      }
+
+      // Orden por defecto: apartados más recientes primero
+      return (b.numeroApartado || 0) - (a.numeroApartado || 0);
+    });
 
   // Paginación
   const indexOfLastItem = currentPage * itemsPerPage;
@@ -1601,7 +1658,7 @@ const Apartados = () => {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
               <input
                 type="text"
-                placeholder="Buscar por cliente, teléfono o documento..."
+                placeholder="Buscar por número de apartado, cliente, teléfono o documento..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
@@ -3324,11 +3381,23 @@ const Apartados = () => {
                 {ordenarPorTalla(
                   productos.filter(p => {
                     const searchLower = searchProductoCorreccion.toLowerCase();
-                    return (
+                    const matchSearch = (
                       p.nombre?.toLowerCase().includes(searchLower) ||
                       p.referencia?.toLowerCase().includes(searchLower) ||
                       p.talla?.toLowerCase().includes(searchLower)
                     );
+
+                    // Si el apartado tiene colegio, filtrar por colegio del apartado
+                    if (selectedApartado?.colegioId && selectedApartado.colegioId !== 'GENERAL') {
+                      const colegioSeleccionado = colegios.find(c => c.id === selectedApartado.colegioId);
+                      const codigoColegio = colegioSeleccionado?.codigo || selectedApartado.colegioId;
+
+                      // Incluir productos del colegio O productos OT (generales)
+                      const colegioMatch = p.colegio === codigoColegio || p.colegio === 'OT';
+                      return matchSearch && colegioMatch;
+                    }
+
+                    return matchSearch;
                   })
                 ).map(producto => (
                     <div
