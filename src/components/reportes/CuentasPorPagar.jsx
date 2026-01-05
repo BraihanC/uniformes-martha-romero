@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { db } from '../../services/firebase';
-import { collection, getDocs, query, where, writeBatch, doc, serverTimestamp } from 'firebase/firestore';
-import { ChevronDown, ChevronUp, CheckCircle } from 'lucide-react';
+import { collection, getDocs, query, where, writeBatch, doc, serverTimestamp, getDoc, increment } from 'firebase/firestore';
+import { ChevronDown, ChevronUp, CheckCircle, XCircle } from 'lucide-react';
 
 const CuentasPorPagar = () => {
   const [satelites, setSatelites] = useState([]);
@@ -9,6 +9,7 @@ const CuentasPorPagar = () => {
   const [loading, setLoading] = useState(true);
   const [expandedSatelite, setExpandedSatelite] = useState(null);
   const [processingPayment, setProcessingPayment] = useState(false);
+  const [processingAnulacion, setProcessingAnulacion] = useState(false);
 
   useEffect(() => {
     fetchCuentasPorPagar();
@@ -25,17 +26,19 @@ const CuentasPorPagar = () => {
       }));
       setSatelites(satelitesData);
 
-      // 2. Obtener todas las entradas de satélite NO PAGADAS
+      // 2. Obtener todas las entradas de satélite NO PAGADAS y NO ANULADAS
       const q = query(
         collection(db, 'stockEntries'),
         where('tipoEntrada', '==', 'satelite'),
         where('pagado', '==', false)
       );
       const entradasSnapshot = await getDocs(q);
-      const entradas = entradasSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      const entradas = entradasSnapshot.docs
+        .map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }))
+        .filter(entrada => !entrada.anulada); // Excluir entradas anuladas
 
       // 3. Agrupar por satélite y calcular totales
       const cuentasMap = new Map();
@@ -54,6 +57,15 @@ const CuentasPorPagar = () => {
         const cuenta = cuentasMap.get(sateliteId);
         cuenta.entradas.push(entrada);
         cuenta.totalAdeudado += entrada.costoTotal || 0;
+      });
+
+      // Ordenar entradas de cada satélite por fecha (más reciente primero)
+      cuentasMap.forEach(cuenta => {
+        cuenta.entradas.sort((a, b) => {
+          const fechaA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+          const fechaB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+          return fechaB - fechaA; // Descendente (más reciente primero)
+        });
       });
 
       // 4. Convertir a array y agregar información del satélite
@@ -118,6 +130,130 @@ const CuentasPorPagar = () => {
       alert('Error al procesar el pago. Intenta de nuevo.');
     } finally {
       setProcessingPayment(false);
+    }
+  };
+
+  const handleAnularEntrada = async (entrada) => {
+    // Construir mensaje de confirmación con detalles
+    const detallesAnulacion = `
+Esta acción ANULARÁ la entrada y revertirá los siguientes cambios:
+
+📦 Producto: ${entrada.nombre}
+📋 Referencia: ${entrada.referencia}
+🔢 Cantidad a revertir: ${entrada.cantidad} unidades
+
+📊 Cambios en Inventario:
+   • STOCK TOTAL: -${entrada.cantidad} unidades
+   ${entrada.cantidadAsignada > 0 ? `• RES. PEDIDOS: -${entrada.cantidadAsignada} unidades` : ''}
+
+${entrada.asignaciones && entrada.asignaciones.length > 0 ? `📋 Pedidos Afectados:
+${entrada.asignaciones.map(asig =>
+  `   • Pedido #${asig.numeroPedido || asig.pedidoId.slice(-6)}: ${asig.cantidad} item(s) ${asig.clienteNombre ? `(${asig.clienteNombre})` : ''} volverán a "En Producción"`
+).join('\n')}` : ''}
+
+⚠️ Esta acción NO se puede deshacer.
+
+¿Estás seguro de anular esta entrada?
+    `.trim();
+
+    const confirmacion = window.confirm(detallesAnulacion);
+    if (!confirmacion) return;
+
+    setProcessingAnulacion(true);
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Revertir cambios en el producto
+      const productRef = doc(db, 'products', entrada.productId);
+      const productUpdate = {
+        stockTotal: increment(-entrada.cantidad),
+        updatedAt: serverTimestamp()
+      };
+
+      // Si hubo asignaciones a pedidos, revertir stockReservadoPedidos
+      if (entrada.cantidadAsignada > 0) {
+        productUpdate.stockReservadoPedidos = increment(-entrada.cantidadAsignada);
+      }
+
+      batch.update(productRef, productUpdate);
+
+      // 2. Revertir cambios en los pedidos (si hubo asignaciones)
+      if (entrada.asignaciones && entrada.asignaciones.length > 0) {
+        for (const asig of entrada.asignaciones) {
+          // Solo procesar asignaciones completas (que cambiaron el estado)
+          if (asig.esCompleto) {
+            if (asig.tipo === 'pedido' || !asig.tipo) { // 'pedido' o sin tipo (legacy)
+              // PEDIDO REGULAR (POS)
+              const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
+              const pedidoSnap = await getDoc(pedidoRef);
+
+              if (pedidoSnap.exists()) {
+                const pedidoData = pedidoSnap.data();
+                const itemsActualizados = [...pedidoData.items];
+
+                // Cambiar el item de vuelta a "En Producción"
+                if (itemsActualizados[asig.itemIndex]) {
+                  itemsActualizados[asig.itemIndex] = {
+                    ...itemsActualizados[asig.itemIndex],
+                    estadoItem: 'En Producción'
+                  };
+
+                  batch.update(pedidoRef, {
+                    items: itemsActualizados,
+                    updatedAt: serverTimestamp()
+                  });
+                }
+              }
+            } else if (asig.tipo === 'pedido_b2b') {
+              // PEDIDO B2B (PORTAL)
+              const pedidoRef = doc(db, 'pedidos_b2b', asig.pedidoId);
+              const pedidoSnap = await getDoc(pedidoRef);
+
+              if (pedidoSnap.exists()) {
+                const pedidoData = pedidoSnap.data();
+                const productosActualizados = [...pedidoData.productos];
+
+                // Revertir cantidad alistada y estado
+                if (productosActualizados[asig.itemIndex]) {
+                  const producto = productosActualizados[asig.itemIndex];
+                  productosActualizados[asig.itemIndex] = {
+                    ...producto,
+                    cantidadAlistada: Math.max(0, (producto.cantidadAlistada || 0) - asig.cantidad),
+                    estadoProduccion: 'en_produccion',
+                    fechaAlistado: null
+                  };
+
+                  batch.update(pedidoRef, {
+                    productos: productosActualizados,
+                    updatedAt: serverTimestamp()
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // 3. Marcar la entrada como anulada
+      const entradaRef = doc(db, 'stockEntries', entrada.id);
+      batch.update(entradaRef, {
+        anulada: true,
+        fechaAnulacion: serverTimestamp(),
+        motivoAnulacion: 'Entrada incorrecta - Producto equivocado'
+      });
+
+      // Ejecutar todas las operaciones
+      await batch.commit();
+
+      alert('✅ Entrada anulada exitosamente.\n\nLos cambios han sido revertidos:\n- Stock del producto actualizado\n- Items de pedidos devueltos a "En Producción"');
+
+      // Recargar datos
+      await fetchCuentasPorPagar();
+    } catch (error) {
+      console.error('Error al anular entrada:', error);
+      alert('❌ Error al anular la entrada. Por favor, intenta de nuevo.\n\nDetalles: ' + error.message);
+    } finally {
+      setProcessingAnulacion(false);
     }
   };
 
@@ -225,6 +361,7 @@ const CuentasPorPagar = () => {
                           <th className="px-4 py-2 text-right text-xs font-medium text-gray-600">Cantidad</th>
                           <th className="px-4 py-2 text-right text-xs font-medium text-gray-600">Costo Unit.</th>
                           <th className="px-4 py-2 text-right text-xs font-medium text-gray-600">Total</th>
+                          <th className="px-4 py-2 text-center text-xs font-medium text-gray-600">Acciones</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
@@ -248,12 +385,23 @@ const CuentasPorPagar = () => {
                             <td className="px-4 py-3 text-sm font-semibold text-gray-900 text-right">
                               {formatCurrency(entrada.costoTotal)}
                             </td>
+                            <td className="px-4 py-3 text-center">
+                              <button
+                                onClick={() => handleAnularEntrada(entrada)}
+                                disabled={processingAnulacion}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 rounded-md hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="Anular esta entrada"
+                              >
+                                <XCircle size={14} />
+                                Anular
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
                       <tfoot className="bg-gray-100">
                         <tr>
-                          <td colSpan="5" className="px-4 py-3 text-sm font-semibold text-gray-800 text-right">
+                          <td colSpan="6" className="px-4 py-3 text-sm font-semibold text-gray-800 text-right">
                             Total a Pagar:
                           </td>
                           <td className="px-4 py-3 text-sm font-bold text-pink-600 text-right">

@@ -360,7 +360,10 @@ const EntradaSatelite = () => {
           pedidoId: a.pedidoId,
           numeroPedido: a.numeroPedido,
           clienteNombre: a.clienteNombre,
-          cantidad: a.cantidadAsignada
+          cantidad: a.cantidadAsignada,
+          tipo: a.tipo, // 'pedido' o 'pedido_b2b'
+          itemIndex: a.itemIndex,
+          esCompleto: a.esCompleto
         })),
         costoUnitario: costoSatelite,
         costoTotal: costoSatelite * numCantidad,

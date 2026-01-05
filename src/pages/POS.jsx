@@ -168,8 +168,9 @@ const POS = () => {
     let filtered = [...products];
 
     // Filter by colegio (using 'colegio' field which contains the colegio code)
+    // También incluir productos OT (Otras) que aplican para todos los colegios
     if (selectedColegio) {
-      filtered = filtered.filter(p => p.colegio === selectedColegio);
+      filtered = filtered.filter(p => p.colegio === selectedColegio || p.colegio === 'OT');
     }
 
     // Filter by tipo (reconoce "dia"/"diario" y "dep"/"deportivo")

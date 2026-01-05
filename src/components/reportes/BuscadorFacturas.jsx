@@ -123,48 +123,95 @@ const BuscadorFacturas = () => {
   }, []);
 
   // Filtrar facturas por búsqueda y filtros
-  const facturasFiltradas = todasFacturas.filter(factura => {
-    // Filtro por búsqueda
-    if (searchTerm.trim()) {
-      const searchLower = searchTerm.toLowerCase().trim();
-      const matchNumero = String(factura.numeroFactura || '').includes(searchTerm);
-      const matchNombre = (factura.clienteNombre || '').toLowerCase().includes(searchLower);
-      const matchDocumento = (factura.clienteDocumento || '').includes(searchTerm);
+  const facturasFiltradas = todasFacturas
+    .filter(factura => {
+      // Filtro por búsqueda
+      if (searchTerm.trim()) {
+        const searchLower = searchTerm.toLowerCase().trim();
+        const matchNumero = String(factura.numeroFactura || '').includes(searchTerm);
+        const matchNombre = (factura.clienteNombre || '').toLowerCase().includes(searchLower);
+        const matchDocumento = (factura.clienteDocumento || '').includes(searchTerm);
 
-      if (!matchNumero && !matchNombre && !matchDocumento) {
+        if (!matchNumero && !matchNombre && !matchDocumento) {
+          return false;
+        }
+      }
+
+      // Filtro por método de pago
+      if (filterMetodoPago && factura.metodoPago !== filterMetodoPago) {
         return false;
       }
-    }
 
-    // Filtro por método de pago
-    if (filterMetodoPago && factura.metodoPago !== filterMetodoPago) {
-      return false;
-    }
+      // Filtro por rango de fechas
+      if (filterFechaInicio || filterFechaFin) {
+        const facturaFecha = factura.createdAt?.toDate?.();
+        if (facturaFecha) {
+          const facturaDate = new Date(facturaFecha.toDateString()); // Solo fecha sin hora
 
-    // Filtro por rango de fechas
-    if (filterFechaInicio || filterFechaFin) {
-      const facturaFecha = factura.createdAt?.toDate?.();
-      if (facturaFecha) {
-        const facturaDate = new Date(facturaFecha.toDateString()); // Solo fecha sin hora
-
-        if (filterFechaInicio) {
-          const fechaInicio = new Date(filterFechaInicio);
-          if (facturaDate < fechaInicio) {
-            return false;
+          if (filterFechaInicio) {
+            const fechaInicio = new Date(filterFechaInicio);
+            if (facturaDate < fechaInicio) {
+              return false;
+            }
           }
-        }
 
-        if (filterFechaFin) {
-          const fechaFin = new Date(filterFechaFin);
-          if (facturaDate > fechaFin) {
-            return false;
+          if (filterFechaFin) {
+            const fechaFin = new Date(filterFechaFin);
+            if (facturaDate > fechaFin) {
+              return false;
+            }
           }
         }
       }
-    }
 
-    return true;
-  });
+      return true;
+    })
+    .sort((a, b) => {
+      // Si hay búsqueda, aplicar ordenamiento inteligente
+      if (searchTerm.trim()) {
+        const searchLower = searchTerm.toLowerCase().trim();
+
+        const aNumero = String(a.numeroFactura || '');
+        const bNumero = String(b.numeroFactura || '');
+        const aNombre = (a.clienteNombre || '').toLowerCase();
+        const bNombre = (b.clienteNombre || '').toLowerCase();
+        const aDocumento = String(a.clienteDocumento || '');
+        const bDocumento = String(b.clienteDocumento || '');
+
+        // Prioridad 1: Coincidencia exacta en número de factura
+        const aExactNumero = aNumero === searchTerm;
+        const bExactNumero = bNumero === searchTerm;
+        if (aExactNumero && !bExactNumero) return -1;
+        if (!aExactNumero && bExactNumero) return 1;
+
+        // Prioridad 2: Número de factura empieza con el término
+        const aStartsNumero = aNumero.startsWith(searchTerm);
+        const bStartsNumero = bNumero.startsWith(searchTerm);
+        if (aStartsNumero && !bStartsNumero) return -1;
+        if (!aStartsNumero && bStartsNumero) return 1;
+
+        // Prioridad 3: Coincidencia exacta en documento
+        const aExactDoc = aDocumento === searchTerm;
+        const bExactDoc = bDocumento === searchTerm;
+        if (aExactDoc && !bExactDoc) return -1;
+        if (!aExactDoc && bExactDoc) return 1;
+
+        // Prioridad 4: Nombre empieza con el término
+        const aStartsNombre = aNombre.startsWith(searchLower);
+        const bStartsNombre = bNombre.startsWith(searchLower);
+        if (aStartsNombre && !bStartsNombre) return -1;
+        if (!aStartsNombre && bStartsNombre) return 1;
+
+        // Prioridad 5: Documento empieza con el término
+        const aStartsDoc = aDocumento.startsWith(searchTerm);
+        const bStartsDoc = bDocumento.startsWith(searchTerm);
+        if (aStartsDoc && !bStartsDoc) return -1;
+        if (!aStartsDoc && bStartsDoc) return 1;
+      }
+
+      // Sin búsqueda o misma prioridad: ordenar por número de factura descendente
+      return (b.numeroFactura || 0) - (a.numeroFactura || 0);
+    });
 
   // Calcular paginación
   const totalPaginas = Math.ceil(facturasFiltradas.length / facturasPorPagina);
