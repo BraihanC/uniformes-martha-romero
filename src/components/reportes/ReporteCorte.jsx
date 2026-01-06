@@ -30,6 +30,12 @@ const ReporteCorte = () => {
   // Queremos ver todo lo que NO esté 'Entregado'
   const [filtroEstado, setFiltroEstado] = useState('Pendientes');
 
+  // Filtros de búsqueda
+  const [searchPrenda, setSearchPrenda] = useState('');
+  const [searchColegio, setSearchColegio] = useState('');
+  const [searchTalla, setSearchTalla] = useState('');
+  const [searchReferencia, setSearchReferencia] = useState('');
+
   /**
    * Función principal que busca y procesa los pedidos para corte
    */
@@ -157,6 +163,19 @@ const ReporteCorte = () => {
     }
   };
 
+  // Filtrar datos del reporte según los criterios de búsqueda
+  const filteredReportData = reportData.filter(item => {
+    const matchPrenda = !searchPrenda || item.prenda.toLowerCase().includes(searchPrenda.toLowerCase());
+    const matchColegio = !searchColegio || item.colegio.toLowerCase().includes(searchColegio.toLowerCase());
+    const matchTalla = !searchTalla || item.talla.toLowerCase().includes(searchTalla.toLowerCase());
+    const matchReferencia = !searchReferencia || item.referencias.toLowerCase().includes(searchReferencia.toLowerCase());
+
+    return matchPrenda && matchColegio && matchTalla && matchReferencia;
+  });
+
+  // Calcular total de cantidad filtrada
+  const totalCantidadFiltrada = filteredReportData.reduce((sum, item) => sum + item.cantidadTotal, 0);
+
   const handlePrint = () => {
     window.print();
   };
@@ -165,6 +184,13 @@ const ReporteCorte = () => {
     const startStr = formatDateForInput(startDate).replace(/-/g, '');
     const endStr = formatDateForInput(endDate).replace(/-/g, '');
     return `ReporteCorte_${startStr}_${endStr}.csv`;
+  };
+
+  const handleLimpiarFiltros = () => {
+    setSearchPrenda('');
+    setSearchColegio('');
+    setSearchTalla('');
+    setSearchReferencia('');
   };
 
   return (
@@ -256,6 +282,82 @@ const ReporteCorte = () => {
         </div>
       </div>
 
+      {/* --- Filtros de Búsqueda (solo si hay datos) --- */}
+      {reportData.length > 0 && (
+        <div className="bg-white rounded-lg shadow-md p-4 mb-6 print:hidden">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-3">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2 sm:mb-0">Filtrar Resultados</h3>
+            <button
+              onClick={handleLimpiarFiltros}
+              className="text-sm text-gray-600 hover:text-pink-600 underline"
+            >
+              Limpiar filtros
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {/* Buscar por Prenda */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Buscar Prenda</label>
+              <input
+                type="text"
+                value={searchPrenda}
+                onChange={(e) => setSearchPrenda(e.target.value)}
+                placeholder="ej. CHAQUETA MA"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 text-sm"
+              />
+            </div>
+
+            {/* Buscar por Colegio */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Buscar Colegio</label>
+              <input
+                type="text"
+                value={searchColegio}
+                onChange={(e) => setSearchColegio(e.target.value)}
+                placeholder="ej. Manuel Aya"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 text-sm"
+              />
+            </div>
+
+            {/* Buscar por Talla */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Buscar Talla</label>
+              <input
+                type="text"
+                value={searchTalla}
+                onChange={(e) => setSearchTalla(e.target.value)}
+                placeholder="ej. 12"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 text-sm"
+              />
+            </div>
+
+            {/* Buscar por Referencia */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Buscar Referencia</label>
+              <input
+                type="text"
+                value={searchReferencia}
+                onChange={(e) => setSearchReferencia(e.target.value)}
+                placeholder="ej. MA003TD"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Resumen de Filtrado */}
+          {(searchPrenda || searchColegio || searchTalla || searchReferencia) && (
+            <div className="mt-3 p-3 bg-pink-50 rounded-lg border border-pink-200">
+              <p className="text-sm text-gray-700">
+                <span className="font-semibold">Resultados filtrados:</span> {filteredReportData.length} filas
+                <span className="ml-2">|</span>
+                <span className="ml-2 font-semibold">Total unidades:</span> {totalCantidadFiltrada}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* --- Contenido del Reporte (Sección Imprimible) --- */}
       <div id="reporte-corte-print">
         {loading && (
@@ -303,16 +405,19 @@ const ReporteCorte = () => {
 
             <div className="p-4 border-b print:hidden">
               <h2 className="text-base sm:text-lg font-semibold text-gray-800">
-                Reporte de Corte Agrupado ({reportData.length} filas)
+                Reporte de Corte Agrupado ({filteredReportData.length} de {reportData.length} filas)
               </h2>
               <p className="text-xs sm:text-sm text-gray-500">
                 Mostrando pedidos de {formatDateForInput(startDate)} a {formatDateForInput(endDate)}
+                {(searchPrenda || searchColegio || searchTalla || searchReferencia) && (
+                  <span className="ml-2 text-pink-600 font-medium">- Total filtrado: {totalCantidadFiltrada} unidades</span>
+                )}
               </p>
             </div>
 
             {/* Vista de Tarjetas - Solo Móvil */}
             <div className="md:hidden divide-y divide-gray-200">
-              {reportData.map((item, index) => (
+              {filteredReportData.map((item, index) => (
                 <div key={index} className="p-4">
                   <div className="flex justify-between items-start mb-2">
                     <div className="flex-1">
@@ -348,7 +453,7 @@ const ReporteCorte = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {reportData.map((item, index) => (
+                  {filteredReportData.map((item, index) => (
                     <tr key={index} className="hover:bg-gray-50">
                       <td className="px-3 py-2 text-sm font-medium text-gray-800 whitespace-nowrap">{item.colegio}</td>
                       <td className="px-3 py-2 text-sm text-gray-700 whitespace-nowrap">{item.prenda}</td>
