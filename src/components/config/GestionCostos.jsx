@@ -2,10 +2,84 @@ import { useState, useRef } from 'react';
 import { db } from '../../services/firebase';
 import { collection, getDocs, doc, writeBatch, serverTimestamp } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
+import { FileDown, Upload } from 'lucide-react';
 
 const GestionCostos = () => {
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Función para exportar productos actuales a Excel
+  const handleExportProductos = async () => {
+    setExporting(true);
+    try {
+      // Obtener todos los productos
+      const productsSnapshot = await getDocs(collection(db, 'products'));
+
+      if (productsSnapshot.empty) {
+        alert('No hay productos en el inventario para exportar.');
+        setExporting(false);
+        return;
+      }
+
+      // Preparar datos para Excel
+      const productosParaExcel = [];
+      productsSnapshot.docs.forEach(doc => {
+        const data = doc.data();
+        productosParaExcel.push({
+          REFERENCIA: data.referencia || '',
+          NOMBRE: data.nombre || '',
+          TALLA: data.talla || 'Única',
+          COLEGIO: data.colegio || '',
+          COSTO_COMPRA: data.costoCompra || 0,
+          COSTO_SATELITE: data.costoSatelite || 0,
+          PRECIO_VENTA: data.precio || 0,
+          STOCK_TOTAL: data.stockTotal || 0
+        });
+      });
+
+      // Ordenar por referencia
+      productosParaExcel.sort((a, b) => {
+        const refA = String(a.REFERENCIA);
+        const refB = String(b.REFERENCIA);
+        return refA.localeCompare(refB);
+      });
+
+      // Crear el libro de Excel
+      const worksheet = XLSX.utils.json_to_sheet(productosParaExcel);
+
+      // Ajustar anchos de columnas
+      const columnWidths = [
+        { wch: 15 }, // REFERENCIA
+        { wch: 50 }, // NOMBRE
+        { wch: 10 }, // TALLA
+        { wch: 12 }, // COLEGIO
+        { wch: 15 }, // COSTO_COMPRA
+        { wch: 15 }, // COSTO_SATELITE
+        { wch: 15 }, // PRECIO_VENTA
+        { wch: 12 }  // STOCK_TOTAL
+      ];
+      worksheet['!cols'] = columnWidths;
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Productos');
+
+      // Generar nombre de archivo con fecha
+      const fecha = new Date().toISOString().split('T')[0];
+      const fileName = `Productos_Costos_${fecha}.xlsx`;
+
+      // Descargar archivo
+      XLSX.writeFile(workbook, fileName);
+
+      alert(`✅ Archivo exportado exitosamente:\n${fileName}\n\nTotal de productos: ${productosParaExcel.length}\n\n💡 Edita los costos en este archivo y luego reimportalo.`);
+
+    } catch (error) {
+      console.error('Error al exportar productos:', error);
+      alert('❌ Error al exportar productos: ' + error.message);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // Activar el input de archivo
   const handleImportClick = () => {
@@ -76,9 +150,11 @@ const GestionCostos = () => {
         // Convertir a número y validar
         const costoCompra = Number(row.COSTO_COMPRA || 0);
         const costoSatelite = Number(row.COSTO_SATELITE || 0);
+        const precioVenta = Number(row.PRECIO_VENTA || 0);
 
         // Validar que sean números válidos y no negativos
-        if (isNaN(costoCompra) || isNaN(costoSatelite) || costoCompra < 0 || costoSatelite < 0) {
+        if (isNaN(costoCompra) || isNaN(costoSatelite) || isNaN(precioVenta) ||
+            costoCompra < 0 || costoSatelite < 0 || precioVenta < 0) {
           datosInvalidos++;
           return;
         }
@@ -92,6 +168,7 @@ const GestionCostos = () => {
           batch.update(productRef, {
             costoCompra: costoCompra,
             costoSatelite: costoSatelite,
+            precio: precioVenta,
             updatedAt: serverTimestamp()
           });
           actualizados++;
@@ -108,8 +185,11 @@ const GestionCostos = () => {
       }
 
       // --- 5. Mostrar Reporte Detallado ---
-      let reporteMensaje = `Actualización de costos completada:\n\n`;
+      let reporteMensaje = `Actualización de costos y precios completada:\n\n`;
       reporteMensaje += `✅ ${actualizados} productos actualizados correctamente.\n`;
+      reporteMensaje += `   • Costos de compra\n`;
+      reporteMensaje += `   • Costos de satélite\n`;
+      reporteMensaje += `   • Precios de venta\n\n`;
 
       if (sinReferencia > 0) {
         reporteMensaje += `⚠️  ${sinReferencia} filas sin referencia (omitidas).\n`;
@@ -118,7 +198,7 @@ const GestionCostos = () => {
         reporteMensaje += `⚠️  ${referenciaNoEncontrada} referencias no encontradas en inventario.\n`;
       }
       if (datosInvalidos > 0) {
-        reporteMensaje += `❌ ${datosInvalidos} filas con datos inválidos (costos negativos o no numéricos).\n`;
+        reporteMensaje += `❌ ${datosInvalidos} filas con datos inválidos (valores negativos o no numéricos).\n`;
       }
 
       if (referenciasNoEncontradas.length > 0) {
@@ -142,9 +222,70 @@ const GestionCostos = () => {
 
   return (
     <div className="bg-white rounded-lg shadow-md p-6">
-      <h2 className="text-xl font-semibold text-gray-800 mb-4">Carga Masiva de Costos</h2>
+      <h2 className="text-xl font-semibold text-gray-800 mb-4">Gestión de Costos y Precios</h2>
+      <p className="text-sm text-gray-600 mb-6">
+        Exporta todos los productos actuales del sistema, edita los costos/precios y vuelve a importar el archivo actualizado.
+      </p>
+
+      {/* Sección de Exportación */}
+      <div className="bg-gradient-to-r from-green-50 to-green-100 border-l-4 border-green-500 rounded-lg p-4 mb-6">
+        <h3 className="text-lg font-semibold text-gray-800 mb-2 flex items-center gap-2">
+          <FileDown className="text-green-600" size={20} />
+          Paso 1: Exportar Productos Actuales
+        </h3>
+        <p className="text-sm text-gray-700 mb-3">
+          Genera un archivo Excel con TODOS los productos actuales del sistema incluyendo: referencia, nombre, talla, colegio, y costos actuales.
+        </p>
+        <button
+          onClick={handleExportProductos}
+          disabled={exporting}
+          className="px-6 py-3 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          <FileDown size={18} />
+          {exporting ? 'Exportando...' : 'Exportar Productos a Excel'}
+        </button>
+      </div>
+
+      {/* Sección de Importación */}
+      <div className="bg-gradient-to-r from-blue-50 to-blue-100 border-l-4 border-blue-500 rounded-lg p-4 mb-6">
+        <h3 className="text-lg font-semibold text-gray-800 mb-2 flex items-center gap-2">
+          <Upload className="text-blue-600" size={20} />
+          Paso 2: Editar y Re-importar
+        </h3>
+        <p className="text-sm text-gray-700 mb-3">
+          Después de exportar, edita los costos/precios en el archivo Excel y súbelo aquí para actualizar masivamente.
+        </p>
+
+        {/* Input file oculto */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.csv"
+          onChange={handleCostImport}
+          style={{ display: 'none' }}
+        />
+
+        <button
+          onClick={handleImportClick}
+          disabled={loading}
+          className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          <Upload size={18} />
+          {loading ? 'Procesando...' : 'Importar Archivo Actualizado'}
+        </button>
+
+        {loading && (
+          <p className="text-sm text-gray-600 mt-3">
+            Procesando... Esto puede tardar varios minutos si el archivo es grande.
+          </p>
+        )}
+      </div>
+
+      <hr className="my-6" />
+
+      <h3 className="text-lg font-semibold text-gray-800 mb-3">Información del Archivo</h3>
       <p className="text-sm text-gray-600 mb-4">
-        Sube un archivo Excel (.xlsx o .csv) con las siguientes columnas para actualizar los costos de productos existentes:
+        El archivo exportado incluye las siguientes columnas:
       </p>
 
       {/* Nota importante */}
@@ -170,82 +311,58 @@ const GestionCostos = () => {
 
       {/* Ejemplo visual del formato */}
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6">
-        <p className="text-sm font-medium text-gray-700 mb-2">Formato requerido del Excel:</p>
+        <p className="text-sm font-medium text-gray-700 mb-2">Estructura del archivo exportado:</p>
         <div className="overflow-x-auto">
           <table className="text-xs font-mono border-collapse">
             <thead className="bg-gray-100">
               <tr>
-                <th className="px-3 py-2 border border-gray-300 text-left">REFERENCIA</th>
-                <th className="px-3 py-2 border border-gray-300 text-left">COSTO_COMPRA</th>
-                <th className="px-3 py-2 border border-gray-300 text-left">COSTO_SATELITE</th>
-                <th className="px-3 py-2 border border-gray-300 text-left text-gray-500">Tipo</th>
+                <th className="px-2 py-2 border border-gray-300 text-left">REFERENCIA</th>
+                <th className="px-2 py-2 border border-gray-300 text-left">NOMBRE</th>
+                <th className="px-2 py-2 border border-gray-300 text-left">TALLA</th>
+                <th className="px-2 py-2 border border-gray-300 text-left">COLEGIO</th>
+                <th className="px-2 py-2 border border-gray-300 text-left bg-yellow-50">COSTO_COMPRA</th>
+                <th className="px-2 py-2 border border-gray-300 text-left bg-yellow-50">COSTO_SATELITE</th>
+                <th className="px-2 py-2 border border-gray-300 text-left bg-yellow-50">PRECIO_VENTA</th>
+                <th className="px-2 py-2 border border-gray-300 text-left">STOCK_TOTAL</th>
               </tr>
             </thead>
             <tbody className="bg-white">
-              <tr className="bg-green-50">
-                <td className="px-3 py-2 border border-gray-300">10201</td>
-                <td className="px-3 py-2 border border-gray-300">18000</td>
-                <td className="px-3 py-2 border border-gray-300 text-gray-400">0</td>
-                <td className="px-3 py-2 border border-gray-300 text-gray-500 text-xs">Producto comprado</td>
+              <tr>
+                <td className="px-2 py-2 border border-gray-300">MA001CH</td>
+                <td className="px-2 py-2 border border-gray-300">CHAQUETA MA</td>
+                <td className="px-2 py-2 border border-gray-300">12</td>
+                <td className="px-2 py-2 border border-gray-300">MA</td>
+                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">0</td>
+                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">45000</td>
+                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">120000</td>
+                <td className="px-2 py-2 border border-gray-300">15</td>
               </tr>
-              <tr className="bg-purple-50">
-                <td className="px-3 py-2 border border-gray-300">10202</td>
-                <td className="px-3 py-2 border border-gray-300 text-gray-400">0</td>
-                <td className="px-3 py-2 border border-gray-300">15000</td>
-                <td className="px-3 py-2 border border-gray-300 text-gray-500 text-xs">Producto fabricado</td>
-              </tr>
-              <tr className="bg-green-50">
-                <td className="px-3 py-2 border border-gray-300">10203</td>
-                <td className="px-3 py-2 border border-gray-300">8500</td>
-                <td className="px-3 py-2 border border-gray-300 text-gray-400">0</td>
-                <td className="px-3 py-2 border border-gray-300 text-gray-500 text-xs">Producto comprado</td>
-              </tr>
-              <tr className="bg-purple-50">
-                <td className="px-3 py-2 border border-gray-300">10204</td>
-                <td className="px-3 py-2 border border-gray-300 text-gray-400">0</td>
-                <td className="px-3 py-2 border border-gray-300">22000</td>
-                <td className="px-3 py-2 border border-gray-300 text-gray-500 text-xs">Producto fabricado</td>
+              <tr>
+                <td className="px-2 py-2 border border-gray-300">GEN001ME</td>
+                <td className="px-2 py-2 border border-gray-300">MEDIAS BLANCAS</td>
+                <td className="px-2 py-2 border border-gray-300">Única</td>
+                <td className="px-2 py-2 border border-gray-300">OT</td>
+                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">8000</td>
+                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">0</td>
+                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">15000</td>
+                <td className="px-2 py-2 border border-gray-300">50</td>
               </tr>
             </tbody>
           </table>
         </div>
         <div className="mt-3 space-y-2 text-xs text-gray-600">
-          <p><strong>REFERENCIA:</strong> Código único del producto (debe existir en el inventario)</p>
-          <p className="flex items-start">
-            <span className="inline-block w-3 h-3 bg-green-100 border border-green-300 mr-2 mt-0.5"></span>
-            <span><strong>COSTO_COMPRA:</strong> Para productos comprados a terceros (medias, corbatas, moños, etc.)</span>
+          <p><strong>📌 Columnas de solo lectura:</strong> REFERENCIA, NOMBRE, TALLA, COLEGIO, STOCK_TOTAL (no editar)</p>
+          <p className="bg-yellow-50 p-2 rounded border border-yellow-200">
+            <strong>✏️ Columnas editables (resaltadas):</strong>
           </p>
-          <p className="flex items-start">
-            <span className="inline-block w-3 h-3 bg-purple-100 border border-purple-300 mr-2 mt-0.5"></span>
-            <span><strong>COSTO_SATELITE:</strong> Para productos fabricados (labor de confección pagada al satélite)</span>
-          </p>
-          <p className="text-gray-500 italic mt-2">* La columna "Tipo" no se incluye en el Excel, solo es referencia visual</p>
+          <ul className="list-disc list-inside ml-4 space-y-1">
+            <li><strong>COSTO_COMPRA:</strong> Para productos comprados (medias, corbatas, moños, etc.)</li>
+            <li><strong>COSTO_SATELITE:</strong> Para productos fabricados (labor de confección)</li>
+            <li><strong>PRECIO_VENTA:</strong> Precio al público</li>
+          </ul>
+          <p className="text-orange-600 font-semibold mt-2">⚠️ NO borres ni modifiques la columna REFERENCIA - es necesaria para identificar cada producto</p>
         </div>
       </div>
-
-      {/* Input file oculto */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".xlsx,.csv"
-        onChange={handleCostImport}
-        style={{ display: 'none' }}
-      />
-
-      <button
-        onClick={handleImportClick}
-        disabled={loading}
-        style={{ backgroundColor: '#EA5C2E' }}
-        className="px-6 py-3 text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {loading ? 'Procesando archivo...' : 'Seleccionar y Cargar Archivo de Costos'}
-      </button>
-
-      {loading && (
-        <p className="text-sm text-gray-600 mt-4">
-          Procesando... Esto puede tardar varios minutos si el archivo es grande.
-        </p>
-      )}
     </div>
   );
 };
