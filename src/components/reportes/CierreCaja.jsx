@@ -257,6 +257,8 @@ const CierreCaja = () => { // <--- Nombre cambiado
       let totalIngresos = 0;
       let totalEgresos = 0;
       let totalRetiros = 0;
+      let totalIngresosEfectivo = 0; // Solo efectivo
+      let totalEgresosEfectivo = 0;  // Solo efectivo
       const porMetodo = {};
       const porTipo = {};
       const egresosPorCategoria = {};
@@ -281,8 +283,16 @@ const CierreCaja = () => { // <--- Nombre cambiado
         // Sumar a Ingresos o Egresos (excluyendo retiros)
         else if (monto > 0) {
           totalIngresos += monto;
+          // Solo contar efectivo para el cálculo de efectivo esperado
+          if (metodo === 'Efectivo') {
+            totalIngresosEfectivo += monto;
+          }
         } else {
           totalEgresos += monto; // monto ya es negativo
+          // Solo contar efectivo para el cálculo de efectivo esperado
+          if (metodo === 'Efectivo') {
+            totalEgresosEfectivo += monto;
+          }
         }
 
         // Agrupar por Método de Pago (excluyendo retiros para no duplicar)
@@ -316,6 +326,7 @@ const CierreCaja = () => { // <--- Nombre cambiado
       });
 
       const saldoNeto = totalIngresos + totalEgresos;
+      const saldoNetoEfectivo = totalIngresosEfectivo + totalEgresosEfectivo;
 
       // 6. Guardar datos en el estado
       setReportData({
@@ -325,6 +336,7 @@ const CierreCaja = () => { // <--- Nombre cambiado
         totalRetiros,
         retirosCaja,
         saldoNeto,
+        saldoNetoEfectivo,
         porMetodo,
         porTipo,
         egresosPorCategoria,
@@ -613,7 +625,7 @@ const CierreCaja = () => { // <--- Nombre cambiado
                   <div>
                     <p className="text-sm text-purple-700 font-medium">Efectivo Esperado</p>
                     <p className="text-2xl font-bold text-purple-700">
-                      {formatCurrency(baseInicial + reportData.saldoNeto - reportData.totalRetiros)}
+                      {formatCurrency(baseInicial + reportData.saldoNetoEfectivo - reportData.totalRetiros)}
                     </p>
                   </div>
                 </div>
