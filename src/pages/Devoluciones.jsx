@@ -61,6 +61,21 @@ const Devoluciones = () => {
   const [metodoPagoDiferencia, setMetodoPagoDiferencia] = useState('Efectivo');
   const [notasCambio, setNotasCambio] = useState('');
 
+  // Estado para registros expandidos en historial
+  const [registrosExpandidos, setRegistrosExpandidos] = useState({});
+
+  // Estados de paginación para historial
+  const [paginaActualHistorial, setPaginaActualHistorial] = useState(1);
+  const registrosPorPagina = 10;
+
+  // Función para toggle de expansión de registros
+  const toggleRegistroExpandido = (id) => {
+    setRegistrosExpandidos(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
+
   // Cargar datos iniciales
   useEffect(() => {
     if (currentUser) {
@@ -69,6 +84,11 @@ const Devoluciones = () => {
       fetchHistorial();
     }
   }, [currentUser]);
+
+  // Resetear página de historial cuando cambie el historial
+  useEffect(() => {
+    setPaginaActualHistorial(1);
+  }, [historial.length]);
 
   const fetchProductos = async () => {
     try {
@@ -1559,6 +1579,324 @@ const Devoluciones = () => {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* SECCIÓN DE HISTORIAL */}
+        {!facturaEncontrada && (
+          <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6 mt-6">
+            <h2 className="text-lg sm:text-xl font-semibold text-gray-800 mb-6">
+              Historial de Cambios y Devoluciones
+            </h2>
+
+            {/* Estadísticas Rápidas */}
+            {historial.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <div className="flex items-center gap-3">
+                    <XCircle className="text-red-600" size={24} />
+                    <div>
+                      <p className="text-xs text-red-700 font-medium">Total Devoluciones</p>
+                      <p className="text-xl font-bold text-red-800">
+                        {historial.filter(h => h.tipo === 'devolucion').length}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="flex items-center gap-3">
+                    <RefreshCw className="text-blue-600" size={24} />
+                    <div>
+                      <p className="text-xs text-blue-700 font-medium">Total Cambios</p>
+                      <p className="text-xl font-bold text-blue-800">
+                        {historial.filter(h => h.tipo === 'cambio').length}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                  <div className="flex items-center gap-3">
+                    <DollarSign className="text-purple-600" size={24} />
+                    <div>
+                      <p className="text-xs text-purple-700 font-medium">Total Devuelto</p>
+                      <p className="text-xl font-bold text-purple-800">
+                        ${historial
+                          .filter(h => h.tipo === 'devolucion')
+                          .reduce((sum, h) => sum + (h.montoDevuelto || 0), 0)
+                          .toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Lista de Historial */}
+            {historial.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                <Package size={48} className="mx-auto mb-3 opacity-50" />
+                <p>No hay cambios o devoluciones registradas</p>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-4">
+                  {(() => {
+                    // Calcular paginación
+                    const indiceInicio = (paginaActualHistorial - 1) * registrosPorPagina;
+                    const indiceFin = indiceInicio + registrosPorPagina;
+                    const registrosPaginados = historial.slice(indiceInicio, indiceFin);
+
+                    return registrosPaginados.map((registro) => (
+                    <div
+                      key={registro.id}
+                      className={`border rounded-lg overflow-hidden ${
+                        registro.tipo === 'devolucion'
+                          ? 'border-red-200 bg-red-50'
+                          : 'border-blue-200 bg-blue-50'
+                      }`}
+                    >
+                      {/* Header del registro */}
+                      <div
+                        className="p-4 cursor-pointer hover:bg-opacity-70"
+                        onClick={() => toggleRegistroExpandido(registro.id)}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span
+                                className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                                  registro.tipo === 'devolucion'
+                                    ? 'bg-red-600 text-white'
+                                    : 'bg-blue-600 text-white'
+                                }`}
+                              >
+                                {registro.tipo === 'devolucion' ? '🔄 DEVOLUCIÓN' : '🔁 CAMBIO'}
+                              </span>
+                              <span className="text-sm font-semibold text-gray-800">
+                                Factura #{registro.numeroFactura}
+                              </span>
+                            </div>
+                            <p className="text-sm text-gray-700">
+                              Cliente: {registro.clienteNombre}
+                            </p>
+                            <p className="text-xs text-gray-600">
+                              {registro.createdAt?.toDate?.()?.toLocaleDateString('es-CO', {
+                                year: 'numeric',
+                                month: 'long',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              }) || 'Fecha no disponible'}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-3">
+                            {registro.tipo === 'devolucion' && (
+                              <div className="text-right">
+                                <p className="text-xs text-gray-600">Monto devuelto</p>
+                                <p className="text-lg font-bold text-red-700">
+                                  ${(registro.montoDevuelto || 0).toLocaleString()}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {registro.metodoDevolucion}
+                                </p>
+                              </div>
+                            )}
+                            {registro.tipo === 'cambio' && (
+                              <div className="text-right">
+                                <p className="text-xs text-gray-600">Diferencia</p>
+                                <p className={`text-lg font-bold ${
+                                  registro.tipoDiferencia === 'cliente_paga'
+                                    ? 'text-green-700'
+                                    : registro.tipoDiferencia === 'cliente_recibe'
+                                    ? 'text-red-700'
+                                    : 'text-gray-700'
+                                }`}>
+                                  {registro.tipoDiferencia === 'cliente_paga' && '+'}
+                                  {registro.tipoDiferencia === 'cliente_recibe' && '-'}
+                                  ${(registro.diferenciaPrecio || 0).toLocaleString()}
+                                </p>
+                                {registro.tipoDiferencia !== 'sin_diferencia' && (
+                                  <p className="text-xs text-gray-500">
+                                    {registro.metodoPagoDiferencia || registro.metodoDevolucionDiferencia}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTirillaData(registro);
+                                setShowTirillaModal(true);
+                              }}
+                              className="px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 text-sm"
+                              title="Reimprimir comprobante"
+                            >
+                              <Printer size={16} />
+                              <span className="hidden sm:inline">Imprimir</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Detalles expandibles */}
+                      {registrosExpandidos[registro.id] && (
+                        <div className="border-t border-gray-300 bg-white p-4 space-y-4">
+                          {/* Productos devueltos/cambiados */}
+                          <div>
+                            <h4 className="font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                              <XCircle size={16} className="text-red-600" />
+                              Productos {registro.tipo === 'devolucion' ? 'Devueltos' : 'Cambiados'}:
+                            </h4>
+                            <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+                              <table className="w-full text-sm">
+                                <thead className="bg-gray-100">
+                                  <tr>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Producto</th>
+                                    <th className="px-3 py-2 text-center text-xs font-semibold text-gray-700">Cant</th>
+                                    <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Precio</th>
+                                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Razón</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200">
+                                  {registro.itemsDevueltos?.map((item, idx) => (
+                                    <tr key={idx} className="bg-white">
+                                      <td className="px-3 py-2">
+                                        <p className="font-medium text-gray-800">
+                                          {item.nombre || item.product?.nombre}
+                                        </p>
+                                        <p className="text-xs text-gray-600">
+                                          Talla: {item.talla} | Ref: {item.referencia || item.product?.referencia}
+                                        </p>
+                                        {item.razon === 'Defecto de fabricación' && (
+                                          <span className="inline-block px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded mt-1">
+                                            ⚠️ Defectuoso
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="px-3 py-2 text-center font-medium">
+                                        {item.cantidad}
+                                      </td>
+                                      <td className="px-3 py-2 text-right font-medium">
+                                        ${(item.precioUnitario || 0).toLocaleString()}
+                                      </td>
+                                      <td className="px-3 py-2 text-xs text-gray-600">
+                                        {item.razon}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+
+                          {/* Productos nuevos (solo en cambios) */}
+                          {registro.tipo === 'cambio' && registro.productosNuevos?.length > 0 && (
+                            <div>
+                              <h4 className="font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                                <CheckCircle size={16} className="text-green-600" />
+                                Productos Nuevos Entregados:
+                              </h4>
+                              <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
+                                <table className="w-full text-sm">
+                                  <thead className="bg-gray-100">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">Producto</th>
+                                      <th className="px-3 py-2 text-center text-xs font-semibold text-gray-700">Cant</th>
+                                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Precio</th>
+                                      <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Subtotal</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-200">
+                                    {registro.productosNuevos.map((item, idx) => (
+                                      <tr key={idx} className="bg-white">
+                                        <td className="px-3 py-2">
+                                          <p className="font-medium text-gray-800">{item.nombre}</p>
+                                          <p className="text-xs text-gray-600">
+                                            Talla: {item.talla} | Ref: {item.referencia}
+                                          </p>
+                                        </td>
+                                        <td className="px-3 py-2 text-center font-medium">
+                                          {item.cantidad}
+                                        </td>
+                                        <td className="px-3 py-2 text-right font-medium">
+                                          ${(item.precio || 0).toLocaleString()}
+                                        </td>
+                                        <td className="px-3 py-2 text-right font-bold">
+                                          ${((item.precio || 0) * item.cantidad).toLocaleString()}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Notas */}
+                          {registro.notas && (
+                            <div>
+                              <h4 className="font-semibold text-gray-800 mb-2">Notas:</h4>
+                              <p className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-3">
+                                {registro.notas}
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Información adicional */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-gray-200">
+                            <div>
+                              <p className="text-xs text-gray-600">Procesado por:</p>
+                              <p className="text-sm font-medium text-gray-800">
+                                {registro.userId || 'Usuario no registrado'}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-600">ID de registro:</p>
+                              <p className="text-sm font-mono text-gray-800">
+                                {registro.id.substring(0, 8)}...
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    ));
+                  })()}
+                </div>
+
+                {/* Paginación */}
+                {historial.length > registrosPorPagina && (
+                  <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-gray-200">
+                    <div className="text-sm text-gray-600">
+                      Mostrando {((paginaActualHistorial - 1) * registrosPorPagina) + 1} - {Math.min(paginaActualHistorial * registrosPorPagina, historial.length)} de {historial.length} registros
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setPaginaActualHistorial(prev => Math.max(prev - 1, 1))}
+                        disabled={paginaActualHistorial === 1}
+                        className="px-3 py-1 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                      >
+                        ← Anterior
+                      </button>
+                      <span className="text-sm text-gray-600">
+                        Pág. {paginaActualHistorial} de {Math.ceil(historial.length / registrosPorPagina)}
+                      </span>
+                      <button
+                        onClick={() => setPaginaActualHistorial(prev => Math.min(prev + 1, Math.ceil(historial.length / registrosPorPagina)))}
+                        disabled={paginaActualHistorial === Math.ceil(historial.length / registrosPorPagina)}
+                        className="px-3 py-1 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                      >
+                        Siguiente →
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>

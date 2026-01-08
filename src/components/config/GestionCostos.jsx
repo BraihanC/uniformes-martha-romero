@@ -33,8 +33,7 @@ const GestionCostos = () => {
           COLEGIO: data.colegio || '',
           COSTO_COMPRA: data.costoCompra || 0,
           COSTO_SATELITE: data.costoSatelite || 0,
-          PRECIO_VENTA: data.precio || 0,
-          STOCK_TOTAL: data.stockTotal || 0
+          PRECIO_VENTA: data.precio || 0
         });
       });
 
@@ -56,8 +55,7 @@ const GestionCostos = () => {
         { wch: 12 }, // COLEGIO
         { wch: 15 }, // COSTO_COMPRA
         { wch: 15 }, // COSTO_SATELITE
-        { wch: 15 }, // PRECIO_VENTA
-        { wch: 12 }  // STOCK_TOTAL
+        { wch: 15 }  // PRECIO_VENTA
       ];
       worksheet['!cols'] = columnWidths;
 
@@ -323,7 +321,6 @@ const GestionCostos = () => {
                 <th className="px-2 py-2 border border-gray-300 text-left bg-yellow-50">COSTO_COMPRA</th>
                 <th className="px-2 py-2 border border-gray-300 text-left bg-yellow-50">COSTO_SATELITE</th>
                 <th className="px-2 py-2 border border-gray-300 text-left bg-yellow-50">PRECIO_VENTA</th>
-                <th className="px-2 py-2 border border-gray-300 text-left">STOCK_TOTAL</th>
               </tr>
             </thead>
             <tbody className="bg-white">
@@ -335,7 +332,6 @@ const GestionCostos = () => {
                 <td className="px-2 py-2 border border-gray-300 bg-yellow-50">0</td>
                 <td className="px-2 py-2 border border-gray-300 bg-yellow-50">45000</td>
                 <td className="px-2 py-2 border border-gray-300 bg-yellow-50">120000</td>
-                <td className="px-2 py-2 border border-gray-300">15</td>
               </tr>
               <tr>
                 <td className="px-2 py-2 border border-gray-300">GEN001ME</td>
@@ -345,13 +341,12 @@ const GestionCostos = () => {
                 <td className="px-2 py-2 border border-gray-300 bg-yellow-50">8000</td>
                 <td className="px-2 py-2 border border-gray-300 bg-yellow-50">0</td>
                 <td className="px-2 py-2 border border-gray-300 bg-yellow-50">15000</td>
-                <td className="px-2 py-2 border border-gray-300">50</td>
               </tr>
             </tbody>
           </table>
         </div>
         <div className="mt-3 space-y-2 text-xs text-gray-600">
-          <p><strong>📌 Columnas de solo lectura:</strong> REFERENCIA, NOMBRE, TALLA, COLEGIO, STOCK_TOTAL (no editar)</p>
+          <p><strong>📌 Columnas de solo lectura:</strong> REFERENCIA, NOMBRE, TALLA, COLEGIO (no editar)</p>
           <p className="bg-yellow-50 p-2 rounded border border-yellow-200">
             <strong>✏️ Columnas editables (resaltadas):</strong>
           </p>
@@ -361,6 +356,7 @@ const GestionCostos = () => {
             <li><strong>PRECIO_VENTA:</strong> Precio al público</li>
           </ul>
           <p className="text-orange-600 font-semibold mt-2">⚠️ NO borres ni modifiques la columna REFERENCIA - es necesaria para identificar cada producto</p>
+          <p className="text-green-600 font-semibold mt-2">✅ El INVENTARIO (stock) NO se modifica al importar - solo se actualizan costos y precios</p>
         </div>
       </div>
     </div>

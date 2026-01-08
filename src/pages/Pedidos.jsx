@@ -20,7 +20,7 @@ import { useAuth } from '../context/AuthContext';
 import { Phone } from 'lucide-react';
 
 const Pedidos = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
 
   // Estados para datos
   const [allClients, setAllClients] = useState([]);
@@ -120,6 +120,13 @@ const Pedidos = () => {
   // Estados para observaciones del pedido
   const [nuevaObservacion, setNuevaObservacion] = useState('');
   const [guardandoObservacion, setGuardandoObservacion] = useState(false);
+
+  // Estados para cambio de método de pago de abono
+  const [showCambiarMetodoPagoAbonoModal, setShowCambiarMetodoPagoAbonoModal] = useState(false);
+  const [abonoIndexToEdit, setAbonoIndexToEdit] = useState(null);
+  const [nuevoMetodoPagoAbono, setNuevoMetodoPagoAbono] = useState('');
+  const [notasMetodoPagoAbono, setNotasMetodoPagoAbono] = useState('');
+  const [cambiandoMetodoPagoAbono, setCambiandoMetodoPagoAbono] = useState(false);
 
   // Cargar datos al iniciar
   useEffect(() => {
@@ -1593,6 +1600,133 @@ const Pedidos = () => {
     }
   };
 
+  // Función para abrir el modal de cambio de método de pago de abono
+  const handleOpenCambiarMetodoPagoAbono = (abonoIndex) => {
+    const abono = selectedPedido.abonos[abonoIndex];
+    setAbonoIndexToEdit(abonoIndex);
+    setNuevoMetodoPagoAbono(abono.metodoPago);
+    setNotasMetodoPagoAbono('');
+    setShowCambiarMetodoPagoAbonoModal(true);
+  };
+
+  // Función para cerrar el modal de cambio de método de pago de abono
+  const handleCloseCambiarMetodoPagoAbono = () => {
+    setShowCambiarMetodoPagoAbonoModal(false);
+    setAbonoIndexToEdit(null);
+    setNuevoMetodoPagoAbono('');
+    setNotasMetodoPagoAbono('');
+  };
+
+  // Función para cambiar el método de pago de un abono
+  const handleCambiarMetodoPagoAbono = async () => {
+    if (!selectedPedido || abonoIndexToEdit === null) return;
+
+    if (!notasMetodoPagoAbono.trim()) {
+      alert('Por favor, ingresa una nota explicando el cambio.');
+      return;
+    }
+
+    const abonoActual = selectedPedido.abonos[abonoIndexToEdit];
+
+    if (nuevoMetodoPagoAbono === abonoActual.metodoPago) {
+      alert('El método de pago es el mismo que el actual.');
+      return;
+    }
+
+    const confirmar = window.confirm(
+      `⚠️ CAMBIAR MÉTODO DE PAGO DE ABONO\n\n` +
+      `Pedido #${selectedPedido.numeroPedido}\n` +
+      `Abono: $${abonoActual.monto.toLocaleString('es-CO')}\n` +
+      `Fecha: ${new Date(abonoActual.fecha).toLocaleDateString('es-CO')}\n\n` +
+      `Método actual: ${abonoActual.metodoPago}\n` +
+      `Nuevo método: ${nuevoMetodoPagoAbono}\n\n` +
+      `Esta acción:\n` +
+      `• Modificará el método de pago del abono\n` +
+      `• Actualizará la transacción asociada\n` +
+      `• Registrará el cambio para auditoría\n\n` +
+      `¿Continuar?`
+    );
+
+    if (!confirmar) return;
+
+    setCambiandoMetodoPagoAbono(true);
+    try {
+      const batch = writeBatch(db);
+      const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
+
+      // 1. Actualizar el abono en el pedido
+      const abonosActualizados = [...selectedPedido.abonos];
+      abonosActualizados[abonoIndexToEdit] = {
+        ...abonoActual,
+        metodoPago: nuevoMetodoPagoAbono,
+        correccionMetodoPago: {
+          fecha: new Date().toISOString(),
+          metodoPagoAnterior: abonoActual.metodoPago,
+          metodoPagoNuevo: nuevoMetodoPagoAbono,
+          notas: notasMetodoPagoAbono,
+          usuario: currentUser?.email || 'Admin'
+        }
+      };
+
+      batch.update(pedidoRef, {
+        abonos: abonosActualizados,
+        updatedAt: serverTimestamp()
+      });
+
+      // 2. Buscar y actualizar la transacción asociada
+      // Las transacciones de abono tienen el monto y fecha del abono
+      const transactionsQuery = query(
+        collection(db, 'transactions'),
+        where('pedidoId', '==', selectedPedido.id),
+        where('tipo', '==', 'abono_pedido'),
+        where('monto', '==', abonoActual.monto)
+      );
+      const transactionsSnapshot = await getDocs(transactionsQuery);
+
+      // Filtrar por fecha para encontrar la transacción exacta
+      const abonoFecha = new Date(abonoActual.fecha);
+      transactionsSnapshot.docs.forEach(transactionDoc => {
+        const transData = transactionDoc.data();
+        const transFecha = transData.fecha?.toDate?.();
+
+        // Comparar si es la misma fecha (con margen de 1 minuto)
+        if (transFecha && Math.abs(transFecha - abonoFecha) < 60000) {
+          batch.update(transactionDoc.ref, {
+            metodoPago: nuevoMetodoPagoAbono,
+            correccionMetodoPago: {
+              fecha: serverTimestamp(),
+              metodoPagoAnterior: abonoActual.metodoPago,
+              metodoPagoNuevo: nuevoMetodoPagoAbono,
+              notas: notasMetodoPagoAbono,
+              usuario: currentUser?.email || 'Admin'
+            }
+          });
+        }
+      });
+
+      await batch.commit();
+
+      alert(
+        `✅ Método de pago actualizado\n\n` +
+        `Anterior: ${abonoActual.metodoPago}\n` +
+        `Nuevo: ${nuevoMetodoPagoAbono}`
+      );
+
+      // Recargar el pedido
+      const pedidoSnap = await getDoc(pedidoRef);
+      setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
+      fetchPedidos(); // Refrescar la lista
+
+      handleCloseCambiarMetodoPagoAbono();
+
+    } catch (error) {
+      console.error('Error al cambiar método de pago del abono:', error);
+      alert('❌ Error al cambiar método de pago: ' + error.message);
+    } finally {
+      setCambiandoMetodoPagoAbono(false);
+    }
+  };
+
   // Imprimir tirilla desde el modal de gestión
   const handleImprimirTirillaGestion = () => {
     if (!selectedPedido) {
@@ -2846,6 +2980,7 @@ const Pedidos = () => {
                             <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Fecha</th>
                             <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Método</th>
                             <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Monto</th>
+                            {isAdmin && <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Acción</th>}
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
@@ -2860,10 +2995,28 @@ const Pedidos = () => {
                                   minute: '2-digit'
                                 })}
                               </td>
-                              <td className="px-3 py-2 text-center text-gray-700">{abono.metodoPago}</td>
+                              <td className="px-3 py-2 text-center text-gray-700">
+                                {abono.metodoPago}
+                                {abono.correccionMetodoPago && (
+                                  <span className="ml-1 text-[10px] text-orange-600" title={`Corregido: ${abono.correccionMetodoPago.notas}`}>
+                                    ✏️
+                                  </span>
+                                )}
+                              </td>
                               <td className="px-3 py-2 text-right font-medium text-gray-800">
                                 ${abono.monto.toLocaleString('es-CO')}
                               </td>
+                              {isAdmin && (
+                                <td className="px-3 py-2 text-center">
+                                  <button
+                                    onClick={() => handleOpenCambiarMetodoPagoAbono(index)}
+                                    className="px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 transition-colors"
+                                    title="Cambiar método de pago"
+                                  >
+                                    ✏️ Editar
+                                  </button>
+                                </td>
+                              )}
                             </tr>
                           ))}
                         </tbody>
@@ -3765,6 +3918,106 @@ const Pedidos = () => {
                 onClick={handleCloseAnularProducto}
                 disabled={anulandoProducto}
                 className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CAMBIO DE MÉTODO DE PAGO DE ABONO */}
+      {showCambiarMetodoPagoAbonoModal && selectedPedido && abonoIndexToEdit !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-gray-800">Cambiar Método de Pago de Abono</h2>
+              <button
+                onClick={handleCloseCambiarMetodoPagoAbono}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Información del abono */}
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+              <h3 className="font-semibold text-yellow-800 mb-2">Abono Actual:</h3>
+              <div className="space-y-1 text-sm">
+                <div>
+                  <span className="text-gray-600">Pedido:</span>{' '}
+                  <span className="font-semibold">#{selectedPedido.numeroPedido}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Fecha:</span>{' '}
+                  <span className="font-semibold">
+                    {new Date(selectedPedido.abonos[abonoIndexToEdit].fecha).toLocaleDateString('es-CO', {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Monto:</span>{' '}
+                  <span className="font-semibold">${selectedPedido.abonos[abonoIndexToEdit].monto.toLocaleString('es-CO')}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Método Actual:</span>{' '}
+                  <span className="font-semibold text-lg">{selectedPedido.abonos[abonoIndexToEdit].metodoPago}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Selector de nuevo método */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Nuevo Método de Pago:
+              </label>
+              <select
+                value={nuevoMetodoPagoAbono}
+                onChange={(e) => setNuevoMetodoPagoAbono(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="Efectivo">Efectivo</option>
+                <option value="Nequi">Nequi</option>
+                <option value="Daviplata">Daviplata</option>
+                <option value="Nu">Nu</option>
+                <option value="Tarjeta">Tarjeta</option>
+                <option value="Transferencia">Transferencia</option>
+                <option value="Mixto">Mixto</option>
+              </select>
+            </div>
+
+            {/* Notas de corrección */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Notas (obligatorio):
+              </label>
+              <textarea
+                value={notasMetodoPagoAbono}
+                onChange={(e) => setNotasMetodoPagoAbono(e.target.value)}
+                placeholder="Ej: Se registró como efectivo pero fue pago por Nequi..."
+                rows={3}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-2">
+              <button
+                onClick={handleCambiarMetodoPagoAbono}
+                disabled={cambiandoMetodoPagoAbono || !notasMetodoPagoAbono.trim() || nuevoMetodoPagoAbono === selectedPedido.abonos[abonoIndexToEdit].metodoPago}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cambiandoMetodoPagoAbono ? '⏳ Cambiando...' : '✓ Cambiar Método'}
+              </button>
+              <button
+                onClick={handleCloseCambiarMetodoPagoAbono}
+                disabled={cambiandoMetodoPagoAbono}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancelar
               </button>

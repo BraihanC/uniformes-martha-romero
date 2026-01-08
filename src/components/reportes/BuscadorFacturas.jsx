@@ -39,6 +39,7 @@ const BuscadorFacturas = () => {
   const [filterMetodoPago, setFilterMetodoPago] = useState('');
   const [filterFechaInicio, setFilterFechaInicio] = useState('');
   const [filterFechaFin, setFilterFechaFin] = useState('');
+  const [busquedaProducto, setBusquedaProducto] = useState(''); // Filtro por producto
 
   // Estados para email
   const [showEmailModal, setShowEmailModal] = useState(false);
@@ -164,6 +165,21 @@ const BuscadorFacturas = () => {
         }
       }
 
+      // Filtro por producto
+      if (busquedaProducto.trim()) {
+        const productSearch = busquedaProducto.toLowerCase().trim();
+        const items = factura.items || [];
+        const hasMatchingProduct = items.some(item => {
+          const matchNombre = (item.nombre || '').toLowerCase().includes(productSearch);
+          const matchReferencia = (item.referencia || '').toLowerCase().includes(productSearch);
+          return matchNombre || matchReferencia;
+        });
+
+        if (!hasMatchingProduct) {
+          return false;
+        }
+      }
+
       return true;
     })
     .sort((a, b) => {
@@ -222,7 +238,18 @@ const BuscadorFacturas = () => {
   // Resetear página cuando cambian los filtros
   useEffect(() => {
     setPaginaActual(1);
-  }, [searchTerm, filterMetodoPago, filterFechaInicio, filterFechaFin]);
+  }, [searchTerm, filterMetodoPago, filterFechaInicio, filterFechaFin, busquedaProducto]);
+
+  /**
+   * Verifica si un producto coincide con la búsqueda de producto
+   */
+  const isProductoMatch = (item) => {
+    if (!busquedaProducto.trim()) return false;
+    const productSearch = busquedaProducto.toLowerCase().trim();
+    const matchNombre = (item.nombre || '').toLowerCase().includes(productSearch);
+    const matchReferencia = (item.referencia || '').toLowerCase().includes(productSearch);
+    return matchNombre || matchReferencia;
+  };
 
   /**
    * Prepara la factura para el modal de impresión
@@ -968,7 +995,19 @@ const BuscadorFacturas = () => {
         </div>
 
         {/* Filtros */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* Filtro por producto */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Buscar Producto</label>
+            <input
+              type="text"
+              value={busquedaProducto}
+              onChange={(e) => setBusquedaProducto(e.target.value)}
+              placeholder="Nombre o referencia..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 text-sm"
+            />
+          </div>
+
           {/* Filtro por método de pago */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Método de Pago</label>
@@ -1009,7 +1048,7 @@ const BuscadorFacturas = () => {
         </div>
 
         {/* Botón para limpiar filtros */}
-        {(searchTerm || filterMetodoPago || filterFechaInicio || filterFechaFin) && (
+        {(searchTerm || filterMetodoPago || filterFechaInicio || filterFechaFin || busquedaProducto) && (
           <div className="mt-3">
             <button
               onClick={() => {
@@ -1017,6 +1056,7 @@ const BuscadorFacturas = () => {
                 setFilterMetodoPago('');
                 setFilterFechaInicio('');
                 setFilterFechaFin('');
+                setBusquedaProducto('');
               }}
               className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200"
             >
@@ -1033,7 +1073,7 @@ const BuscadorFacturas = () => {
         </div>
       ) : facturasFiltradas.length === 0 ? (
         <div className="bg-white rounded-lg shadow-md p-8 text-center text-gray-500">
-          {searchTerm || filterMetodoPago || filterFechaInicio || filterFechaFin ? (
+          {searchTerm || filterMetodoPago || filterFechaInicio || filterFechaFin || busquedaProducto ? (
             'No se encontraron facturas con los filtros aplicados.'
           ) : (
             'No hay facturas registradas.'
@@ -1045,7 +1085,12 @@ const BuscadorFacturas = () => {
           <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-200 bg-gray-50">
             <p className="text-sm text-gray-700">
               Se encontraron <span className="font-semibold text-gray-900">{facturasFiltradas.length}</span> facturas
-              {(searchTerm || filterMetodoPago || filterFechaInicio || filterFechaFin) && ' con los filtros aplicados'}
+              {(searchTerm || filterMetodoPago || filterFechaInicio || filterFechaFin || busquedaProducto) && ' con los filtros aplicados'}
+              {busquedaProducto && (
+                <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
+                  Producto: "{busquedaProducto}"
+                </span>
+              )}
             </p>
           </div>
 
@@ -1214,13 +1259,19 @@ const BuscadorFacturas = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {facturaSeleccionada.items.map((item, index) => (
-                      <tr key={index} className={item.anulado ? 'bg-gray-100' : ''}>
+                    {facturaSeleccionada.items.map((item, index) => {
+                      const isMatch = isProductoMatch(item);
+                      const bgClass = item.anulado ? 'bg-gray-100' : item.estadoDevolucion ? 'bg-blue-50' : isMatch ? 'bg-green-100' : '';
+                      const textClass = item.anulado ? 'text-gray-400 line-through' : item.estadoDevolucion ? 'text-blue-700' : isMatch ? 'text-green-900 font-bold' : '';
+
+                      return (
+                      <tr key={index} className={bgClass}>
                         <td className="py-1">
-                          <div className={`font-medium ${item.anulado ? 'text-gray-400 line-through' : ''}`}>
+                          <div className={`font-medium ${textClass}`}>
                             {item.nombre}
+                            {isMatch && <span className="ml-1 text-[10px] text-green-700">⭐ COINCIDE</span>}
                           </div>
-                          <div className={`text-[10px] ${item.anulado ? 'text-gray-400 line-through' : 'text-gray-600'}`}>
+                          <div className={`text-[10px] ${item.anulado ? 'text-gray-400 line-through' : item.estadoDevolucion ? 'text-blue-600' : isMatch ? 'text-green-700' : 'text-gray-600'}`}>
                             {item.talla && `Talla: ${item.talla} | `}
                             ${(item.precioUnitario || 0).toLocaleString('es-CO')}
                           </div>
@@ -1229,16 +1280,26 @@ const BuscadorFacturas = () => {
                               ❌ ANULADO - {item.anulacion?.motivo}
                             </div>
                           )}
+                          {item.estadoDevolucion === 'devuelto' && (
+                            <div className="text-[9px] text-blue-600 mt-1">
+                              🔄 DEVUELTO - {item.fechaDevolucion?.toDate?.()?.toLocaleDateString('es-CO') || 'N/A'}
+                            </div>
+                          )}
+                          {item.estadoDevolucion === 'cambiado' && (
+                            <div className="text-[9px] text-orange-600 mt-1">
+                              🔁 CAMBIADO - {item.fechaCambio?.toDate?.()?.toLocaleDateString('es-CO') || 'N/A'}
+                            </div>
+                          )}
                         </td>
-                        <td className={`text-center ${item.anulado ? 'text-gray-400 line-through' : ''}`}>
+                        <td className={`text-center ${item.anulado ? 'text-gray-400 line-through' : item.estadoDevolucion ? 'text-blue-700' : isMatch ? 'text-green-900 font-bold' : ''}`}>
                           {item.cantidad}
                         </td>
-                        <td className={`text-right ${item.anulado ? 'text-gray-400 line-through' : ''}`}>
-                          {item.anulado ? '[ANULADO]' : `$${(item.subtotal || 0).toLocaleString('es-CO')}`}
+                        <td className={`text-right ${item.anulado ? 'text-gray-400 line-through' : item.estadoDevolucion ? 'text-blue-700' : isMatch ? 'text-green-900 font-bold' : ''}`}>
+                          {item.anulado ? '[ANULADO]' : item.estadoDevolucion ? `[${item.estadoDevolucion.toUpperCase()}]` : `$${(item.subtotal || 0).toLocaleString('es-CO')}`}
                         </td>
                         {isAdmin && (
                           <td className="text-center no-print">
-                            {!item.anulado ? (
+                            {!item.anulado && !item.estadoDevolucion ? (
                               <div className="flex gap-1 justify-center">
                                 <button
                                   onClick={() => handleOpenCorreccionModal(index)}
@@ -1255,7 +1316,7 @@ const BuscadorFacturas = () => {
                                   ✕
                                 </button>
                               </div>
-                            ) : (
+                            ) : item.anulado ? (
                               <button
                                 onClick={() => handleRestaurarProducto(index)}
                                 className="px-2 py-1 bg-green-500 text-white text-[10px] rounded hover:bg-green-600"
@@ -1263,11 +1324,16 @@ const BuscadorFacturas = () => {
                               >
                                 ↻
                               </button>
-                            )}
+                            ) : item.estadoDevolucion ? (
+                              <span className="text-[9px] text-blue-600">
+                                Procesado en Devoluciones
+                              </span>
+                            ) : null}
                           </td>
                         )}
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
