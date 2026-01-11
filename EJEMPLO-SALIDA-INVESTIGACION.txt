@@ -1,0 +1,128 @@
+EJEMPLO DE SALIDA DEL SCRIPT investigar-descuadre.js
+=====================================================
+
+INVESTIGACIÓN DE DESCUADRE DE INVENTARIO
+============================================
+Producto: CAMISETA MA DEP TALLA 16
+Referencia: MA
+Talla: 16
+============================================
+
+Buscando pedidos que contengan este producto...
+
+============================================================
+PEDIDO #001
+============================================================
+ID Firestore: abc123xyz
+Cliente: Juan Pérez
+Teléfono: 3001234567
+Estado del Pedido: Activo
+Fecha Creación: Fri Jan 10 2026 10:30:00
+
+--- DETALLE DEL ITEM ---
+Producto: CAMISETA MA DEP TALLA 16
+Referencia: MA003TD
+Talla: 16
+Estado Item: En Producción
+Cantidad Total: 5
+Cantidad Lista: 0
+Cantidad Entregada: 0
+Anulado: NO
+
+Reserva Esperada: 0 unidades
+
+Explicación:
+   - Estado "En Producción" -> No reserva hasta que esté listo (0)
+
+============================================================
+PEDIDO #002
+============================================================
+ID Firestore: def456uvw
+Cliente: María González
+Teléfono: 3007654321
+Estado del Pedido: Parcial
+Fecha Creación: Thu Jan 09 2026 14:15:00
+
+--- DETALLE DEL ITEM ---
+Producto: CAMISETA MA DEP TALLA 16
+Referencia: MA003TD
+Talla: 16
+Estado Item: Parcialmente Listo
+Cantidad Total: 10
+Cantidad Lista: 6
+Cantidad Entregada: 0
+Anulado: NO
+
+Reserva Esperada: 6 unidades
+
+Explicación:
+   - Estado "Parcialmente Listo" -> Reserva 6 (cantidadLista)
+
+============================================================
+PEDIDO #003
+============================================================
+ID Firestore: ghi789rst
+Cliente: Carlos Rodríguez
+Teléfono: 3009876543
+Estado del Pedido: Listo
+Fecha Creación: Wed Jan 08 2026 09:00:00
+
+--- DETALLE DEL ITEM ---
+Producto: CAMISETA MA DEP TALLA 16
+Referencia: MA003TD
+Talla: 16
+Estado Item: Listo para Entrega
+Cantidad Total: 3
+Cantidad Lista: 0
+Cantidad Entregada: 0
+Anulado: NO
+
+Reserva Esperada: 3 unidades
+
+Explicación:
+   - Estado "Listo para Entrega" -> Reserva 3 (cantidad total)
+
+
+============================================================
+RESUMEN DEL ANÁLISIS
+============================================================
+Total de pedidos encontrados: 3
+Total stockReservadoPedidos calculado: 9 unidades
+
+Investigación completada
+
+
+============================================================
+VERIFICANDO PRODUCTO EN INVENTARIO
+============================================================
+
+ID Producto: prod_ma003td_16
+Nombre: CAMISETA MA DEP TALLA 16
+Referencia: MA
+Talla: 16
+Stock Total: 50
+Stock Disponible: 35
+Stock Reservado Pedidos (actual): 15
+Stock Reservado Apartados: 6
+
+COMPARACIÓN:
+   Stock Reservado ACTUAL: 15
+   Stock Reservado CALCULADO: 9
+   Diferencia: 6
+
+DESCUADRE DETECTADO!
+   El stockReservadoPedidos NO coincide con los pedidos actuales.
+
+============================================================
+
+Script finalizado correctamente
+
+
+INTERPRETACIÓN:
+- Hay un descuadre de 6 unidades
+- El sistema está reservando 15 unidades, pero solo debería reservar 9
+- Esto significa que hay 6 unidades "fantasma" reservadas
+- Posibles causas:
+  * Pedidos que fueron entregados pero no actualizaron el stock
+  * Pedidos anulados que no liberaron la reserva
+  * Cambios de estado que no se procesaron correctamente

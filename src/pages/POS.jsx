@@ -87,6 +87,96 @@ const POS = () => {
   // Mobile tab state (for responsive design)
   const [activeTab, setActiveTab] = useState('catalogo'); // 'catalogo' or 'carrito'
 
+  // ====== LOCAL STORAGE - PERSISTENCIA DEL CARRITO ======
+  const CART_STORAGE_KEY = 'pos_cart_data';
+
+  // Guardar estado del carrito en localStorage
+  const saveCartToStorage = () => {
+    try {
+      const cartData = {
+        cartItems,
+        selectedClient,
+        aplicarIVA,
+        metodoPago,
+        pagoMixto,
+        metodoPago1,
+        metodoPago2,
+        montoPago1,
+        montoPago2,
+        montoPagadoEfectivo,
+        descuentoGeneral,
+        tipoDescuentoGeneral,
+        timestamp: new Date().toISOString() // Para saber cuándo se guardó
+      };
+      localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartData));
+    } catch (error) {
+      console.error('Error guardando carrito en localStorage:', error);
+    }
+  };
+
+  // Cargar estado del carrito desde localStorage
+  const loadCartFromStorage = () => {
+    try {
+      const savedData = localStorage.getItem(CART_STORAGE_KEY);
+      if (savedData) {
+        const cartData = JSON.parse(savedData);
+
+        // Restaurar estados
+        if (cartData.cartItems && cartData.cartItems.length > 0) {
+          setCartItems(cartData.cartItems);
+        }
+        if (cartData.selectedClient) {
+          setSelectedClient(cartData.selectedClient);
+          setClientSearchQuery(cartData.selectedClient.nombreCompleto || '');
+        }
+        if (cartData.aplicarIVA !== undefined) {
+          setAplicarIVA(cartData.aplicarIVA);
+        }
+        if (cartData.metodoPago) {
+          setMetodoPago(cartData.metodoPago);
+        }
+        if (cartData.pagoMixto !== undefined) {
+          setPagoMixto(cartData.pagoMixto);
+        }
+        if (cartData.metodoPago1) {
+          setMetodoPago1(cartData.metodoPago1);
+        }
+        if (cartData.metodoPago2) {
+          setMetodoPago2(cartData.metodoPago2);
+        }
+        if (cartData.montoPago1) {
+          setMontoPago1(cartData.montoPago1);
+        }
+        if (cartData.montoPago2) {
+          setMontoPago2(cartData.montoPago2);
+        }
+        if (cartData.montoPagadoEfectivo) {
+          setMontoPagadoEfectivo(cartData.montoPagadoEfectivo);
+        }
+        if (cartData.descuentoGeneral !== undefined) {
+          setDescuentoGeneral(cartData.descuentoGeneral);
+        }
+        if (cartData.tipoDescuentoGeneral) {
+          setTipoDescuentoGeneral(cartData.tipoDescuentoGeneral);
+        }
+
+        console.log('✅ Carrito restaurado desde localStorage');
+      }
+    } catch (error) {
+      console.error('Error cargando carrito desde localStorage:', error);
+    }
+  };
+
+  // Limpiar localStorage cuando se completa la venta
+  const clearCartStorage = () => {
+    try {
+      localStorage.removeItem(CART_STORAGE_KEY);
+      console.log('🗑️ Carrito limpiado de localStorage');
+    } catch (error) {
+      console.error('Error limpiando localStorage:', error);
+    }
+  };
+
   // ====== DATA LOADING ======
   useEffect(() => {
     loadInitialData();
@@ -116,6 +206,9 @@ const POS = () => {
         setCompanyConfig(companyDoc.data());
       }
 
+      // Cargar carrito guardado DESPUÉS de cargar todos los datos
+      loadCartFromStorage();
+
       setLoading(false);
     } catch (error) {
       console.error('Error loading data:', error);
@@ -123,6 +216,27 @@ const POS = () => {
       setLoading(false);
     }
   };
+
+  // ====== AUTO-SAVE CART TO LOCALSTORAGE ======
+  useEffect(() => {
+    // Solo guardar si no estamos cargando datos iniciales
+    if (!loading) {
+      saveCartToStorage();
+    }
+  }, [
+    cartItems,
+    selectedClient,
+    aplicarIVA,
+    metodoPago,
+    pagoMixto,
+    metodoPago1,
+    metodoPago2,
+    montoPago1,
+    montoPago2,
+    montoPagadoEfectivo,
+    descuentoGeneral,
+    tipoDescuentoGeneral
+  ]);
 
   // ====== FILTERING LOGIC ======
   useEffect(() => {
@@ -322,6 +436,9 @@ const POS = () => {
     setMontoPago1(0);
     setMontoPago2(0);
     setMontoPagadoEfectivo('');
+
+    // Limpiar localStorage
+    clearCartStorage();
 
     // Return to catalog tab on mobile after clearing cart
     if (window.innerWidth < 1024) {
@@ -569,13 +686,23 @@ const POS = () => {
             throw new Error(`El producto "${item.product.nombre}" ya no existe en el sistema.`);
           }
 
-          const currentStock = productSnap.data().stockTotal || 0;
+          // IMPORTANTE: Validar contra stock DISPONIBLE, no solo stockTotal
+          // Stock disponible = Stock físico - Reservas de pedidos - Reservas de apartados
+          const productData = productSnap.data();
+          const stockTotal = productData.stockTotal || 0;
+          const stockReservadoPedidos = productData.stockReservadoPedidos || 0;
+          const stockReservadoApartados = productData.stockReservadoApartados || 0;
+          const currentStock = stockTotal - stockReservadoPedidos - stockReservadoApartados;
 
           if (currentStock < item.cantidad) {
             throw new Error(
               `Stock insuficiente para "${item.product.nombre}".\n` +
               `Stock disponible: ${currentStock}\n` +
-              `Cantidad solicitada: ${item.cantidad}`
+              `Cantidad solicitada: ${item.cantidad}\n\n` +
+              `Detalle:\n` +
+              `Stock físico total: ${stockTotal}\n` +
+              `Reservado pedidos: ${stockReservadoPedidos}\n` +
+              `Reservado apartados: ${stockReservadoApartados}`
             );
           }
 
@@ -820,7 +947,14 @@ const POS = () => {
       <div className="bg-white shadow-sm px-4 md:px-6 py-2 md:py-3 border-b">
         <div className="flex items-center justify-between">
           <h1 className="text-lg md:text-xl font-bold text-gray-800">Punto de Venta</h1>
-          <h2 className="hidden lg:block text-lg md:text-xl font-bold text-gray-800">Carrito</h2>
+          <div className="hidden lg:flex items-center gap-2">
+            <h2 className="text-lg md:text-xl font-bold text-gray-800">Carrito</h2>
+            {cartItems.length > 0 && (
+              <span className="bg-green-500 text-white text-xs px-2 py-1 rounded-full font-medium" title="Carrito guardado automáticamente">
+                ✓ Guardado
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

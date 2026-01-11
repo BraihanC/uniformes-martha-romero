@@ -12,7 +12,8 @@ import {
   increment,
   limit,
   deleteDoc,
-  where
+  where,
+  addDoc
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../services/firebase';
@@ -33,7 +34,7 @@ import {
 } from 'lucide-react';
 
 const Apartados = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
 
   // Estados principales
   const [apartados, setApartados] = useState([]);
@@ -97,6 +98,34 @@ const Apartados = () => {
   const [itemIndexToAnular, setItemIndexToAnular] = useState(null);
   const [motivoAnulacion, setMotivoAnulacion] = useState('');
   const [anulandoProducto, setAnulandoProducto] = useState(false);
+
+  // Estados para creación rápida de cliente
+  const [showClientModal, setShowClientModal] = useState(false);
+  const [newClientData, setNewClientData] = useState({
+    nombreCompleto: '',
+    tipoDocumento: 'Cédula de Ciudadanía',
+    numeroDocumento: '',
+    telefono: '',
+    email: '',
+    direccion: '',
+    ciudad: '',
+    colegioId: ''
+  });
+
+  // Tipos de documento disponibles
+  const tiposDocumento = [
+    'Cédula de Ciudadanía',
+    'NIT',
+    'Cédula de Extranjería',
+    'Tarjeta de Identidad'
+  ];
+
+  // Estados para cambio de método de pago de abono
+  const [showCambiarMetodoPagoAbonoModal, setShowCambiarMetodoPagoAbonoModal] = useState(false);
+  const [abonoIndexToEdit, setAbonoIndexToEdit] = useState(null);
+  const [nuevoMetodoPagoAbono, setNuevoMetodoPagoAbono] = useState('');
+  const [notasMetodoPagoAbono, setNotasMetodoPagoAbono] = useState('');
+  const [cambiandoMetodoPagoAbono, setCambiandoMetodoPagoAbono] = useState(false);
 
   // Cargar datos iniciales
   useEffect(() => {
@@ -398,6 +427,64 @@ const Apartados = () => {
     return { subtotal };
   };
 
+  // Crear cliente rápido
+  const handleCreateClient = async () => {
+    // Validar campos requeridos
+    if (!newClientData.nombreCompleto.trim()) {
+      alert('Por favor, ingresa el nombre completo del cliente.');
+      return;
+    }
+    if (!newClientData.numeroDocumento.trim()) {
+      alert('Por favor, ingresa el número de documento del cliente.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const newClient = {
+        nombreCompleto: newClientData.nombreCompleto.trim(),
+        tipoDocumento: newClientData.tipoDocumento,
+        numeroDocumento: newClientData.numeroDocumento.trim(),
+        telefono: newClientData.telefono.trim(),
+        email: newClientData.email.trim(),
+        direccion: newClientData.direccion.trim(),
+        ciudad: newClientData.ciudad.trim(),
+        colegioId: newClientData.colegioId || null,
+        createdAt: serverTimestamp()
+      };
+
+      const docRef = await addDoc(collection(db, 'clients'), newClient);
+      const clientWithId = { id: docRef.id, ...newClient };
+
+      // Actualizar lista de clientes
+      setClientes([...clientes, clientWithId]);
+
+      // Seleccionar el cliente recién creado
+      setSelectedClienteId(clientWithId.id);
+      setSearchCliente(clientWithId.nombreCompleto);
+
+      // Cerrar modal y limpiar formulario
+      setShowClientModal(false);
+      setNewClientData({
+        nombreCompleto: '',
+        tipoDocumento: 'Cédula de Ciudadanía',
+        numeroDocumento: '',
+        telefono: '',
+        email: '',
+        direccion: '',
+        ciudad: '',
+        colegioId: ''
+      });
+
+      alert('Cliente creado exitosamente');
+    } catch (error) {
+      console.error('Error al crear cliente:', error);
+      alert('Error al crear el cliente. Por favor, intenta de nuevo.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Crear apartado
   const handleCrearApartado = async () => {
     if (!selectedClienteId) {
@@ -532,6 +619,17 @@ const Apartados = () => {
 
   // Registrar abono (VERSIÓN ATÓMICA MEJORADA)
   const handleRegistrarAbono = async () => {
+    // Validar estado del apartado
+    if (selectedApartado.estadoGeneral === 'Completado') {
+      alert('⚠️ Este apartado ya está completado. No se pueden agregar más abonos.');
+      return;
+    }
+
+    if (selectedApartado.estadoGeneral === 'Cancelado') {
+      alert('⚠️ Este apartado está cancelado. No se pueden agregar abonos.');
+      return;
+    }
+
     const monto = parseFloat(nuevoAbono);
 
     if (!monto || monto <= 0) {
@@ -611,7 +709,10 @@ const Apartados = () => {
         batch.update(apartadoRef, { facturaId: ventaRef.id });
 
         // Actualizar inventario (decrementar stock y liberar reserva)
+        // IMPORTANTE: Solo procesar productos NO anulados
         for (const item of selectedApartado.items) {
+          if (item.anulado) continue; // Saltar productos anulados (ya liberaron su reserva)
+
           const productoRef = doc(db, 'products', item.productoId);
           batch.update(productoRef, {
             stockTotal: increment(-item.cantidad),
@@ -723,7 +824,10 @@ const Apartados = () => {
       });
 
       // Liberar inventario reservado
+      // IMPORTANTE: Solo liberar productos NO anulados (los anulados ya liberaron su reserva)
       for (const item of selectedApartado.items) {
+        if (item.anulado) continue; // Saltar productos anulados
+
         const productoRef = doc(db, 'products', item.productoId);
         batch.update(productoRef, {
           stockReservadoApartados: increment(-item.cantidad)
@@ -782,7 +886,10 @@ const Apartados = () => {
 
       // 2. Liberar inventario reservado (si el apartado no estaba completado o cancelado)
       if (selectedApartado.estadoGeneral === 'Activo' || selectedApartado.estadoGeneral === 'Vencido') {
+        // IMPORTANTE: Solo liberar productos NO anulados (los anulados ya liberaron su reserva)
         for (const item of selectedApartado.items) {
+          if (item.anulado) continue; // Saltar productos anulados
+
           const productoRef = doc(db, 'products', item.productoId);
           batch.update(productoRef, {
             stockReservadoApartados: increment(-item.cantidad)
@@ -1285,6 +1392,133 @@ const Apartados = () => {
     }
   };
 
+  // Función para abrir el modal de cambio de método de pago de abono
+  const handleOpenCambiarMetodoPagoAbono = (abonoIndex) => {
+    const abono = selectedApartado.historialAbonos[abonoIndex];
+    setAbonoIndexToEdit(abonoIndex);
+    setNuevoMetodoPagoAbono(abono.metodoPago || 'Efectivo');
+    setNotasMetodoPagoAbono('');
+    setShowCambiarMetodoPagoAbonoModal(true);
+  };
+
+  // Función para cerrar el modal de cambio de método de pago de abono
+  const handleCloseCambiarMetodoPagoAbono = () => {
+    setShowCambiarMetodoPagoAbonoModal(false);
+    setAbonoIndexToEdit(null);
+    setNuevoMetodoPagoAbono('');
+    setNotasMetodoPagoAbono('');
+  };
+
+  // Función para cambiar el método de pago de un abono
+  const handleCambiarMetodoPagoAbono = async () => {
+    if (!selectedApartado || abonoIndexToEdit === null) return;
+
+    if (!notasMetodoPagoAbono.trim()) {
+      alert('Por favor, ingresa una nota explicando el cambio.');
+      return;
+    }
+
+    const abonoActual = selectedApartado.historialAbonos[abonoIndexToEdit];
+
+    if (nuevoMetodoPagoAbono === (abonoActual.metodoPago || 'Efectivo')) {
+      alert('El método de pago es el mismo que el actual.');
+      return;
+    }
+
+    const fechaAbono = abonoActual.fecha?.toDate?.() || new Date(abonoActual.fecha);
+
+    const confirmar = window.confirm(
+      `⚠️ CAMBIAR MÉTODO DE PAGO DE ABONO\n\n` +
+      `Apartado #${selectedApartado.numeroApartado}\n` +
+      `Abono: $${abonoActual.monto.toLocaleString('es-CO')}\n` +
+      `Fecha: ${fechaAbono.toLocaleDateString('es-CO')}\n\n` +
+      `Método actual: ${abonoActual.metodoPago || 'Efectivo'}\n` +
+      `Nuevo método: ${nuevoMetodoPagoAbono}\n\n` +
+      `Esta acción:\n` +
+      `• Modificará el método de pago del abono\n` +
+      `• Actualizará la transacción asociada\n` +
+      `• Registrará el cambio para auditoría\n\n` +
+      `¿Continuar?`
+    );
+
+    if (!confirmar) return;
+
+    setCambiandoMetodoPagoAbono(true);
+    try {
+      const batch = writeBatch(db);
+      const apartadoRef = doc(db, 'apartados', selectedApartado.id);
+
+      // 1. Actualizar el abono en el apartado
+      const historialActualizado = [...selectedApartado.historialAbonos];
+      historialActualizado[abonoIndexToEdit] = {
+        ...abonoActual,
+        metodoPago: nuevoMetodoPagoAbono,
+        correccionMetodoPago: {
+          fecha: new Date().toISOString(),
+          metodoPagoAnterior: abonoActual.metodoPago || 'Efectivo',
+          metodoPagoNuevo: nuevoMetodoPagoAbono,
+          notas: notasMetodoPagoAbono,
+          usuario: currentUser?.email || 'Admin'
+        }
+      };
+
+      batch.update(apartadoRef, {
+        historialAbonos: historialActualizado,
+        updatedAt: serverTimestamp()
+      });
+
+      // 2. Buscar y actualizar la transacción asociada
+      const transactionsQuery = query(
+        collection(db, 'transactions'),
+        where('apartadoId', '==', selectedApartado.id),
+        where('tipo', '==', 'abono_apartado'),
+        where('monto', '==', abonoActual.monto)
+      );
+      const transactionsSnapshot = await getDocs(transactionsQuery);
+
+      // Filtrar por fecha para encontrar la transacción exacta
+      transactionsSnapshot.docs.forEach(transactionDoc => {
+        const transData = transactionDoc.data();
+        const transFecha = transData.fecha?.toDate?.();
+
+        // Comparar si es la misma fecha (con margen de 1 minuto)
+        if (transFecha && Math.abs(transFecha - fechaAbono) < 60000) {
+          batch.update(transactionDoc.ref, {
+            metodoPago: nuevoMetodoPagoAbono,
+            correccionMetodoPago: {
+              fecha: serverTimestamp(),
+              metodoPagoAnterior: abonoActual.metodoPago || 'Efectivo',
+              metodoPagoNuevo: nuevoMetodoPagoAbono,
+              notas: notasMetodoPagoAbono,
+              usuario: currentUser?.email || 'Admin'
+            }
+          });
+        }
+      });
+
+      await batch.commit();
+
+      alert(
+        `✅ Método de pago actualizado\n\n` +
+        `Anterior: ${abonoActual.metodoPago || 'Efectivo'}\n` +
+        `Nuevo: ${nuevoMetodoPagoAbono}`
+      );
+
+      // Recargar el apartado
+      const apartadoSnap = await getDoc(apartadoRef);
+      setSelectedApartado({ id: apartadoSnap.id, ...apartadoSnap.data() });
+      fetchApartados();
+
+      handleCloseCambiarMetodoPagoAbono();
+
+    } catch (error) {
+      console.error('Error al cambiar método de pago del abono:', error);
+      alert('❌ Error al cambiar método de pago: ' + error.message);
+    } finally {
+      setCambiandoMetodoPagoAbono(false);
+    }
+  };
+
   // Abrir modal de facturación
   const handleFacturarApartado = () => {
     if (!selectedApartado) return;
@@ -1298,6 +1532,17 @@ const Apartados = () => {
   // Procesar facturación del apartado
   const procesarFacturacionApartado = async () => {
     if (!selectedApartado) return;
+
+    // Validar estado del apartado
+    if (selectedApartado.estadoGeneral === 'Completado') {
+      alert('⚠️ Este apartado ya está completado y facturado.');
+      return;
+    }
+
+    if (selectedApartado.estadoGeneral === 'Cancelado') {
+      alert('⚠️ Este apartado está cancelado. No se puede facturar.');
+      return;
+    }
 
     const saldoPendiente = selectedApartado.saldoPendiente || 0;
     const montoPagadoHoy = parseFloat(montoPagoFactura) || 0;
@@ -1369,7 +1614,10 @@ const Apartados = () => {
       });
 
       // Actualizar inventario: restar del total y liberar reserva
+      // IMPORTANTE: Solo procesar productos NO anulados
       for (const item of selectedApartado.items) {
+        if (item.anulado) continue; // Saltar productos anulados (ya liberaron su reserva)
+
         const productoRef = doc(db, 'products', item.productoId);
         batch.update(productoRef, {
           stockTotal: increment(-item.cantidad),
@@ -1994,9 +2242,19 @@ const Apartados = () => {
             <div className="p-6 space-y-6">
               {/* Selección de cliente */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Cliente *
-                </label>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Cliente *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowClientModal(true)}
+                    style={{ backgroundColor: '#D50565' }}
+                    className="px-4 py-2 text-white text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+                  >
+                    + Crear Cliente
+                  </button>
+                </div>
                 <div className="relative mb-2">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
                   <input
@@ -2553,6 +2811,7 @@ const Apartados = () => {
                           <th className="px-4 py-2 text-right text-sm font-semibold text-gray-700">Monto</th>
                           <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700">Método</th>
                           <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700">Notas</th>
+                          {isAdmin && <th className="px-4 py-2 text-center text-sm font-semibold text-gray-700">Acción</th>}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
@@ -2566,10 +2825,26 @@ const Apartados = () => {
                             </td>
                             <td className="px-4 py-2 text-sm text-gray-600">
                               {abono.metodoPago || 'Efectivo'}
+                              {abono.correccionMetodoPago && (
+                                <span className="ml-1 text-[10px] text-orange-600" title={`Corregido: ${abono.correccionMetodoPago.notas}`}>
+                                  ✏️
+                                </span>
+                              )}
                             </td>
                             <td className="px-4 py-2 text-sm text-gray-600">
                               {abono.notas || '-'}
                             </td>
+                            {isAdmin && (
+                              <td className="px-4 py-2 text-center">
+                                <button
+                                  onClick={() => handleOpenCambiarMetodoPagoAbono(index)}
+                                  className="px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 transition-colors"
+                                  title="Cambiar método de pago"
+                                >
+                                  ✏️ Editar
+                                </button>
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>
@@ -3687,6 +3962,293 @@ const Apartados = () => {
           }
         }
       `}</style>
+
+      {/* MODAL DE CAMBIO DE MÉTODO DE PAGO DE ABONO */}
+      {showCambiarMetodoPagoAbonoModal && selectedApartado && abonoIndexToEdit !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-gray-800">Cambiar Método de Pago de Abono</h2>
+              <button
+                onClick={handleCloseCambiarMetodoPagoAbono}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Información del abono */}
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+              <h3 className="font-semibold text-yellow-800 mb-2">Abono Actual:</h3>
+              <div className="space-y-1 text-sm">
+                <div>
+                  <span className="text-gray-600">Apartado:</span>{' '}
+                  <span className="font-semibold">#{selectedApartado.numeroApartado}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Fecha:</span>{' '}
+                  <span className="font-semibold">
+                    {selectedApartado.historialAbonos[abonoIndexToEdit].fecha?.toDate?.()?.toLocaleDateString('es-CO') ||
+                     new Date(selectedApartado.historialAbonos[abonoIndexToEdit].fecha).toLocaleDateString('es-CO')}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Monto:</span>{' '}
+                  <span className="font-semibold">${selectedApartado.historialAbonos[abonoIndexToEdit].monto.toLocaleString('es-CO')}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Método Actual:</span>{' '}
+                  <span className="font-semibold text-lg">{selectedApartado.historialAbonos[abonoIndexToEdit].metodoPago || 'Efectivo'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Selector de nuevo método */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Nuevo Método de Pago:
+              </label>
+              <select
+                value={nuevoMetodoPagoAbono}
+                onChange={(e) => setNuevoMetodoPagoAbono(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="Efectivo">Efectivo</option>
+                <option value="Nequi">Nequi</option>
+                <option value="Daviplata">Daviplata</option>
+                <option value="Nu">Nu</option>
+                <option value="Tarjeta">Tarjeta</option>
+                <option value="Transferencia">Transferencia</option>
+                <option value="Mixto">Mixto</option>
+              </select>
+            </div>
+
+            {/* Notas de corrección */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Notas (obligatorio):
+              </label>
+              <textarea
+                value={notasMetodoPagoAbono}
+                onChange={(e) => setNotasMetodoPagoAbono(e.target.value)}
+                placeholder="Ej: Se registró como efectivo pero fue pago por Nequi..."
+                rows={3}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-2">
+              <button
+                onClick={handleCambiarMetodoPagoAbono}
+                disabled={cambiandoMetodoPagoAbono || !notasMetodoPagoAbono.trim() || nuevoMetodoPagoAbono === (selectedApartado.historialAbonos[abonoIndexToEdit].metodoPago || 'Efectivo')}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cambiandoMetodoPagoAbono ? '⏳ Cambiando...' : '✓ Cambiar Método'}
+              </button>
+              <button
+                onClick={handleCloseCambiarMetodoPagoAbono}
+                disabled={cambiandoMetodoPagoAbono}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Crear Cliente */}
+      {showClientModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+              <h2 className="text-2xl font-semibold text-gray-800">
+                Crear Cliente
+              </h2>
+              <button
+                onClick={() => {
+                  setShowClientModal(false);
+                  setNewClientData({
+                    nombreCompleto: '',
+                    tipoDocumento: 'Cédula de Ciudadanía',
+                    numeroDocumento: '',
+                    telefono: '',
+                    email: '',
+                    direccion: '',
+                    ciudad: '',
+                    colegioId: ''
+                  });
+                }}
+                className="text-gray-400 hover:text-gray-600 text-2xl"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="px-6 py-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Nombre Completo */}
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Nombre Completo <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newClientData.nombreCompleto}
+                    onChange={(e) => setNewClientData({ ...newClientData, nombreCompleto: e.target.value })}
+                    placeholder="Ej: Juan Pérez García"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Tipo de Documento */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Tipo de Documento <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={newClientData.tipoDocumento}
+                    onChange={(e) => setNewClientData({ ...newClientData, tipoDocumento: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  >
+                    {tiposDocumento.map((tipo) => (
+                      <option key={tipo} value={tipo}>
+                        {tipo}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Número de Documento */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Número de Documento <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newClientData.numeroDocumento}
+                    onChange={(e) => setNewClientData({ ...newClientData, numeroDocumento: e.target.value })}
+                    placeholder="Ej: 123456789"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Teléfono */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Teléfono
+                  </label>
+                  <input
+                    type="text"
+                    value={newClientData.telefono}
+                    onChange={(e) => setNewClientData({ ...newClientData, telefono: e.target.value })}
+                    placeholder="Ej: 3001234567"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Email */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={newClientData.email}
+                    onChange={(e) => setNewClientData({ ...newClientData, email: e.target.value })}
+                    placeholder="Ej: cliente@ejemplo.com"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Dirección */}
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Dirección
+                  </label>
+                  <input
+                    type="text"
+                    value={newClientData.direccion}
+                    onChange={(e) => setNewClientData({ ...newClientData, direccion: e.target.value })}
+                    placeholder="Ej: Calle 123 # 45-67"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Ciudad */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Ciudad
+                  </label>
+                  <input
+                    type="text"
+                    value={newClientData.ciudad}
+                    onChange={(e) => setNewClientData({ ...newClientData, ciudad: e.target.value })}
+                    placeholder="Ej: Bogotá"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  />
+                </div>
+
+                {/* Colegio */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Colegio (Opcional)
+                  </label>
+                  <select
+                    value={newClientData.colegioId}
+                    onChange={(e) => setNewClientData({ ...newClientData, colegioId: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent"
+                    style={{ '--tw-ring-color': '#D50565' }}
+                  >
+                    <option value="">Sin colegio asignado</option>
+                    {colegios.map(colegio => (
+                      <option key={colegio.id} value={colegio.id}>
+                        {colegio.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowClientModal(false);
+                  setNewClientData({
+                    nombreCompleto: '',
+                    tipoDocumento: 'Cédula de Ciudadanía',
+                    numeroDocumento: '',
+                    telefono: '',
+                    email: '',
+                    direccion: '',
+                    ciudad: '',
+                    colegioId: ''
+                  });
+                }}
+                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCreateClient}
+                style={{ backgroundColor: '#D50565' }}
+                className="px-4 py-2 text-white rounded-lg hover:opacity-90 transition-opacity"
+              >
+                Crear Cliente
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

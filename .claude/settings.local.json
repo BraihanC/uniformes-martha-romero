@@ -30,7 +30,12 @@
       "Bash(npm run test:run:*)",
       "Bash(npm uninstall:*)",
       "Bash(node migrate-stock-fields.js:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(node investigar-descuadre.js:*)",
+      "Bash(node revisar-todos-productos.js:*)",
+      "Bash(node detectar-stock-insuficiente.js:*)",
+      "Bash(node verificar-producto.js:*)",
+      "Bash(xargs:*)"
     ],
     "deny": [],
     "ask": []

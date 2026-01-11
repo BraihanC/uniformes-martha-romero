@@ -149,14 +149,30 @@ const EntradaSatelite = () => {
       for (const pedidoDoc of pedidosSnapshot.docs) {
         const pedidoData = pedidoDoc.data();
 
-        // Buscar items que coincidan con el producto y estén en producción
+        // Buscar items que coincidan con el producto y tengan unidades pendientes
         const itemsPendientes = pedidoData.items
           .map((item, index) => ({ ...item, index }))
-          .filter(item =>
-            item.referencia === selectedProduct.referencia &&
-            item.talla === selectedProduct.talla &&
-            item.estadoItem === 'En Producción'
-          );
+          .filter(item => {
+            const referenciaCoincide = item.referencia === selectedProduct.referencia;
+            const tallaCoincide = item.talla === selectedProduct.talla;
+
+            if (!referenciaCoincide || !tallaCoincide) return false;
+
+            // Incluir si está "En Producción"
+            if (item.estadoItem === 'En Producción') return true;
+
+            // Incluir si está "Parcialmente Listo" y aún hay unidades que no están listas ni entregadas
+            if (item.estadoItem === 'Parcialmente Listo') {
+              const cantidadTotal = item.cantidad;
+              const cantidadLista = item.cantidadLista || 0;
+              const cantidadEntregada = item.cantidadEntregada || 0;
+              const cantidadPendiente = cantidadTotal - cantidadLista - cantidadEntregada;
+
+              return cantidadPendiente > 0; // Hay unidades pendientes
+            }
+
+            return false; // No está pendiente (está "Listo para Entrega" o "Entregado")
+          });
 
         if (itemsPendientes.length > 0) {
           pedidosPendientes.push({
@@ -218,8 +234,14 @@ const EntradaSatelite = () => {
         for (const itemPendiente of pedido.itemsPendientes) {
           if (cantidadRestante <= 0) break;
 
-          const cantidadNecesaria = itemPendiente.cantidad;
-          const cantidadAAsignar = Math.min(cantidadNecesaria, cantidadRestante);
+          // Calcular cantidad pendiente real (no la cantidad total)
+          const cantidadTotal = itemPendiente.cantidad;
+          const cantidadLista = itemPendiente.cantidadLista || 0;
+          const cantidadEntregada = itemPendiente.cantidadEntregada || 0;
+          const cantidadPendiente = cantidadTotal - cantidadLista - cantidadEntregada;
+
+          // Asignar basándose en lo que REALMENTE falta
+          const cantidadAAsignar = Math.min(cantidadPendiente, cantidadRestante);
 
           asignaciones.push({
             pedidoId: pedido.id,
@@ -228,8 +250,8 @@ const EntradaSatelite = () => {
             clienteNombre: pedido.clienteNombre,
             itemIndex: itemPendiente.index,
             cantidadAsignada: cantidadAAsignar,
-            cantidadNecesaria: cantidadNecesaria,
-            esCompleto: cantidadAAsignar === cantidadNecesaria
+            cantidadNecesaria: cantidadPendiente, // La cantidad que falta, no la total
+            esCompleto: cantidadAAsignar === cantidadPendiente // Completo si cubrimos lo pendiente
           });
 
           cantidadRestante -= cantidadAAsignar;
@@ -273,10 +295,12 @@ const EntradaSatelite = () => {
       // PASO 4: Ejecutar todas las actualizaciones en batch
       const batch = writeBatch(db);
 
-      // 4.1. Calcular cuánto se asigna a pedidos listos
+      // 4.1. Calcular cuánto se asigna a pedidos regulares (POS)
+      // IMPORTANTE: Se debe incrementar stockReservadoPedidos por TODAS las asignaciones,
+      // no solo las completas, porque las prendas ya están listas en bodega
       let cantidadReservadaPedidos = 0;
       asignaciones.forEach(asig => {
-        if (asig.tipo === 'pedido' && asig.esCompleto) {
+        if (asig.tipo === 'pedido') {
           cantidadReservadaPedidos += asig.cantidadAsignada;
         }
       });
@@ -284,9 +308,10 @@ const EntradaSatelite = () => {
       // 4.2. Actualizar stockTotal del producto (inventario físico)
       // totalPrendasPedidas se incrementa al crear el pedido
       // stockReservadoPedidos se incrementa aquí cuando las prendas llegan y se marcan "Listo para Entrega"
+      // IMPORTANTE: Solo sumamos las prendas BUENAS, no las defectuosas
       const productRef = doc(db, 'products', selectedProduct.id);
       const productUpdate = {
-        stockTotal: increment(numCantidad),
+        stockTotal: increment(cantidadBuena),  // CORREGIDO: era numCantidad (incluía defectuosas)
         updatedAt: serverTimestamp()
       };
 
@@ -308,13 +333,32 @@ const EntradaSatelite = () => {
           const updatedItems = [...pedidoData.items];
           const item = updatedItems[asig.itemIndex];
 
-          // Si se asignó completo, cambiar estado a "Listo para Entrega"
-          if (asig.esCompleto) {
-            updatedItems[asig.itemIndex] = {
-              ...item,
-              estadoItem: 'Listo para Entrega'
-            };
+          // Actualizar estado del item según la cantidad asignada
+          const cantidadAsignada = asig.cantidadAsignada;  // CORREGIDO: era asig.cantidad (undefined)
+          const cantidadTotal = item.cantidad;
+          const cantidadListaActual = item.cantidadLista || 0;
+          const cantidadEntregada = item.cantidadEntregada || 0;
+
+          // Nueva cantidad lista = cantidad actual + cantidad que acaba de llegar
+          const nuevaCantidadLista = cantidadListaActual + cantidadAsignada;
+
+          // Recalcular estado
+          let nuevoEstado;
+          if (cantidadEntregada === cantidadTotal) {
+            nuevoEstado = 'Entregado'; // Ya está todo entregado
+          } else if (nuevaCantidadLista + cantidadEntregada === cantidadTotal) {
+            nuevoEstado = 'Listo para Entrega'; // Ahora está todo listo
+          } else if (nuevaCantidadLista > 0) {
+            nuevoEstado = 'Parcialmente Listo'; // Hay algunas unidades listas
+          } else {
+            nuevoEstado = 'En Producción'; // Aún no hay nada listo
           }
+
+          updatedItems[asig.itemIndex] = {
+            ...item,
+            cantidadLista: nuevaCantidadLista,
+            estadoItem: nuevoEstado
+          };
 
           batch.update(pedidoRef, {
             items: updatedItems,

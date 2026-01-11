@@ -158,6 +158,190 @@ const Inventory = () => {
     }
   };
 
+  // FUNCIÓN ADMINISTRATIVA: Recalcular stockReservadoPedidos desde los pedidos activos
+  const recalcularInventarioCompleto = async () => {
+    const confirmar = window.confirm(
+      '⚠️ RECALCULAR INVENTARIO COMPLETO\n\n' +
+      'Esta función recalculará el stockReservadoPedidos de TODOS los productos basándose en el estado real de TODOS los pedidos.\n\n' +
+      'Esto corregirá cualquier descuadre en el inventario.\n\n' +
+      '¿Deseas continuar?'
+    );
+
+    if (!confirmar) return;
+
+    setLoading(true);
+    try {
+      console.log('🔄 Iniciando recálculo de inventario...');
+
+      // 1. Leer TODOS los pedidos (sin filtro para asegurar que no se pierda ninguno)
+      const pedidosSnapshot = await getDocs(collection(db, 'pedidos'));
+      console.log(`📦 Total de pedidos encontrados: ${pedidosSnapshot.size}`);
+
+      // 2. Calcular stock reservado por producto
+      const stockReservadoPorProducto = {}; // { productoId: cantidadReservada }
+      const detallesPorProducto = {}; // Para debugging
+
+      // Contadores para estadísticas
+      let pedidosRevisados = 0;
+      let itemsEnProduccion = 0;
+      let itemsParcialmenteListo = 0;
+      let itemsListoParaEntrega = 0;
+      let itemsEntregados = 0;
+      let itemsAnulados = 0;
+
+      pedidosSnapshot.forEach(docSnap => {
+        const pedido = docSnap.data();
+        const pedidoId = docSnap.id;
+        const numeroPedido = pedido.numeroPedido;
+        const estadoGeneral = pedido.estadoGeneral;
+        const items = pedido.items || [];
+
+        pedidosRevisados++;
+
+        items.forEach((item, index) => {
+          // Validar que el item tenga los campos necesarios
+          if (!item.productoId) {
+            console.warn(`⚠️ Pedido #${numeroPedido} item ${index}: Sin productoId`);
+            return;
+          }
+
+          const productoId = item.productoId;
+          const estadoItem = item.estadoItem;
+          const cantidadTotal = item.cantidad || 0;
+          const cantidadLista = item.cantidadLista || 0;
+          const cantidadEntregada = item.cantidadEntregada || 0;
+          const anulado = item.anulado || false;
+
+          // Contar por estado
+          if (anulado) {
+            itemsAnulados++;
+            return; // Items anulados no cuentan
+          }
+
+          if (estadoItem === 'En Producción') itemsEnProduccion++;
+          else if (estadoItem === 'Parcialmente Listo') itemsParcialmenteListo++;
+          else if (estadoItem === 'Listo para Entrega') itemsListoParaEntrega++;
+          else if (estadoItem === 'Entregado') itemsEntregados++;
+
+          // Calcular cuánto stock reserva este item
+          let cantidadReservada = 0;
+
+          if (estadoItem === 'Listo para Entrega') {
+            // Reserva todo lo que NO se ha entregado
+            // cantidadTotal incluye todo, entonces restamos lo entregado
+            cantidadReservada = Math.max(0, cantidadTotal - cantidadEntregada);
+          } else if (estadoItem === 'Parcialmente Listo') {
+            // IMPORTANTE: cantidadLista YA excluye las entregadas
+            // Cuando se entrega, cantidadLista se pone en 0 y se suma a cantidadEntregada
+            // Por lo tanto, cantidadLista = unidades listas que NO se han entregado
+            cantidadReservada = cantidadLista;
+          } else if (estadoItem === 'En Producción') {
+            // No reserva stock (aún no está en bodega)
+            cantidadReservada = 0;
+          } else if (estadoItem === 'Entregado') {
+            // Ya se entregó, no reserva stock
+            cantidadReservada = 0;
+          } else {
+            // Estado desconocido
+            console.warn(`⚠️ Pedido #${numeroPedido}: Estado desconocido "${estadoItem}"`);
+            cantidadReservada = 0;
+          }
+
+          // Sumar al total de este producto
+          if (!stockReservadoPorProducto[productoId]) {
+            stockReservadoPorProducto[productoId] = 0;
+            detallesPorProducto[productoId] = [];
+          }
+          stockReservadoPorProducto[productoId] += cantidadReservada;
+
+          // Guardar detalle para debugging
+          if (cantidadReservada > 0) {
+            detallesPorProducto[productoId].push({
+              pedido: numeroPedido,
+              estado: estadoItem,
+              cantidad: cantidadReservada,
+              ref: item.referencia,
+              talla: item.talla
+            });
+          }
+        });
+      });
+
+      console.log(`📊 Estadísticas de items:`);
+      console.log(`  - En Producción: ${itemsEnProduccion}`);
+      console.log(`  - Parcialmente Listo: ${itemsParcialmenteListo}`);
+      console.log(`  - Listo para Entrega: ${itemsListoParaEntrega}`);
+      console.log(`  - Entregados: ${itemsEntregados}`);
+      console.log(`  - Anulados: ${itemsAnulados}`);
+
+      // 3. Actualizar todos los productos
+      const batch = writeBatch(db);
+      const productosSnapshot = await getDocs(collection(db, 'products'));
+
+      let productosActualizados = 0;
+      let productosConCambios = [];
+
+      productosSnapshot.forEach(docSnap => {
+        const productoId = docSnap.id;
+        const productoData = docSnap.data();
+        const stockReservadoCalculado = stockReservadoPorProducto[productoId] || 0;
+        const stockReservadoActual = productoData.stockReservadoPedidos || 0;
+
+        // Solo actualizar si hay diferencia
+        if (stockReservadoCalculado !== stockReservadoActual) {
+          const productoRef = doc(db, 'products', productoId);
+          batch.update(productoRef, {
+            stockReservadoPedidos: stockReservadoCalculado,
+            updatedAt: serverTimestamp()
+          });
+          productosActualizados++;
+
+          // Guardar para el reporte
+          productosConCambios.push({
+            nombre: productoData.nombre,
+            referencia: productoData.referencia,
+            talla: productoData.talla,
+            anterior: stockReservadoActual,
+            nuevo: stockReservadoCalculado,
+            diferencia: stockReservadoCalculado - stockReservadoActual
+          });
+        }
+      });
+
+      // 4. Commit
+      await batch.commit();
+
+      // 5. Mostrar reporte detallado
+      console.log(`\n📝 REPORTE DE CAMBIOS:`);
+      productosConCambios.forEach(p => {
+        console.log(`${p.referencia} ${p.talla}: ${p.anterior} → ${p.nuevo} (${p.diferencia > 0 ? '+' : ''}${p.diferencia})`);
+      });
+
+      alert(
+        `✅ INVENTARIO RECALCULADO EXITOSAMENTE\n\n` +
+        `📦 Pedidos revisados: ${pedidosRevisados}\n` +
+        `📊 Items procesados:\n` +
+        `   • En Producción: ${itemsEnProduccion}\n` +
+        `   • Parcialmente Listo: ${itemsParcialmenteListo}\n` +
+        `   • Listo para Entrega: ${itemsListoParaEntrega}\n` +
+        `   • Entregados: ${itemsEntregados}\n` +
+        `   • Anulados: ${itemsAnulados}\n\n` +
+        `🔧 Productos actualizados: ${productosActualizados}\n` +
+        `📝 Total productos revisados: ${productosSnapshot.size}\n\n` +
+        `Revisa la consola para ver el detalle de cambios.`
+      );
+
+      // Recargar productos
+      await fetchProducts();
+
+    } catch (error) {
+      console.error('Error al recalcular inventario:', error);
+      alert('❌ Error al recalcular inventario: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Obtener todos los colegios
   const fetchColegios = async () => {
     try {
@@ -467,6 +651,16 @@ const Inventory = () => {
         </div>
         {isAdmin && (
           <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+            <button
+              onClick={recalcularInventarioCompleto}
+              disabled={loading}
+              style={{ backgroundColor: '#4CAF50' }}
+              className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Recalcular stockReservadoPedidos basándose en el estado real de los pedidos"
+            >
+              <span className="hidden sm:inline">🔄 Recalcular Inventario</span>
+              <span className="sm:hidden">🔄 Recalc.</span>
+            </button>
             <button
               onClick={handleImportClick}
               disabled={loading}

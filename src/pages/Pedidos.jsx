@@ -128,6 +128,13 @@ const Pedidos = () => {
   const [notasMetodoPagoAbono, setNotasMetodoPagoAbono] = useState('');
   const [cambiandoMetodoPagoAbono, setCambiandoMetodoPagoAbono] = useState(false);
 
+  // Estados para cambio de cantidad lista
+  const [showCambiarCantidadListaModal, setShowCambiarCantidadListaModal] = useState(false);
+  const [itemIndexToCambiarEstado, setItemIndexToCambiarEstado] = useState(null);
+  const [nuevaCantidadLista, setNuevaCantidadLista] = useState(0);
+  const [notasCambioEstado, setNotasCambioEstado] = useState('');
+  const [cambiandoCantidadLista, setCambiandoCantidadLista] = useState(false);
+
   // Cargar datos al iniciar
   useEffect(() => {
     fetchClients();
@@ -737,7 +744,17 @@ const Pedidos = () => {
     // Paso A: Calcular valor de entrega
     const valorDeEntrega = selectedItemsForDelivery.reduce((sum, index) => {
       const item = selectedPedido.items[index];
-      return sum + item.subtotal;
+      const esParcial = item.estadoItem === 'Parcialmente Listo';
+
+      if (esParcial) {
+        // Para entregas parciales, calcular valor proporcional
+        const cantidadLista = item.cantidadLista || 0;
+        const precioUnitario = item.precio;
+        return sum + (cantidadLista * precioUnitario);
+      } else {
+        // Para entregas totales, usar subtotal completo
+        return sum + item.subtotal;
+      }
     }, 0);
 
     // Paso B y C: Validar abono
@@ -766,17 +783,61 @@ const Pedidos = () => {
 
       // Calcular nuevo total abonado y saldo
       const valorDeEntrega = selectedItemsForDelivery.reduce((sum, index) => {
-        return sum + selectedPedido.items[index].subtotal;
+        const item = selectedPedido.items[index];
+        const esParcial = item.estadoItem === 'Parcialmente Listo';
+
+        if (esParcial) {
+          // Para entregas parciales, calcular valor proporcional
+          const cantidadLista = item.cantidadLista || 0;
+          const precioUnitario = item.precio;
+          return sum + (cantidadLista * precioUnitario);
+        } else {
+          // Para entregas totales, usar subtotal completo
+          return sum + item.subtotal;
+        }
       }, 0);
 
       const abonoNuevo = Number(nuevoAbono) || 0;
       const nuevoTotalAbonado = (selectedPedido.totalAbonado || 0) + abonoNuevo;
       const nuevoSaldoPendiente = selectedPedido.total - nuevoTotalAbonado;
 
-      // Actualizar items: cambiar estado a "Entregado"
+      // Actualizar items: cambiar estado según si es entrega parcial o total
       const updatedItems = selectedPedido.items.map((item, index) => {
         if (selectedItemsForDelivery.includes(index)) {
-          return { ...item, estadoItem: 'Entregado' };
+          const esParcial = item.estadoItem === 'Parcialmente Listo';
+
+          if (esParcial) {
+            // Entrega parcial: solo entregar la cantidad lista
+            const cantidadLista = item.cantidadLista || 0;
+            const nuevaCantidadEntregada = (item.cantidadEntregada || 0) + cantidadLista;
+            const cantidadTotal = item.cantidad;
+
+            // Recalcular estado
+            // Después de entregar, cantidadLista será 0, entonces:
+            // - Si se entregó todo -> 'Entregado'
+            // - Si aún quedan unidades pendientes -> 'En Producción' (ya que cantidadLista = 0)
+            let nuevoEstado;
+            if (nuevaCantidadEntregada === cantidadTotal) {
+              nuevoEstado = 'Entregado';
+            } else {
+              nuevoEstado = 'En Producción'; // Aún quedan unidades por producir
+            }
+
+            return {
+              ...item,
+              cantidadEntregada: nuevaCantidadEntregada,
+              cantidadLista: 0, // Ya se entregaron las que estaban listas
+              estadoItem: nuevoEstado
+            };
+          } else {
+            // Entrega total: todo listo se entrega
+            return {
+              ...item,
+              cantidadEntregada: item.cantidad,
+              cantidadLista: 0,
+              estadoItem: 'Entregado'
+            };
+          }
         }
         return item;
       });
@@ -805,6 +866,15 @@ const Pedidos = () => {
       const productosNoEncontrados = [];
       for (const index of selectedItemsForDelivery) {
         const item = selectedPedido.items[index];
+
+        // IMPORTANTE: Saltar productos anulados (ya liberaron su reserva)
+        if (item.anulado) continue;
+
+        const esParcial = item.estadoItem === 'Parcialmente Listo';
+
+        // Calcular cuántas unidades se están entregando REALMENTE
+        const cantidadAEntregar = esParcial ? (item.cantidadLista || 0) : item.cantidad;
+
         const productRef = doc(db, 'products', item.productoId);
         const productSnap = await getDoc(productRef);
 
@@ -818,9 +888,9 @@ const Pedidos = () => {
           // Solo actualizar si el producto existe
           // Decrementar: stockTotal (sale de bodega), stockReservadoPedidos (ya no reservado), totalPrendasPedidas (ya no pedido)
           batch.update(productRef, {
-            stockTotal: increment(-item.cantidad),
-            stockReservadoPedidos: increment(-item.cantidad),
-            totalPrendasPedidas: increment(-item.cantidad),
+            stockTotal: increment(-cantidadAEntregar),
+            stockReservadoPedidos: increment(-cantidadAEntregar),
+            totalPrendasPedidas: increment(-cantidadAEntregar),
             updatedAt: serverTimestamp()
           });
         }
@@ -863,12 +933,27 @@ const Pedidos = () => {
       // 4. Commit
       await batch.commit();
 
-      // Verificar si todos los items están entregados
-      const todosEntregados = updatedItems.every(item => item.estadoItem === 'Entregado');
+      // Recalcular estado general del pedido
+      const todosEntregados = updatedItems.every(item => item.anulado || item.estadoItem === 'Entregado');
+      const hayEnProduccion = updatedItems.some(item =>
+        !item.anulado && ((item.cantidadLista || 0) + (item.cantidadEntregada || 0)) < item.cantidad
+      );
+      const todosListosOEntregados = updatedItems.every(item =>
+        item.anulado || ((item.cantidadLista || 0) + (item.cantidadEntregada || 0)) === item.cantidad
+      );
 
+      let nuevoEstadoGeneral;
       if (todosEntregados) {
+        nuevoEstadoGeneral = 'Entregado';
+      } else if (hayEnProduccion) {
+        nuevoEstadoGeneral = 'En Proceso';
+      } else if (todosListosOEntregados) {
+        nuevoEstadoGeneral = 'Pedido Completo - Listo para Recoger';
+      }
+
+      if (nuevoEstadoGeneral) {
         await updateDoc(pedidoRef, {
-          estadoGeneral: 'Entregado',
+          estadoGeneral: nuevoEstadoGeneral,
           updatedAt: serverTimestamp()
         });
       }
@@ -1724,6 +1809,153 @@ const Pedidos = () => {
       alert('❌ Error al cambiar método de pago: ' + error.message);
     } finally {
       setCambiandoMetodoPagoAbono(false);
+    }
+  };
+
+  // Función para abrir el modal de cambio de cantidad lista
+  const handleOpenCambiarCantidadLista = (itemIndex) => {
+    const item = selectedPedido.items[itemIndex];
+    setItemIndexToCambiarEstado(itemIndex);
+    setNuevaCantidadLista(item.cantidadLista || 0);
+    setNotasCambioEstado('');
+    setShowCambiarCantidadListaModal(true);
+  };
+
+  // Función para cerrar el modal de cambio de cantidad lista
+  const handleCloseCambiarCantidadLista = () => {
+    setShowCambiarCantidadListaModal(false);
+    setItemIndexToCambiarEstado(null);
+    setNuevaCantidadLista(0);
+    setNotasCambioEstado('');
+  };
+
+  // Función para cambiar la cantidad lista de un item
+  const handleCambiarCantidadLista = async () => {
+    if (!selectedPedido || itemIndexToCambiarEstado === null) return;
+
+    const item = selectedPedido.items[itemIndexToCambiarEstado];
+    const cantidadTotal = item.cantidad;
+    const cantidadEntregada = item.cantidadEntregada || 0;
+
+    if (nuevaCantidadLista < 0 || nuevaCantidadLista > cantidadTotal) {
+      alert(`La cantidad lista debe estar entre 0 y ${cantidadTotal}`);
+      return;
+    }
+
+    if (nuevaCantidadLista + cantidadEntregada > cantidadTotal) {
+      alert(`La suma de cantidad lista (${nuevaCantidadLista}) y cantidad entregada (${cantidadEntregada}) no puede superar el total (${cantidadTotal})`);
+      return;
+    }
+
+    const cantidadActualLista = item.cantidadLista || 0;
+
+    if (nuevaCantidadLista === cantidadActualLista) {
+      alert('La cantidad lista es la misma que la actual.');
+      return;
+    }
+
+    const confirmar = window.confirm(
+      `⚠️ CAMBIAR CANTIDAD LISTA\n\n` +
+      `Pedido #${selectedPedido.numeroPedido}\n` +
+      `Producto: ${item.nombre}\n` +
+      `Talla: ${item.talla}\n` +
+      `Cantidad Total: ${cantidadTotal}\n\n` +
+      `Cantidad Lista Actual: ${cantidadActualLista}\n` +
+      `Nueva Cantidad Lista: ${nuevaCantidadLista}\n` +
+      `Cantidad Aún en Producción: ${cantidadTotal - nuevaCantidadLista - cantidadEntregada}\n\n` +
+      `¿Continuar?`
+    );
+
+    if (!confirmar) return;
+
+    setCambiandoCantidadLista(true);
+    try {
+      const batch = writeBatch(db);
+      const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
+
+      // Actualizar el item con la nueva cantidad lista
+      const updatedItems = [...selectedPedido.items];
+      updatedItems[itemIndexToCambiarEstado] = {
+        ...item,
+        cantidadLista: nuevaCantidadLista,
+        cantidadEntregada: cantidadEntregada,
+        // Calcular estadoItem basado en las cantidades
+        estadoItem:
+          cantidadEntregada === cantidadTotal ? 'Entregado' :
+          nuevaCantidadLista + cantidadEntregada === cantidadTotal ? 'Listo para Entrega' :
+          nuevaCantidadLista > 0 ? 'Parcialmente Listo' :
+          'En Producción',
+        historialCambiosEstado: [
+          ...(item.historialCambiosEstado || []),
+          {
+            fecha: new Date().toISOString(),
+            cantidadListaAnterior: cantidadActualLista,
+            cantidadListaNueva: nuevaCantidadLista,
+            notas: notasCambioEstado || 'Cambio manual de cantidad lista',
+            usuario: currentUser?.email || 'Admin'
+          }
+        ]
+      };
+
+      // ACTUALIZAR INVENTARIO - Incrementar/Decrementar stockReservadoPedidos
+      const productoRef = doc(db, 'products', item.productoId);
+      const diferenciaCantidad = nuevaCantidadLista - cantidadActualLista;
+
+      if (diferenciaCantidad !== 0) {
+        // Si aumenta la cantidad lista, aumentamos la reserva
+        // Si disminuye la cantidad lista, disminuimos la reserva
+        batch.update(productoRef, {
+          stockReservadoPedidos: increment(diferenciaCantidad),
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      // Calcular el nuevo estado general del pedido
+      const anyInProduction = updatedItems.some(item =>
+        !item.anulado && (item.cantidadLista || 0) + (item.cantidadEntregada || 0) < item.cantidad
+      );
+      const allItemsReadyOrDelivered = updatedItems.every(item =>
+        item.anulado || (item.cantidadLista || 0) + (item.cantidadEntregada || 0) === item.cantidad
+      );
+      const todosEntregados = updatedItems.every(item =>
+        item.anulado || (item.cantidadEntregada || 0) === item.cantidad
+      );
+
+      let estadoCorrecto;
+      if (todosEntregados) {
+        estadoCorrecto = 'Entregado';
+      } else if (anyInProduction) {
+        estadoCorrecto = 'En Proceso';
+      } else if (allItemsReadyOrDelivered) {
+        estadoCorrecto = 'Pedido Completo - Listo para Recoger';
+      }
+
+      batch.update(pedidoRef, {
+        items: updatedItems,
+        estadoGeneral: estadoCorrecto,
+        updatedAt: serverTimestamp()
+      });
+
+      await batch.commit();
+
+      alert(
+        `✅ Cantidad lista actualizada\n\n` +
+        `Anterior: ${cantidadActualLista} de ${cantidadTotal}\n` +
+        `Nueva: ${nuevaCantidadLista} de ${cantidadTotal}`
+      );
+
+      // Recargar el pedido
+      const pedidoSnap = await getDoc(pedidoRef);
+      setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
+      fetchPedidos();
+
+      handleCloseCambiarCantidadLista();
+
+    } catch (error) {
+      console.error('Error al cambiar cantidad lista:', error);
+      alert('❌ Error al cambiar cantidad lista: ' + error.message);
+    } finally {
+      setCambiandoCantidadLista(false);
     }
   };
 
@@ -2610,36 +2842,72 @@ const Pedidos = () => {
                           </td>
                           <td className="px-4 py-3 text-center">
                             {!item.anulado && (
-                              <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                                item.estadoItem === 'En Producción'
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : item.estadoItem === 'Listo para Entrega'
-                                  ? 'bg-yellow-100 text-yellow-800'
-                                  : 'bg-green-100 text-green-800'
-                              }`}>
-                                {item.estadoItem}
-                              </span>
+                              <div className="space-y-1">
+                                {/* Estado principal */}
+                                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                                  item.estadoItem === 'En Producción'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : item.estadoItem === 'Listo para Entrega'
+                                    ? 'bg-yellow-100 text-yellow-800'
+                                    : item.estadoItem === 'Parcialmente Listo'
+                                    ? 'bg-orange-100 text-orange-800'
+                                    : 'bg-green-100 text-green-800'
+                                }`}>
+                                  {item.estadoItem}
+                                </span>
+                                {/* Detalle de cantidades */}
+                                {item.cantidad > 1 && (
+                                  <div className="text-xs text-gray-600 mt-1">
+                                    {item.cantidadEntregada > 0 && (
+                                      <div className="text-green-700">
+                                        ✓ Entregado: {item.cantidadEntregada}/{item.cantidad}
+                                      </div>
+                                    )}
+                                    {(item.cantidadLista || 0) > 0 && (item.cantidadEntregada || 0) < item.cantidad && (
+                                      <div className="text-yellow-700">
+                                        ⏳ Listo: {item.cantidadLista || 0}/{item.cantidad}
+                                      </div>
+                                    )}
+                                    {((item.cantidadLista || 0) + (item.cantidadEntregada || 0)) < item.cantidad && (
+                                      <div className="text-blue-700">
+                                        🔧 En Producción: {item.cantidad - (item.cantidadLista || 0) - (item.cantidadEntregada || 0)}/{item.cantidad}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </td>
                           <td className="px-4 py-3 text-center">
                             {!item.anulado ? (
-                              <div className="flex gap-2 justify-center">
-                                {item.estadoItem !== 'Entregado' && (
+                              <div className="flex flex-col gap-2">
+                                <div className="flex gap-2 justify-center">
+                                  {item.estadoItem !== 'Entregado' && (
+                                    <>
+                                      <button
+                                        onClick={() => handleOpenCorreccionProducto(index)}
+                                        className="px-3 py-1 bg-orange-500 text-white text-xs rounded hover:bg-orange-600 transition-colors"
+                                        title="Corregir Producto"
+                                      >
+                                        Corregir
+                                      </button>
+                                      <button
+                                        onClick={() => handleOpenCambiarCantidadLista(index)}
+                                        className="px-3 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 transition-colors"
+                                        title="Cambiar estado del producto"
+                                      >
+                                        📦 Estado
+                                      </button>
+                                    </>
+                                  )}
                                   <button
-                                    onClick={() => handleOpenCorreccionProducto(index)}
-                                    className="px-3 py-1 bg-orange-500 text-white text-xs rounded hover:bg-orange-600 transition-colors"
-                                    title="Corregir Producto"
+                                    onClick={() => handleOpenAnularProducto(index)}
+                                    className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition-colors"
+                                    title="Anular este producto"
                                   >
-                                    Corregir
+                                    Anular
                                   </button>
-                                )}
-                                <button
-                                  onClick={() => handleOpenAnularProducto(index)}
-                                  className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition-colors"
-                                  title="Anular este producto"
-                                >
-                                  Anular
-                                </button>
+                                </div>
                               </div>
                             ) : (
                               <button
@@ -2658,68 +2926,12 @@ const Pedidos = () => {
                 </div>
               </div>
 
-              {/* Sub-Módulo 1: Estado de Taller */}
+              {/* Registrar Entrega al Cliente (Listos para Entrega) */}
               <div>
                 <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                  Estado de Taller (En Producción)
+                  Registrar Entrega al Cliente
                 </h3>
-                {selectedPedido.items.filter(item => item.estadoItem === 'En Producción').length === 0 ? (
-                  <p className="text-gray-500 text-sm">No hay ítems en producción.</p>
-                ) : (
-                  <div className="border border-gray-200 rounded-lg overflow-hidden">
-                    <table className="w-full">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
-                          <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Cantidad</th>
-                          <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Estado</th>
-                          <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Acción</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-200">
-                        {selectedPedido.items.map((item, index) => (
-                          item.estadoItem === 'En Producción' && (
-                            <tr key={index}>
-                              <td className="px-4 py-3">
-                                <p className="font-medium text-gray-800">{item.nombre}</p>
-                                <p className="text-sm text-gray-600">Ref: {item.referencia} | Talla: {item.talla}</p>
-                              </td>
-                              <td className="px-4 py-3 text-center">{item.cantidad}</td>
-                              <td className="px-4 py-3 text-center">
-                                <span className="px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                  {item.estadoItem}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 text-center">
-                                <select
-                                  value={item.estadoItem}
-                                  onChange={(e) => handleUpdateItemEstado(index, e.target.value)}
-                                  disabled={loading}
-                                  className={`px-3 py-1 rounded text-xs border ${
-                                    item.estadoItem === 'En Producción'
-                                      ? 'bg-blue-100 text-blue-800 border-blue-200'
-                                      : 'bg-yellow-100 text-yellow-800 border-yellow-200'
-                                  } focus:outline-none focus:ring-1 focus:ring-primary`}
-                                >
-                                  <option value="En Producción">En Producción</option>
-                                  <option value="Listo para Entrega">Listo para Entrega</option>
-                                </select>
-                              </td>
-                            </tr>
-                          )
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              {/* Sub-Módulo 2: Registrar Entrega al Cliente */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                  Registrar Entrega al Cliente (Listos para Entrega)
-                </h3>
-                {selectedPedido.items.filter(item => item.estadoItem === 'Listo para Entrega').length === 0 ? (
+                {selectedPedido.items.filter(item => item.estadoItem === 'Listo para Entrega' || item.estadoItem === 'Parcialmente Listo').length === 0 ? (
                   <p className="text-gray-500 text-sm">No hay ítems listos para entregar.</p>
                 ) : (
                   <div>
@@ -2733,7 +2945,7 @@ const Pedidos = () => {
                                 onChange={(e) => {
                                   if (e.target.checked) {
                                     const indices = selectedPedido.items
-                                      .map((item, idx) => item.estadoItem === 'Listo para Entrega' ? idx : null)
+                                      .map((item, idx) => (item.estadoItem === 'Listo para Entrega' || item.estadoItem === 'Parcialmente Listo') ? idx : null)
                                       .filter(idx => idx !== null);
                                     setSelectedItemsForDelivery(indices);
                                   } else {
@@ -2744,14 +2956,17 @@ const Pedidos = () => {
                               />
                             </th>
                             <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
-                            <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Cantidad</th>
+                            <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Cantidad Lista</th>
                             <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Subtotal</th>
-                            <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Estado</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
-                          {selectedPedido.items.map((item, index) => (
-                            item.estadoItem === 'Listo para Entrega' && (
+                          {selectedPedido.items.map((item, index) => {
+                            const cantidadLista = item.cantidadLista || item.cantidad;
+                            const esParcial = item.estadoItem === 'Parcialmente Listo';
+
+                            // IMPORTANTE: No mostrar productos anulados para entrega
+                            return !item.anulado && (item.estadoItem === 'Listo para Entrega' || item.estadoItem === 'Parcialmente Listo') && (
                               <tr key={index} className={selectedItemsForDelivery.includes(index) ? 'bg-blue-50' : ''}>
                                 <td className="px-4 py-3">
                                   <input
@@ -2764,29 +2979,27 @@ const Pedidos = () => {
                                 <td className="px-4 py-3">
                                   <p className="font-medium text-gray-800">{item.nombre}</p>
                                   <p className="text-sm text-gray-600">Ref: {item.referencia} | Talla: {item.talla}</p>
+                                  {esParcial && (
+                                    <p className="text-xs text-orange-600 mt-1">
+                                      ⚠️ Entrega Parcial: {cantidadLista} de {item.cantidad} listas
+                                    </p>
+                                  )}
                                 </td>
-                                <td className="px-4 py-3 text-center">{item.cantidad}</td>
+                                <td className="px-4 py-3 text-center">
+                                  {esParcial ? (
+                                    <span className="font-medium text-orange-600">
+                                      {cantidadLista}/{item.cantidad}
+                                    </span>
+                                  ) : (
+                                    item.cantidad
+                                  )}
+                                </td>
                                 <td className="px-4 py-3 text-right font-medium">
                                   ${item.subtotal?.toLocaleString('es-CO')}
                                 </td>
-                                <td className="px-4 py-3 text-center">
-                                  <select
-                                    value={item.estadoItem}
-                                    onChange={(e) => handleUpdateItemEstado(index, e.target.value)}
-                                    disabled={loading}
-                                    className={`px-3 py-1 rounded text-xs border ${
-                                      item.estadoItem === 'En Producción'
-                                        ? 'bg-blue-100 text-blue-800 border-blue-200'
-                                        : 'bg-yellow-100 text-yellow-800 border-yellow-200'
-                                    } focus:outline-none focus:ring-1 focus:ring-primary`}
-                                  >
-                                    <option value="En Producción">En Producción</option>
-                                    <option value="Listo para Entrega">Listo para Entrega</option>
-                                  </select>
-                                </td>
                               </tr>
-                            )
-                          ))}
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -2854,63 +3067,6 @@ const Pedidos = () => {
                         })()
                       }
                     </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Ítems Entregados */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-800 mb-3">
-                  Ítems Entregados
-                </h3>
-                {selectedPedido.items.filter(item => item.estadoItem === 'Entregado').length === 0 ? (
-                  <p className="text-gray-500 text-sm">No hay ítems entregados aún.</p>
-                ) : (
-                  <div className="border border-gray-200 rounded-lg overflow-hidden">
-                    <table className="w-full">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
-                          <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Cantidad</th>
-                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Subtotal</th>
-                          <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Estado</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-200">
-                        {selectedPedido.items.map((item, index) => (
-                          item.estadoItem === 'Entregado' && (
-                            <tr key={index}>
-                              <td className="px-4 py-3">
-                                <p className="font-medium text-gray-800">{item.nombre}</p>
-                                <p className="text-sm text-gray-600">Ref: {item.referencia} | Talla: {item.talla}</p>
-                              </td>
-                              <td className="px-4 py-3 text-center">{item.cantidad}</td>
-                              <td className="px-4 py-3 text-right font-medium">
-                                ${item.subtotal?.toLocaleString('es-CO')}
-                              </td>
-                              <td className="px-4 py-3 text-center">
-                                <select
-                                  value={item.estadoItem}
-                                  onChange={(e) => handleUpdateItemEstado(index, e.target.value)}
-                                  disabled={loading}
-                                  className={`px-3 py-1 rounded text-xs border ${
-                                    item.estadoItem === 'En Producción'
-                                      ? 'bg-blue-100 text-blue-800 border-blue-200'
-                                      : item.estadoItem === 'Listo para Entrega'
-                                        ? 'bg-yellow-100 text-yellow-800 border-yellow-200'
-                                        : 'bg-green-100 text-green-800 border-green-200'
-                                  } focus:outline-none focus:ring-1 focus:ring-primary`}
-                                >
-                                  <option value="En Producción">En Producción</option>
-                                  <option value="Listo para Entrega">Listo para Entrega</option>
-                                  <option value="Entregado">Entregado</option>
-                                </select>
-                              </td>
-                            </tr>
-                          )
-                        ))}
-                      </tbody>
-                    </table>
                   </div>
                 )}
               </div>
@@ -4017,6 +4173,121 @@ const Pedidos = () => {
               <button
                 onClick={handleCloseCambiarMetodoPagoAbono}
                 disabled={cambiandoMetodoPagoAbono}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CAMBIO DE CANTIDAD LISTA */}
+      {showCambiarCantidadListaModal && selectedPedido && itemIndexToCambiarEstado !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-gray-800">Cambiar Cantidad Lista</h2>
+              <button
+                onClick={handleCloseCambiarCantidadLista}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Información del producto */}
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+              <h3 className="font-semibold text-blue-800 mb-2">Producto:</h3>
+              <div className="space-y-1 text-sm">
+                <div>
+                  <span className="text-gray-600">Pedido:</span>{' '}
+                  <span className="font-semibold">#{selectedPedido.numeroPedido}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Producto:</span>{' '}
+                  <span className="font-semibold">{selectedPedido.items[itemIndexToCambiarEstado].nombre}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Talla:</span>{' '}
+                  <span className="font-semibold">{selectedPedido.items[itemIndexToCambiarEstado].talla}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Cantidad Total:</span>{' '}
+                  <span className="font-semibold">{selectedPedido.items[itemIndexToCambiarEstado].cantidad}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Cantidad Entregada:</span>{' '}
+                  <span className="font-semibold">{selectedPedido.items[itemIndexToCambiarEstado].cantidadEntregada || 0}</span>
+                </div>
+                <div>
+                  <span className="text-gray-600">Cantidad Lista Actual:</span>{' '}
+                  <span className="font-semibold text-lg">{selectedPedido.items[itemIndexToCambiarEstado].cantidadLista || 0}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Selector de nueva cantidad lista */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Nueva Cantidad Lista:
+              </label>
+              <input
+                type="number"
+                min="0"
+                max={selectedPedido.items[itemIndexToCambiarEstado].cantidad}
+                value={nuevaCantidadLista}
+                onChange={(e) => setNuevaCantidadLista(parseInt(e.target.value) || 0)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Cantidad máxima: {selectedPedido.items[itemIndexToCambiarEstado].cantidad}
+              </p>
+            </div>
+
+            {/* Previsualización */}
+            <div className="mb-4 p-3 bg-gray-50 rounded-lg text-sm">
+              <p className="font-semibold text-gray-700 mb-2">Nuevo estado:</p>
+              <div className="space-y-1">
+                {nuevaCantidadLista > 0 && (
+                  <div className="text-yellow-700">
+                    ⏳ Listo: {nuevaCantidadLista}/{selectedPedido.items[itemIndexToCambiarEstado].cantidad}
+                  </div>
+                )}
+                {(selectedPedido.items[itemIndexToCambiarEstado].cantidad - nuevaCantidadLista - (selectedPedido.items[itemIndexToCambiarEstado].cantidadEntregada || 0)) > 0 && (
+                  <div className="text-blue-700">
+                    🔧 En Producción: {selectedPedido.items[itemIndexToCambiarEstado].cantidad - nuevaCantidadLista - (selectedPedido.items[itemIndexToCambiarEstado].cantidadEntregada || 0)}/{selectedPedido.items[itemIndexToCambiarEstado].cantidad}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Notas (opcional) */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Notas (opcional):
+              </label>
+              <textarea
+                value={notasCambioEstado}
+                onChange={(e) => setNotasCambioEstado(e.target.value)}
+                placeholder="Ej: Llegó solo 1 unidad del satélite..."
+                rows={3}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-2">
+              <button
+                onClick={handleCambiarCantidadLista}
+                disabled={cambiandoCantidadLista || nuevaCantidadLista === (selectedPedido.items[itemIndexToCambiarEstado].cantidadLista || 0)}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cambiandoCantidadLista ? '⏳ Guardando...' : '✓ Guardar Cambio'}
+              </button>
+              <button
+                onClick={handleCloseCambiarCantidadLista}
+                disabled={cambiandoCantidadLista}
                 className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancelar

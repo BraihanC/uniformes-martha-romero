@@ -384,7 +384,12 @@ const Devoluciones = () => {
   };
 
   const productosFiltrados = productos.filter(producto => {
-    const stockDisponible = producto.stockTotal || 0;
+    // IMPORTANTE: Calcular stock DISPONIBLE (no reservado)
+    const stockTotal = producto.stockTotal || 0;
+    const stockReservadoPedidos = producto.stockReservadoPedidos || 0;
+    const stockReservadoApartados = producto.stockReservadoApartados || 0;
+    const stockDisponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+
     const matchSearch = producto.nombre?.toLowerCase().includes(searchProducto.toLowerCase()) ||
                        producto.referencia?.toLowerCase().includes(searchProducto.toLowerCase());
     return matchSearch && stockDisponible > 0;
@@ -403,6 +408,12 @@ const Devoluciones = () => {
       return;
     }
 
+    // Calcular stock disponible real (no reservado)
+    const stockTotal = producto.stockTotal || 0;
+    const stockReservadoPedidos = producto.stockReservadoPedidos || 0;
+    const stockReservadoApartados = producto.stockReservadoApartados || 0;
+    const stockDisponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+
     setProductosNuevos([...productosNuevos, {
       id: producto.id,
       nombre: producto.nombre,
@@ -410,7 +421,7 @@ const Devoluciones = () => {
       tallaSeleccionada: tallaSeleccionada,
       cantidad: 1,
       precio: producto.precio || 0,
-      stockDisponible: producto.stockTotal || 0
+      stockDisponible: stockDisponible
     }]);
   };
 
@@ -506,7 +517,35 @@ const Devoluciones = () => {
         }
       }
 
-      // Actualizar stock nuevo (disminuir)
+      // IMPORTANTE: Validar stock disponible ANTES de decrementar (como en POS)
+      for (const item of productosNuevos) {
+        const productoRef = doc(db, 'products', item.id);
+        const productoSnap = await getDoc(productoRef);
+
+        if (!productoSnap.exists()) {
+          throw new Error(`El producto "${item.nombre}" ya no existe en el sistema.`);
+        }
+
+        const productData = productoSnap.data();
+        const stockTotal = productData.stockTotal || 0;
+        const stockReservadoPedidos = productData.stockReservadoPedidos || 0;
+        const stockReservadoApartados = productData.stockReservadoApartados || 0;
+        const stockDisponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+
+        if (stockDisponible < item.cantidad) {
+          throw new Error(
+            `Stock insuficiente para "${item.nombre}".\n` +
+            `Stock disponible: ${stockDisponible}\n` +
+            `Cantidad solicitada: ${item.cantidad}\n\n` +
+            `Detalle:\n` +
+            `Stock físico total: ${stockTotal}\n` +
+            `Reservado pedidos: ${stockReservadoPedidos}\n` +
+            `Reservado apartados: ${stockReservadoApartados}`
+          );
+        }
+      }
+
+      // Actualizar stock nuevo (disminuir) - Ya validado arriba
       for (const item of productosNuevos) {
         const productoRef = doc(db, 'products', item.id);
         batch.update(productoRef, {

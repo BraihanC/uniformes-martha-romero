@@ -27,8 +27,8 @@ const ReporteCorte = () => {
   const [csvData, setCsvData] = useState([]); // Datos para el CSV
 
   // Estados para los filtros
-  // Queremos ver todo lo que NO esté 'Entregado'
-  const [filtroEstado, setFiltroEstado] = useState('Pendientes');
+  // Opciones: 'En Producción', 'Parcialmente Listo', 'Listo para Entrega', 'Todos los Pendientes', 'Todos'
+  const [filtroEstado, setFiltroEstado] = useState('Todos los Pendientes');
 
   // Filtros de búsqueda
   const [searchPrenda, setSearchPrenda] = useState('');
@@ -62,13 +62,12 @@ const ReporteCorte = () => {
         where('createdAt', '<=', endTimestamp)
       );
 
-      // 3. Aplicar filtro de estado
-      // (Esta es la lógica que define qué ve "Corte")
-      if (filtroEstado === 'Pendientes') {
-         // Buscamos pedidos que NO estén Entregados
+      // 3. Aplicar filtro de estado a nivel de pedido
+      // Solo filtramos pedidos entregados si el usuario selecciona "Todos"
+      if (filtroEstado !== 'Todos') {
+        // Para cualquier otro filtro, excluir pedidos completamente entregados
         q = query(q, where('estadoGeneral', '!=', 'Entregado'));
       }
-      // 'Todos' no necesita filtro de estado
 
       const querySnapshot = await getDocs(q);
       const pedidos = querySnapshot.docs.map(doc => doc.data());
@@ -76,23 +75,63 @@ const ReporteCorte = () => {
       // 4. Procesar y Aplanar los datos
       const itemsAplanados = [];
       pedidos.forEach(pedido => {
-        // Solo procesamos items que estén 'En Producción'
-        const itemsParaCorte = pedido.items.filter(
-          item => item.estadoItem === 'En Producción'
-        );
+        // Filtrar items según el estado seleccionado
+        let itemsParaCorte = [];
+
+        if (filtroEstado === 'En Producción') {
+          // Solo items en producción
+          itemsParaCorte = pedido.items.filter(item =>
+            !item.anulado && item.estadoItem === 'En Producción'
+          );
+        } else if (filtroEstado === 'Parcialmente Listo') {
+          // Solo items parcialmente listos
+          itemsParaCorte = pedido.items.filter(item =>
+            !item.anulado && item.estadoItem === 'Parcialmente Listo'
+          );
+        } else if (filtroEstado === 'Listo para Entrega') {
+          // Solo items listos para entrega
+          itemsParaCorte = pedido.items.filter(item =>
+            !item.anulado && item.estadoItem === 'Listo para Entrega'
+          );
+        } else if (filtroEstado === 'Todos los Pendientes') {
+          // Todo lo que NO esté entregado
+          itemsParaCorte = pedido.items.filter(item =>
+            !item.anulado && item.estadoItem !== 'Entregado'
+          );
+        } else {
+          // 'Todos' - Incluir todo (incluso entregados)
+          itemsParaCorte = pedido.items.filter(item => !item.anulado);
+        }
 
         itemsParaCorte.forEach(item => {
           // Usar el colegio guardado directamente en el pedido
           const colegioNombre = pedido.colegioNombre || 'General (Sin Colegio)';
+
+          // Para items parcialmente listos, calcular cantidad pendiente
+          let cantidadParaReporte = item.cantidad;
+          let detalleEstado = '';
+
+          if (item.estadoItem === 'Parcialmente Listo') {
+            const cantidadLista = item.cantidadLista || 0;
+            const cantidadEntregada = item.cantidadEntregada || 0;
+            const cantidadPendiente = item.cantidad - cantidadLista - cantidadEntregada;
+
+            // Reportar solo la cantidad pendiente
+            cantidadParaReporte = cantidadPendiente;
+            detalleEstado = ` (${cantidadLista} listas, ${cantidadPendiente} pendientes)`;
+          }
 
           itemsAplanados.push({
             colegio: colegioNombre,
             prenda: item.nombre,
             referencia: item.referencia || '',
             talla: item.talla || 'Única',
-            cantidad: item.cantidad,
+            cantidad: cantidadParaReporte,
+            estadoItem: item.estadoItem,
+            detalleEstado: detalleEstado,
             observaciones: pedido.observaciones || '',
-            pedidoNum: pedido.numeroPedido || 'N/A'
+            pedidoNum: pedido.numeroPedido || 'N/A',
+            clienteNombre: pedido.clienteNombre || 'Sin nombre'
           });
         });
       });
@@ -111,7 +150,10 @@ const ReporteCorte = () => {
             observaciones: item.observaciones,
             cantidadTotal: 0,
             referencias: new Set(),
-            pedidos: new Set()
+            pedidos: new Set(),
+            clientes: new Set(),
+            estados: new Set(),
+            detallesEstado: []
           };
         }
 
@@ -119,6 +161,11 @@ const ReporteCorte = () => {
         acc[key].cantidadTotal += item.cantidad;
         acc[key].referencias.add(item.referencia);
         acc[key].pedidos.add(item.pedidoNum);
+        acc[key].clientes.add(item.clienteNombre);
+        acc[key].estados.add(item.estadoItem);
+        if (item.detalleEstado) {
+          acc[key].detallesEstado.push(item.detalleEstado);
+        }
 
         return acc;
       }, {});
@@ -127,7 +174,10 @@ const ReporteCorte = () => {
       const reporteFinal = Object.values(agrupado).map(g => ({
         ...g,
         referencias: Array.from(g.referencias).join(', '),
-        pedidos: Array.from(g.pedidos).join(', ')
+        pedidos: Array.from(g.pedidos).join(', '),
+        clientes: Array.from(g.clientes).join(', '),
+        estadosString: Array.from(g.estados).join(', '),
+        detalleEstadoString: g.detallesEstado.join('; ')
       }));
 
       // Ordenar por colegio y luego por prenda
@@ -150,8 +200,10 @@ const ReporteCorte = () => {
         TALLA: r.talla,
         CANTIDAD: r.cantidadTotal,
         REFERENCIAS: r.referencias,
-        OBSERVACIONES: r.observaciones,
-        PEDIDOS: r.pedidos
+        ESTADOS: r.estadosString,
+        CLIENTES: r.clientes,
+        PEDIDOS: r.pedidos,
+        OBSERVACIONES: r.observaciones
       }));
       setCsvData(dataParaCsv);
 
@@ -199,7 +251,7 @@ const ReporteCorte = () => {
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-6 gap-3 print:hidden">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-800">Reporte de Corte (Producción)</h1>
-          <p className="text-gray-600 mt-1 text-sm sm:text-base">Total de prendas agrupadas (solo items "En Producción").</p>
+          <p className="text-gray-600 mt-1 text-sm sm:text-base">Total de prendas agrupadas por estado seleccionado.</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2">
           {csvData.length > 0 && (
@@ -259,14 +311,17 @@ const ReporteCorte = () => {
 
           {/* Filtro Estado */}
           <div className="sm:col-span-2 md:col-span-1">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Estado del Pedido</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Filtrar por Estado</label>
             <select
               value={filtroEstado}
               onChange={(e) => setFiltroEstado(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 text-sm sm:text-base"
             >
-              <option value="Pendientes">Pendientes (No Entregados)</option>
-              <option value="Todos">Todos (Incluir Entregados)</option>
+              <option value="Todos los Pendientes">Todos los Pendientes</option>
+              <option value="En Producción">🔧 En Producción</option>
+              <option value="Parcialmente Listo">⏳ Parcialmente Listo</option>
+              <option value="Listo para Entrega">✅ Listo para Entrega</option>
+              <option value="Todos">📋 Todos (Incluir Entregados)</option>
             </select>
           </div>
 
@@ -428,8 +483,21 @@ const ReporteCorte = () => {
                       {item.cantidadTotal}
                     </span>
                   </div>
+                  <div className="mb-2">
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                      item.estadosString.includes('En Producción') ? 'bg-blue-100 text-blue-800' :
+                      item.estadosString.includes('Parcialmente Listo') ? 'bg-orange-100 text-orange-800' :
+                      item.estadosString.includes('Listo para Entrega') ? 'bg-yellow-100 text-yellow-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {item.estadosString}
+                    </span>
+                  </div>
+                  {item.clientes && (
+                    <p className="text-xs text-gray-700 mb-1"><span className="font-semibold">Clientes:</span> {item.clientes}</p>
+                  )}
                   {item.observaciones && (
-                    <p className="text-xs text-gray-600 mb-2">{item.observaciones}</p>
+                    <p className="text-xs text-gray-600 mb-2"><span className="font-semibold">Obs:</span> {item.observaciones}</p>
                   )}
                   <div className="text-xs text-gray-500 space-y-1 print:hidden">
                     <p>Ref: {item.referencias}</p>
@@ -447,7 +515,9 @@ const ReporteCorte = () => {
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Colegio</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Prenda</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Talla</th>
-                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Cantidad Total</th>
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-500 uppercase">Cantidad</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Clientes</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Observaciones</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase print:hidden">Ref. / Pedidos</th>
                   </tr>
@@ -460,6 +530,22 @@ const ReporteCorte = () => {
                       <td className="px-3 py-2 text-sm text-gray-700 whitespace-nowrap">{item.talla}</td>
                       <td className="px-3 py-2 text-center text-lg font-bold text-pink-600" style={{color: '#D50565'}}>
                         {item.cantidadTotal}
+                      </td>
+                      <td className="px-3 py-2 text-sm">
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          item.estadosString.includes('En Producción') ? 'bg-blue-100 text-blue-800' :
+                          item.estadosString.includes('Parcialmente Listo') ? 'bg-orange-100 text-orange-800' :
+                          item.estadosString.includes('Listo para Entrega') ? 'bg-yellow-100 text-yellow-800' :
+                          'bg-gray-100 text-gray-800'
+                        }`}>
+                          {item.estadosString}
+                        </span>
+                        {item.detalleEstadoString && (
+                          <div className="text-xs text-gray-500 mt-1">{item.detalleEstadoString}</div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-sm text-gray-700 max-w-xs">
+                        <div className="truncate" title={item.clientes}>{item.clientes}</div>
                       </td>
                       <td className="px-3 py-2 text-sm text-gray-700 max-w-xs truncate">{item.observaciones}</td>
                       <td className="px-3 py-2 text-xs text-gray-500 print:hidden">
