@@ -1018,21 +1018,21 @@ const Clients = () => {
                         <p className="text-sm text-gray-600 mb-1">Facturas (Ventas)</p>
                         <p className="text-2xl font-bold text-green-700">{historialCliente.facturas.length}</p>
                         <p className="text-sm text-gray-600 mt-1">
-                          Total: {formatPrice(historialCliente.facturas.reduce((sum, f) => sum + (f.total || 0), 0))}
+                          Total: {formatPrice(historialCliente.facturas.reduce((sum, f) => sum + (f.totalPagado || 0), 0))}
                         </p>
                       </div>
                       <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
                         <p className="text-sm text-gray-600 mb-1">Pedidos</p>
                         <p className="text-2xl font-bold text-blue-700">{historialCliente.pedidos.length}</p>
                         <p className="text-sm text-gray-600 mt-1">
-                          Total: {formatPrice(historialCliente.pedidos.reduce((sum, p) => sum + (p.totalPedido || 0), 0))}
+                          Total: {formatPrice(historialCliente.pedidos.reduce((sum, p) => sum + (p.total || 0), 0))}
                         </p>
                       </div>
                       <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
                         <p className="text-sm text-gray-600 mb-1">Apartados</p>
                         <p className="text-2xl font-bold text-purple-700">{historialCliente.apartados.length}</p>
                         <p className="text-sm text-gray-600 mt-1">
-                          Total: {formatPrice(historialCliente.apartados.reduce((sum, a) => sum + (a.total || 0), 0))}
+                          Total: {formatPrice(historialCliente.apartados.reduce((sum, a) => sum + (a.totalApartado || 0), 0))}
                         </p>
                       </div>
                     </div>
@@ -1068,7 +1068,7 @@ const Clients = () => {
                                   </div>
                                   <div className="text-right">
                                     <p className="text-lg font-bold text-green-600">
-                                      {formatPrice(factura.total || 0)}
+                                      {formatPrice(factura.totalApartadoPagado || 0)}
                                     </p>
                                     <p className="text-xs text-gray-500">{factura.metodoPago}</p>
                                   </div>
@@ -1109,7 +1109,7 @@ const Clients = () => {
                                   </div>
                                   <div className="text-right">
                                     <p className="text-lg font-bold text-blue-600">
-                                      {formatPrice(pedido.totalPedido || 0)}
+                                      {formatPrice(pedido.total || 0)}
                                     </p>
                                     {pedido.fechaEntrega && (
                                       <p className="text-xs text-gray-500">
@@ -1154,13 +1154,13 @@ const Clients = () => {
                                   </div>
                                   <div className="text-right">
                                     <p className="text-lg font-bold text-purple-600">
-                                      {formatPrice(apartado.total || 0)}
+                                      {formatPrice(apartado.totalApartado || 0)}
                                     </p>
                                     <p className="text-xs text-gray-500">
-                                      Abonado: {formatPrice(apartado.totalAbonado || 0)}
+                                      Abonado: {formatPrice(apartado.totalApartadoAbonado || 0)}
                                     </p>
                                     <p className="text-xs text-gray-500">
-                                      Saldo: {formatPrice((apartado.total || 0) - (apartado.totalAbonado || 0))}
+                                      Saldo: {formatPrice((apartado.totalApartado || 0) - (apartado.totalApartadoAbonado || 0))}
                                     </p>
                                   </div>
                                 </div>
