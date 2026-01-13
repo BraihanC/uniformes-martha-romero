@@ -1068,7 +1068,7 @@ const Clients = () => {
                                   </div>
                                   <div className="text-right">
                                     <p className="text-lg font-bold text-green-600">
-                                      {formatPrice(factura.totalApartadoPagado || 0)}
+                                      {formatPrice(factura.totalPagado || 0)}
                                     </p>
                                     <p className="text-xs text-gray-500">{factura.metodoPago}</p>
                                   </div>
@@ -1111,8 +1111,14 @@ const Clients = () => {
                                     <p className="text-lg font-bold text-blue-600">
                                       {formatPrice(pedido.total || 0)}
                                     </p>
+                                    <p className="text-xs text-gray-500">
+                                      Abonado: {formatPrice(pedido.totalAbonado || 0)}
+                                    </p>
+                                    <p className="text-xs text-gray-500">
+                                      Saldo: {formatPrice(pedido.saldoPendiente || 0)}
+                                    </p>
                                     {pedido.fechaEntrega && (
-                                      <p className="text-xs text-gray-500">
+                                      <p className="text-xs text-gray-500 mt-1">
                                         Entrega: {new Date(pedido.fechaEntrega).toLocaleDateString('es-CO')}
                                       </p>
                                     )}
@@ -1157,10 +1163,10 @@ const Clients = () => {
                                       {formatPrice(apartado.totalApartado || 0)}
                                     </p>
                                     <p className="text-xs text-gray-500">
-                                      Abonado: {formatPrice(apartado.totalApartadoAbonado || 0)}
+                                      Abonado: {formatPrice(apartado.totalAbonado || 0)}
                                     </p>
                                     <p className="text-xs text-gray-500">
-                                      Saldo: {formatPrice((apartado.totalApartado || 0) - (apartado.totalApartadoAbonado || 0))}
+                                      Saldo: {formatPrice((apartado.totalApartado || 0) - (apartado.totalAbonado || 0))}
                                     </p>
                                   </div>
                                 </div>
