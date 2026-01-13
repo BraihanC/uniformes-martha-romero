@@ -14,6 +14,9 @@ const Inventory = () => {
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef(null);
 
+  // Estados para tabs
+  const [activeTab, setActiveTab] = useState('inventario'); // 'inventario' | 'historial'
+
   // Estados para búsqueda y filtros
   const [searchTerm, setSearchTerm] = useState('');
   const [filterColegio, setFilterColegio] = useState('');
@@ -23,6 +26,16 @@ const Inventory = () => {
   // Estados para paginación
   const [paginaActual, setPaginaActual] = useState(1);
   const productosPorPagina = 10;
+
+  // Estados para historial de entradas
+  const [entradas, setEntradas] = useState([]);
+  const [filteredEntradas, setFilteredEntradas] = useState([]);
+  const [proveedores, setProveedores] = useState([]);
+  const [filterFechaInicio, setFilterFechaInicio] = useState('');
+  const [filterFechaFin, setFilterFechaFin] = useState('');
+  const [filterProveedor, setFilterProveedor] = useState('');
+  const [filterProductoHistorial, setFilterProductoHistorial] = useState('');
+  const [expandedEntrada, setExpandedEntrada] = useState(null);
 
   // Estado del formulario
   const [formData, setFormData] = useState({
@@ -41,7 +54,15 @@ const Inventory = () => {
   useEffect(() => {
     fetchProducts();
     fetchColegios();
+    fetchProveedores();
   }, []);
+
+  // Cargar historial de entradas cuando se cambia al tab de historial
+  useEffect(() => {
+    if (activeTab === 'historial') {
+      fetchEntradas();
+    }
+  }, [activeTab]);
 
   // Calcular stock disponible (nunca muestra negativos)
   // Solo resta stockReservadoPedidos (pedidos listos para entrega) y stockReservadoApartados
@@ -157,6 +178,91 @@ const Inventory = () => {
       setLoading(false);
     }
   };
+
+  // Obtener proveedores
+  const fetchProveedores = async () => {
+    try {
+      const querySnapshot = await getDocs(collection(db, 'proveedores'));
+      const proveedoresData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setProveedores(proveedoresData);
+    } catch (error) {
+      console.error('Error al cargar proveedores:', error);
+    }
+  };
+
+  // Obtener historial de entradas de proveedor
+  const fetchEntradas = async () => {
+    setLoading(true);
+    try {
+      const q = query(
+        collection(db, 'stockEntries'),
+        where('tipoEntrada', '==', 'proveedor')
+      );
+      const querySnapshot = await getDocs(q);
+      const entradasData = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      // Ordenar por fecha (más reciente primero)
+      entradasData.sort((a, b) => {
+        const fechaA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+        const fechaB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+        return fechaB - fechaA;
+      });
+
+      setEntradas(entradasData);
+      setFilteredEntradas(entradasData);
+    } catch (error) {
+      console.error('Error al cargar entradas:', error);
+      alert('Error al cargar el historial de entradas.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Filtrar entradas cuando cambian los filtros
+  useEffect(() => {
+    let filtered = [...entradas];
+
+    // Filtro por proveedor
+    if (filterProveedor) {
+      filtered = filtered.filter(entrada => entrada.proveedorId === filterProveedor);
+    }
+
+    // Filtro por producto (nombre o referencia)
+    if (filterProductoHistorial.trim()) {
+      const search = filterProductoHistorial.toLowerCase();
+      filtered = filtered.filter(entrada =>
+        entrada.nombre?.toLowerCase().includes(search) ||
+        entrada.referencia?.toLowerCase().includes(search)
+      );
+    }
+
+    // Filtro por rango de fechas
+    if (filterFechaInicio) {
+      const fechaInicio = new Date(filterFechaInicio);
+      fechaInicio.setHours(0, 0, 0, 0);
+      filtered = filtered.filter(entrada => {
+        const fechaEntrada = entrada.createdAt?.toDate ? entrada.createdAt.toDate() : new Date(entrada.createdAt || 0);
+        return fechaEntrada >= fechaInicio;
+      });
+    }
+
+    if (filterFechaFin) {
+      const fechaFin = new Date(filterFechaFin);
+      fechaFin.setHours(23, 59, 59, 999);
+      filtered = filtered.filter(entrada => {
+        const fechaEntrada = entrada.createdAt?.toDate ? entrada.createdAt.toDate() : new Date(entrada.createdAt || 0);
+        return fechaEntrada <= fechaFin;
+      });
+    }
+
+    setFilteredEntradas(filtered);
+  }, [filterProveedor, filterProductoHistorial, filterFechaInicio, filterFechaFin, entradas]);
 
   // FUNCIÓN ADMINISTRATIVA: Recalcular stockReservadoPedidos desde los pedidos activos
   const recalcularInventarioCompleto = async () => {
@@ -691,111 +797,140 @@ const Inventory = () => {
         style={{ display: 'none' }}
       />
 
-      {/* Barra de Búsqueda y Filtros */}
-      <div className="bg-white rounded-lg shadow-md p-4 mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-          {/* Búsqueda */}
-          <div className="lg:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Buscar
-            </label>
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar por nombre o referencia..."
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
-            />
-          </div>
-
-          {/* Filtro por Colegio */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Colegio
-            </label>
-            <select
-              value={filterColegio}
-              onChange={(e) => setFilterColegio(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
-            >
-              <option value="">Todos</option>
-              {colegios.map(colegio => (
-                <option key={colegio.id} value={colegio.codigo}>
-                  {colegio.nombre}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Filtro por Tipo */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Tipo
-            </label>
-            <select
-              value={filterTipo}
-              onChange={(e) => setFilterTipo(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
-            >
-              <option value="">Todos</option>
-              <option value="diario">Diario</option>
-              <option value="deportivo">Deportivo</option>
-            </select>
-          </div>
-
-          {/* Filtro por Stock */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Stock
-            </label>
-            <select
-              value={filterStock}
-              onChange={(e) => setFilterStock(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
-            >
-              <option value="">Todos</option>
-              <option value="bajo">Stock Bajo (≤5)</option>
-              <option value="agotado">Agotado (0)</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Botón para limpiar filtros */}
-        {(searchTerm || filterColegio || filterTipo || filterStock) && (
-          <div className="mt-4">
-            <button
-              onClick={() => {
-                setSearchTerm('');
-                setFilterColegio('');
-                setFilterTipo('');
-                setFilterStock('');
-              }}
-              className="px-4 py-2 text-sm bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
-            >
-              Limpiar Filtros
-            </button>
-          </div>
-        )}
-
-        {/* Contador de resultados */}
-        <div className="mt-3 text-sm text-gray-600">
-          Mostrando <span className="font-semibold">{filteredProducts.length}</span> de{' '}
-          <span className="font-semibold">{products.length}</span> productos
+      {/* Pestañas */}
+      <div className="bg-white rounded-lg shadow-md mb-4">
+        <div className="flex border-b border-gray-200">
+          <button
+            onClick={() => setActiveTab('inventario')}
+            className={`flex-1 px-6 py-4 text-center font-medium transition-colors ${
+              activeTab === 'inventario'
+                ? 'text-primary border-b-2 border-primary bg-primary/5'
+                : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+            }`}
+          >
+            📦 Inventario de Productos
+          </button>
+          <button
+            onClick={() => setActiveTab('historial')}
+            className={`flex-1 px-6 py-4 text-center font-medium transition-colors ${
+              activeTab === 'historial'
+                ? 'text-primary border-b-2 border-primary bg-primary/5'
+                : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+            }`}
+          >
+            📋 Historial de Entradas de Proveedor
+          </button>
         </div>
       </div>
 
-      {/* Tabla de Inventario */}
-      <div className="bg-white rounded-lg shadow-md overflow-hidden">
-        {loading && products.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">Cargando inventario...</div>
-        ) : filteredProducts.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">
-            {products.length === 0
-              ? 'No hay productos en el inventario. Añade uno nuevo usando el botón de arriba.'
-              : 'No se encontraron productos con los filtros seleccionados.'}
+      {/* CONTENIDO TAB: INVENTARIO */}
+      {activeTab === 'inventario' && (
+        <>
+          {/* Barra de Búsqueda y Filtros */}
+          <div className="bg-white rounded-lg shadow-md p-4 mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+              {/* Búsqueda */}
+              <div className="lg:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Buscar
+                </label>
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Buscar por nombre o referencia..."
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                />
+              </div>
+
+              {/* Filtro por Colegio */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Colegio
+                </label>
+                <select
+                  value={filterColegio}
+                  onChange={(e) => setFilterColegio(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                >
+                  <option value="">Todos</option>
+                  {colegios.map(colegio => (
+                    <option key={colegio.id} value={colegio.codigo}>
+                      {colegio.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Filtro por Tipo */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Tipo
+                </label>
+                <select
+                  value={filterTipo}
+                  onChange={(e) => setFilterTipo(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                >
+                  <option value="">Todos</option>
+                  <option value="diario">Diario</option>
+                  <option value="deportivo">Deportivo</option>
+                </select>
+              </div>
+
+              {/* Filtro por Stock */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Stock
+                </label>
+                <select
+                  value={filterStock}
+                  onChange={(e) => setFilterStock(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                >
+                  <option value="">Todos</option>
+                  <option value="bajo">Stock Bajo (≤5)</option>
+                  <option value="agotado">Agotado (0)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Botón para limpiar filtros */}
+            {(searchTerm || filterColegio || filterTipo || filterStock) && (
+              <div className="mt-4">
+                <button
+                  onClick={() => {
+                    setSearchTerm('');
+                    setFilterColegio('');
+                    setFilterTipo('');
+                    setFilterStock('');
+                  }}
+                  className="px-4 py-2 text-sm bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                >
+                  Limpiar Filtros
+                </button>
+              </div>
+            )}
+
+            {/* Contador de resultados */}
+            <div className="mt-3 text-sm text-gray-600">
+              Mostrando <span className="font-semibold">{filteredProducts.length}</span> de{' '}
+              <span className="font-semibold">{products.length}</span> productos
+            </div>
           </div>
-        ) : (
-          <>
+
+          {/* Tabla de Inventario */}
+          <div className="bg-white rounded-lg shadow-md overflow-hidden">
+            {loading && products.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">Cargando inventario...</div>
+            ) : filteredProducts.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">
+                {products.length === 0
+                  ? 'No hay productos en el inventario. Añade uno nuevo usando el botón de arriba.'
+                  : 'No se encontraron productos con los filtros seleccionados.'}
+              </div>
+            ) : (
+              <>
             {/* Vista de Tarjetas - Solo Móvil */}
             <div className="md:hidden space-y-4">
               {(() => {
@@ -1070,9 +1205,278 @@ const Inventory = () => {
                 </button>
               </div>
             </div>
-          </>
-        )}
-      </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* CONTENIDO TAB: HISTORIAL DE ENTRADAS */}
+      {activeTab === 'historial' && (
+        <div className="space-y-4">
+          {/* Filtros de búsqueda */}
+          <div className="bg-white rounded-lg shadow-md p-4">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">Filtros de Búsqueda</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Filtro por Proveedor */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Proveedor
+                </label>
+                <select
+                  value={filterProveedor}
+                  onChange={(e) => setFilterProveedor(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                >
+                  <option value="">Todos los proveedores</option>
+                  {proveedores.map(prov => (
+                    <option key={prov.id} value={prov.id}>
+                      {prov.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Filtro por Producto */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Producto
+                </label>
+                <input
+                  type="text"
+                  value={filterProductoHistorial}
+                  onChange={(e) => setFilterProductoHistorial(e.target.value)}
+                  placeholder="Buscar por nombre o referencia..."
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                />
+              </div>
+
+              {/* Filtro por Fecha Inicio */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Fecha Desde
+                </label>
+                <input
+                  type="date"
+                  value={filterFechaInicio}
+                  onChange={(e) => setFilterFechaInicio(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                />
+              </div>
+
+              {/* Filtro por Fecha Fin */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Fecha Hasta
+                </label>
+                <input
+                  type="date"
+                  value={filterFechaFin}
+                  onChange={(e) => setFilterFechaFin(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                />
+              </div>
+            </div>
+
+            {/* Botón limpiar filtros */}
+            {(filterProveedor || filterProductoHistorial || filterFechaInicio || filterFechaFin) && (
+              <div className="mt-4">
+                <button
+                  onClick={() => {
+                    setFilterProveedor('');
+                    setFilterProductoHistorial('');
+                    setFilterFechaInicio('');
+                    setFilterFechaFin('');
+                  }}
+                  className="px-4 py-2 bg-gray-500 text-white text-sm rounded-lg hover:bg-gray-600 transition-colors"
+                >
+                  Limpiar Filtros
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Resumen */}
+          <div className="bg-white rounded-lg shadow-md p-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                <p className="text-sm text-gray-600 mb-1">Total de Entradas</p>
+                <p className="text-2xl font-bold text-blue-700">{filteredEntradas.length}</p>
+              </div>
+              <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+                <p className="text-sm text-gray-600 mb-1">Total de Prendas</p>
+                <p className="text-2xl font-bold text-green-700">
+                  {filteredEntradas.reduce((sum, e) => sum + (e.cantidad || 0), 0)}
+                </p>
+              </div>
+              <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                <p className="text-sm text-gray-600 mb-1">Costo Total</p>
+                <p className="text-2xl font-bold text-purple-700">
+                  {formatPrice(filteredEntradas.reduce((sum, e) => sum + (e.costoTotal || 0), 0))}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Lista de entradas */}
+          {loading ? (
+            <div className="bg-white rounded-lg shadow-md p-8 text-center">
+              <p className="text-gray-600">Cargando historial de entradas...</p>
+            </div>
+          ) : filteredEntradas.length === 0 ? (
+            <div className="bg-white rounded-lg shadow-md p-8 text-center">
+              <p className="text-gray-600">No se encontraron entradas de proveedor.</p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-lg shadow-md overflow-hidden">
+              <div className="divide-y divide-gray-200">
+                {filteredEntradas.map((entrada) => {
+                  const proveedor = proveedores.find(p => p.id === entrada.proveedorId);
+                  const fechaEntrada = entrada.createdAt?.toDate ? entrada.createdAt.toDate() : new Date(entrada.createdAt || 0);
+                  const isExpanded = expandedEntrada === entrada.id;
+
+                  return (
+                    <div key={entrada.id} className="hover:bg-gray-50 transition-colors">
+                      {/* Cabecera de la entrada */}
+                      <div
+                        className="p-4 cursor-pointer"
+                        onClick={() => setExpandedEntrada(isExpanded ? null : entrada.id)}
+                      >
+                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                          <div className="flex-1">
+                            <div className="flex items-start gap-3">
+                              <div className="flex-shrink-0 mt-1">
+                                <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
+                                  <span className="text-primary font-bold">📦</span>
+                                </div>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <h4 className="text-lg font-semibold text-gray-900 truncate">
+                                  {entrada.nombre}
+                                </h4>
+                                <div className="flex flex-wrap items-center gap-2 mt-1 text-sm text-gray-600">
+                                  <span className="font-mono bg-gray-100 px-2 py-0.5 rounded">
+                                    Ref: {entrada.referencia}
+                                  </span>
+                                  <span>•</span>
+                                  <span>Talla: {entrada.talla}</span>
+                                  <span>•</span>
+                                  <span className="font-medium text-blue-600">
+                                    {entrada.cantidad} uds
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 mt-2 text-sm text-gray-500">
+                                  <span>🏢 {proveedor?.nombre || 'Proveedor desconocido'}</span>
+                                  {entrada.facturaProveedor && (
+                                    <>
+                                      <span>•</span>
+                                      <span>📄 Factura: {entrada.facturaProveedor}</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col md:items-end gap-2">
+                            <div className="text-right">
+                              <p className="text-sm text-gray-500">Costo Total</p>
+                              <p className="text-xl font-bold text-gray-900">
+                                {formatPrice(entrada.costoTotal || 0)}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                ({formatPrice(entrada.costoUnitario || 0)} c/u)
+                              </p>
+                            </div>
+                            <div className="text-right text-sm text-gray-500">
+                              {fechaEntrada.toLocaleDateString('es-CO', {
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center">
+                            <button className="text-gray-400 hover:text-gray-600">
+                              {isExpanded ? '▼' : '▶'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Detalles expandidos */}
+                      {isExpanded && (
+                        <div className="px-4 pb-4 border-t border-gray-100 bg-gray-50">
+                          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {/* Distribución */}
+                            <div className="space-y-3">
+                              <h5 className="font-semibold text-gray-800">📊 Distribución</h5>
+                              <div className="bg-white rounded-lg p-3 border border-gray-200">
+                                <div className="flex justify-between items-center mb-2">
+                                  <span className="text-sm text-gray-600">Asignadas a pedidos:</span>
+                                  <span className="font-semibold text-green-600">
+                                    {entrada.cantidadAsignada || 0} uds
+                                  </span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                  <span className="text-sm text-gray-600">Disponibles para venta:</span>
+                                  <span className="font-semibold text-blue-600">
+                                    {entrada.cantidadDisponible || 0} uds
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Notas */}
+                              {entrada.notas && (
+                                <div className="bg-yellow-50 rounded-lg p-3 border border-yellow-200">
+                                  <p className="text-sm font-semibold text-gray-700 mb-1">📝 Notas:</p>
+                                  <p className="text-sm text-gray-600">{entrada.notas}</p>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Asignaciones a pedidos */}
+                            {entrada.asignaciones && entrada.asignaciones.length > 0 && (
+                              <div className="space-y-3">
+                                <h5 className="font-semibold text-gray-800">
+                                  ✅ Asignaciones a Pedidos ({entrada.asignaciones.length})
+                                </h5>
+                                <div className="bg-white rounded-lg border border-gray-200 max-h-48 overflow-y-auto">
+                                  {entrada.asignaciones.map((asig, idx) => (
+                                    <div
+                                      key={idx}
+                                      className="p-3 border-b border-gray-100 last:border-b-0"
+                                    >
+                                      <div className="flex justify-between items-start">
+                                        <div>
+                                          <p className="font-semibold text-gray-900">
+                                            Pedido #{String(asig.numeroPedido).padStart(4, '0')}
+                                          </p>
+                                          <p className="text-sm text-gray-600">{asig.clienteNombre}</p>
+                                        </div>
+                                        <span className="text-lg font-bold text-green-600">
+                                          {asig.cantidad}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Modal de Formulario */}
       {isModalOpen && (
