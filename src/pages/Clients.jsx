@@ -24,6 +24,20 @@ const Clients = () => {
   // Estado para selección masiva
   const [selectedClients, setSelectedClients] = useState([]);
 
+  // Estados para pestañas
+  const [activeTab, setActiveTab] = useState('lista'); // 'lista' | 'buscador'
+
+  // Estados para buscador de cliente
+  const [searchClienteTerm, setSearchClienteTerm] = useState('');
+  const [searchClienteResults, setSearchClienteResults] = useState([]);
+  const [selectedCliente, setSelectedCliente] = useState(null);
+  const [loadingHistorial, setLoadingHistorial] = useState(false);
+  const [historialCliente, setHistorialCliente] = useState({
+    facturas: [],
+    pedidos: [],
+    apartados: []
+  });
+
   // Estado del formulario
   const [formData, setFormData] = useState({
     nombreCompleto: '',
@@ -241,6 +255,126 @@ const Clients = () => {
       setLoading(false);
     }
   };
+
+  // ===== FUNCIONES PARA BUSCADOR DE CLIENTE =====
+
+  // Buscar clientes en tiempo real
+  useEffect(() => {
+    if (!searchClienteTerm.trim()) {
+      setSearchClienteResults([]);
+      return;
+    }
+
+    const searchLower = searchClienteTerm.toLowerCase();
+    const filtered = clients.filter(client =>
+      client.nombreCompleto.toLowerCase().includes(searchLower) ||
+      client.numeroDocumento.includes(searchClienteTerm)
+    );
+    setSearchClienteResults(filtered);
+  }, [searchClienteTerm, clients]);
+
+  // Seleccionar cliente y cargar su historial
+  const handleSelectCliente = async (cliente) => {
+    setSelectedCliente(cliente);
+    setSearchClienteTerm('');
+    setSearchClienteResults([]);
+    await cargarHistorialCliente(cliente);
+  };
+
+  // Cargar historial completo del cliente
+  const cargarHistorialCliente = async (cliente) => {
+    setLoadingHistorial(true);
+    try {
+      // 1. Cargar facturas (sales)
+      const facturasQuery = query(
+        collection(db, 'sales'),
+        where('clienteId', '==', cliente.id)
+      );
+      const facturasSnapshot = await getDocs(facturasQuery);
+      const facturas = facturasSnapshot.docs.map(doc => ({
+        id: doc.id,
+        tipo: 'factura',
+        ...doc.data()
+      }));
+
+      // 2. Cargar pedidos
+      const pedidosQuery = query(
+        collection(db, 'pedidos'),
+        where('clienteId', '==', cliente.id)
+      );
+      const pedidosSnapshot = await getDocs(pedidosQuery);
+      const pedidos = pedidosSnapshot.docs.map(doc => ({
+        id: doc.id,
+        tipo: 'pedido',
+        ...doc.data()
+      }));
+
+      // 3. Cargar apartados
+      const apartadosQuery = query(
+        collection(db, 'apartados'),
+        where('clienteId', '==', cliente.id)
+      );
+      const apartadosSnapshot = await getDocs(apartadosQuery);
+      const apartados = apartadosSnapshot.docs.map(doc => ({
+        id: doc.id,
+        tipo: 'apartado',
+        ...doc.data()
+      }));
+
+      // Ordenar por fecha (más reciente primero)
+      facturas.sort((a, b) => {
+        const fechaA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+        const fechaB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+        return fechaB - fechaA;
+      });
+
+      pedidos.sort((a, b) => {
+        const fechaA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+        const fechaB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+        return fechaB - fechaA;
+      });
+
+      apartados.sort((a, b) => {
+        const fechaA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+        const fechaB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+        return fechaB - fechaA;
+      });
+
+      setHistorialCliente({
+        facturas,
+        pedidos,
+        apartados
+      });
+    } catch (error) {
+      console.error('Error al cargar historial del cliente:', error);
+      alert('Error al cargar el historial del cliente.');
+    } finally {
+      setLoadingHistorial(false);
+    }
+  };
+
+  // Limpiar selección de cliente
+  const handleLimpiarCliente = () => {
+    setSelectedCliente(null);
+    setHistorialCliente({
+      facturas: [],
+      pedidos: [],
+      apartados: []
+    });
+    setSearchClienteTerm('');
+    setSearchClienteResults([]);
+  };
+
+  // Formatear precio como moneda
+  const formatPrice = (price) => {
+    return new Intl.NumberFormat('es-CO', {
+      style: 'currency',
+      currency: 'COP',
+      minimumFractionDigits: 0
+    }).format(price);
+  };
+
+  // ===== FIN FUNCIONES BUSCADOR =====
 
   // Activar input de archivo
   const handleImportClick = () => {
@@ -524,27 +658,56 @@ const Clients = () => {
         style={{ display: 'none' }}
       />
 
-      {/* Campo de Búsqueda */}
-      <div className="mb-4">
-        <input
-          type="text"
-          placeholder="Buscar por nombre o número de documento..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full max-w-md px-4 py-2 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-        />
+      {/* Pestañas */}
+      <div className="bg-white rounded-lg shadow-md mb-4">
+        <div className="flex border-b border-gray-200">
+          <button
+            onClick={() => setActiveTab('lista')}
+            className={`flex-1 px-6 py-4 text-center font-medium transition-colors ${
+              activeTab === 'lista'
+                ? 'text-primary border-b-2 border-primary bg-primary/5'
+                : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+            }`}
+          >
+            👥 Lista de Clientes
+          </button>
+          <button
+            onClick={() => setActiveTab('buscador')}
+            className={`flex-1 px-6 py-4 text-center font-medium transition-colors ${
+              activeTab === 'buscador'
+                ? 'text-primary border-b-2 border-primary bg-primary/5'
+                : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+            }`}
+          >
+            🔍 Buscador de Cliente
+          </button>
+        </div>
       </div>
 
-      {/* Tabla de Clientes */}
-      <div className="bg-white rounded-lg shadow-md overflow-hidden">
-        {loading && clients.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">Cargando clientes...</div>
-        ) : filteredClients.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">
-            {searchTerm ? 'No se encontraron clientes con ese criterio de búsqueda.' : 'No hay clientes registrados. Añade uno nuevo usando el botón de arriba.'}
+      {/* CONTENIDO TAB: LISTA DE CLIENTES */}
+      {activeTab === 'lista' && (
+        <>
+          {/* Campo de Búsqueda */}
+          <div className="mb-4">
+            <input
+              type="text"
+              placeholder="Buscar por nombre o número de documento..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full max-w-md px-4 py-2 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+            />
           </div>
-        ) : (
-          <>
+
+          {/* Tabla de Clientes */}
+          <div className="bg-white rounded-lg shadow-md overflow-hidden">
+            {loading && clients.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">Cargando clientes...</div>
+            ) : filteredClients.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">
+                {searchTerm ? 'No se encontraron clientes con ese criterio de búsqueda.' : 'No hay clientes registrados. Añade uno nuevo usando el botón de arriba.'}
+              </div>
+            ) : (
+              <>
             {/* Vista de Tarjetas - Solo Móvil */}
             <div className="md:hidden space-y-4">
               {clientesPaginaActual.map((client) => (
@@ -710,50 +873,316 @@ const Clients = () => {
         )}
       </div>
 
-      {/* Controles de Paginación */}
-      {filteredClients.length > 0 && (
-        <div className="mt-4 flex flex-col sm:flex-row items-center justify-between bg-white px-4 sm:px-6 py-3 rounded-lg shadow-md gap-3">
-          <div className="text-xs sm:text-sm text-gray-700 text-center sm:text-left">
-            <span className="hidden sm:inline">
-              Mostrando{' '}
-              <span className="font-medium">{indiceInicio + 1}</span>
-              {' '}-{' '}
-              <span className="font-medium">
-                {Math.min(indiceFin, filteredClients.length)}
-              </span>
-              {' '}de{' '}
-              <span className="font-medium">{filteredClients.length}</span>
-              {' '}clientes
-            </span>
-            <span className="sm:hidden">
-              {indiceInicio + 1}-{Math.min(indiceFin, filteredClients.length)} de {filteredClients.length}
-            </span>
-          </div>
+          {/* Controles de Paginación */}
+          {filteredClients.length > 0 && (
+            <div className="mt-4 flex flex-col sm:flex-row items-center justify-between bg-white px-4 sm:px-6 py-3 rounded-lg shadow-md gap-3">
+              <div className="text-xs sm:text-sm text-gray-700 text-center sm:text-left">
+                <span className="hidden sm:inline">
+                  Mostrando{' '}
+                  <span className="font-medium">{indiceInicio + 1}</span>
+                  {' '}-{' '}
+                  <span className="font-medium">
+                    {Math.min(indiceFin, filteredClients.length)}
+                  </span>
+                  {' '}de{' '}
+                  <span className="font-medium">{filteredClients.length}</span>
+                  {' '}clientes
+                </span>
+                <span className="sm:hidden">
+                  {indiceInicio + 1}-{Math.min(indiceFin, filteredClients.length)} de {filteredClients.length}
+                </span>
+              </div>
 
-          <div className="flex items-center space-x-3 sm:space-x-4">
-            <div className="text-xs sm:text-sm text-gray-700">
-              Pág. <span className="font-medium">{paginaActual}</span> de{' '}
-              <span className="font-medium">{totalPaginas}</span>
-            </div>
+              <div className="flex items-center space-x-3 sm:space-x-4">
+                <div className="text-xs sm:text-sm text-gray-700">
+                  Pág. <span className="font-medium">{paginaActual}</span> de{' '}
+                  <span className="font-medium">{totalPaginas}</span>
+                </div>
 
-            <div className="flex space-x-2">
-              <button
-                onClick={irPaginaAnterior}
-                disabled={paginaActual === 1}
-                className="px-3 sm:px-4 py-2 text-sm bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-200"
-              >
-                <span className="hidden sm:inline">Anterior</span>
-                <span className="sm:hidden">&larr;</span>
-              </button>
-              <button
-                onClick={irPaginaSiguiente}
-                disabled={paginaActual === totalPaginas}
-                className="px-3 sm:px-4 py-2 text-sm bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-200"
-              >
-                <span className="hidden sm:inline">Siguiente</span>
-                <span className="sm:hidden">&rarr;</span>
-              </button>
+                <div className="flex space-x-2">
+                  <button
+                    onClick={irPaginaAnterior}
+                    disabled={paginaActual === 1}
+                    className="px-3 sm:px-4 py-2 text-sm bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-200"
+                  >
+                    <span className="hidden sm:inline">Anterior</span>
+                    <span className="sm:hidden">&larr;</span>
+                  </button>
+                  <button
+                    onClick={irPaginaSiguiente}
+                    disabled={paginaActual === totalPaginas}
+                    className="px-3 sm:px-4 py-2 text-sm bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-200"
+                  >
+                    <span className="hidden sm:inline">Siguiente</span>
+                    <span className="sm:hidden">&rarr;</span>
+                  </button>
+                </div>
+              </div>
             </div>
+          )}
+        </>
+      )}
+
+      {/* CONTENIDO TAB: BUSCADOR DE CLIENTE */}
+      {activeTab === 'buscador' && (
+        <div className="space-y-4">
+          {/* Buscador */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">Buscar Cliente</h3>
+
+            {!selectedCliente ? (
+              <>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={searchClienteTerm}
+                    onChange={(e) => setSearchClienteTerm(e.target.value)}
+                    placeholder="Buscar por nombre o número de documento..."
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  />
+                </div>
+
+                {/* Resultados de búsqueda */}
+                {searchClienteResults.length > 0 && (
+                  <div className="mt-4 border border-gray-200 rounded-lg overflow-hidden max-h-96 overflow-y-auto">
+                    {searchClienteResults.map((cliente) => (
+                      <div
+                        key={cliente.id}
+                        onClick={() => handleSelectCliente(cliente)}
+                        className="px-4 py-3 border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors last:border-b-0"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="font-medium text-gray-800">{cliente.nombreCompleto}</p>
+                            <p className="text-sm text-gray-600">
+                              {abreviaturaDocumento[cliente.tipoDocumento] || cliente.tipoDocumento}: {cliente.numeroDocumento}
+                            </p>
+                            {cliente.telefono && (
+                              <p className="text-sm text-gray-500">📞 {cliente.telefono}</p>
+                            )}
+                          </div>
+                          <button className="text-primary font-medium text-sm hover:underline">
+                            Ver historial →
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {searchClienteTerm && searchClienteResults.length === 0 && (
+                  <div className="mt-4 p-4 bg-gray-50 rounded-lg text-center text-gray-600">
+                    No se encontraron clientes con ese criterio de búsqueda.
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {/* Cliente seleccionado */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h4 className="text-xl font-bold text-gray-900">{selectedCliente.nombreCompleto}</h4>
+                      <p className="text-gray-700 mt-1">
+                        {abreviaturaDocumento[selectedCliente.tipoDocumento] || selectedCliente.tipoDocumento}: {selectedCliente.numeroDocumento}
+                      </p>
+                      {selectedCliente.telefono && (
+                        <p className="text-gray-600 mt-1">📞 {selectedCliente.telefono}</p>
+                      )}
+                      {selectedCliente.email && (
+                        <p className="text-gray-600">📧 {selectedCliente.email}</p>
+                      )}
+                      {selectedCliente.ciudad && (
+                        <p className="text-gray-600">📍 {selectedCliente.ciudad}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={handleLimpiarCliente}
+                      className="px-4 py-2 bg-gray-500 text-white text-sm rounded-lg hover:bg-gray-600 transition-colors"
+                    >
+                      Buscar otro cliente
+                    </button>
+                  </div>
+                </div>
+
+                {/* Historial del cliente */}
+                {loadingHistorial ? (
+                  <div className="bg-white rounded-lg shadow-md p-8 text-center">
+                    <p className="text-gray-600">Cargando historial...</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Resumen */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+                        <p className="text-sm text-gray-600 mb-1">Facturas (Ventas)</p>
+                        <p className="text-2xl font-bold text-green-700">{historialCliente.facturas.length}</p>
+                        <p className="text-sm text-gray-600 mt-1">
+                          Total: {formatPrice(historialCliente.facturas.reduce((sum, f) => sum + (f.total || 0), 0))}
+                        </p>
+                      </div>
+                      <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                        <p className="text-sm text-gray-600 mb-1">Pedidos</p>
+                        <p className="text-2xl font-bold text-blue-700">{historialCliente.pedidos.length}</p>
+                        <p className="text-sm text-gray-600 mt-1">
+                          Total: {formatPrice(historialCliente.pedidos.reduce((sum, p) => sum + (p.totalPedido || 0), 0))}
+                        </p>
+                      </div>
+                      <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                        <p className="text-sm text-gray-600 mb-1">Apartados</p>
+                        <p className="text-2xl font-bold text-purple-700">{historialCliente.apartados.length}</p>
+                        <p className="text-sm text-gray-600 mt-1">
+                          Total: {formatPrice(historialCliente.apartados.reduce((sum, a) => sum + (a.total || 0), 0))}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Facturas */}
+                    {historialCliente.facturas.length > 0 && (
+                      <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                        <div className="bg-green-600 text-white px-4 py-3">
+                          <h4 className="font-semibold">💳 Facturas ({historialCliente.facturas.length})</h4>
+                        </div>
+                        <div className="divide-y divide-gray-200 max-h-96 overflow-y-auto">
+                          {historialCliente.facturas.map((factura) => {
+                            const fecha = factura.createdAt?.toDate ? factura.createdAt.toDate() : new Date(factura.createdAt || 0);
+                            return (
+                              <div key={factura.id} className="p-4 hover:bg-gray-50">
+                                <div className="flex justify-between items-start">
+                                  <div>
+                                    <p className="font-semibold text-gray-900">
+                                      Factura #{factura.numeroFactura || factura.id}
+                                    </p>
+                                    <p className="text-sm text-gray-600">
+                                      {fecha.toLocaleDateString('es-CO', {
+                                        year: 'numeric',
+                                        month: 'long',
+                                        day: 'numeric',
+                                        hour: '2-digit',
+                                        minute: '2-digit'
+                                      })}
+                                    </p>
+                                    <p className="text-sm text-gray-500 mt-1">
+                                      {factura.items?.length || 0} producto(s)
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-lg font-bold text-green-600">
+                                      {formatPrice(factura.total || 0)}
+                                    </p>
+                                    <p className="text-xs text-gray-500">{factura.metodoPago}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Pedidos */}
+                    {historialCliente.pedidos.length > 0 && (
+                      <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                        <div className="bg-blue-600 text-white px-4 py-3">
+                          <h4 className="font-semibold">📦 Pedidos ({historialCliente.pedidos.length})</h4>
+                        </div>
+                        <div className="divide-y divide-gray-200 max-h-96 overflow-y-auto">
+                          {historialCliente.pedidos.map((pedido) => {
+                            const fecha = pedido.createdAt?.toDate ? pedido.createdAt.toDate() : new Date(pedido.createdAt || 0);
+                            return (
+                              <div key={pedido.id} className="p-4 hover:bg-gray-50">
+                                <div className="flex justify-between items-start">
+                                  <div>
+                                    <p className="font-semibold text-gray-900">
+                                      Pedido #{String(pedido.numeroPedido).padStart(4, '0')}
+                                    </p>
+                                    <p className="text-sm text-gray-600">
+                                      {fecha.toLocaleDateString('es-CO', {
+                                        year: 'numeric',
+                                        month: 'long',
+                                        day: 'numeric'
+                                      })}
+                                    </p>
+                                    <p className="text-sm text-gray-500 mt-1">
+                                      {pedido.items?.length || 0} producto(s) • Estado: {pedido.estadoGeneral}
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-lg font-bold text-blue-600">
+                                      {formatPrice(pedido.totalPedido || 0)}
+                                    </p>
+                                    {pedido.fechaEntrega && (
+                                      <p className="text-xs text-gray-500">
+                                        Entrega: {new Date(pedido.fechaEntrega).toLocaleDateString('es-CO')}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Apartados */}
+                    {historialCliente.apartados.length > 0 && (
+                      <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                        <div className="bg-purple-600 text-white px-4 py-3">
+                          <h4 className="font-semibold">🏦 Apartados ({historialCliente.apartados.length})</h4>
+                        </div>
+                        <div className="divide-y divide-gray-200 max-h-96 overflow-y-auto">
+                          {historialCliente.apartados.map((apartado) => {
+                            const fecha = apartado.createdAt?.toDate ? apartado.createdAt.toDate() : new Date(apartado.createdAt || 0);
+                            return (
+                              <div key={apartado.id} className="p-4 hover:bg-gray-50">
+                                <div className="flex justify-between items-start">
+                                  <div>
+                                    <p className="font-semibold text-gray-900">
+                                      Apartado #{String(apartado.numeroApartado).padStart(4, '0')}
+                                    </p>
+                                    <p className="text-sm text-gray-600">
+                                      {fecha.toLocaleDateString('es-CO', {
+                                        year: 'numeric',
+                                        month: 'long',
+                                        day: 'numeric'
+                                      })}
+                                    </p>
+                                    <p className="text-sm text-gray-500 mt-1">
+                                      {apartado.items?.length || 0} producto(s) • Estado: {apartado.estadoGeneral}
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-lg font-bold text-purple-600">
+                                      {formatPrice(apartado.total || 0)}
+                                    </p>
+                                    <p className="text-xs text-gray-500">
+                                      Abonado: {formatPrice(apartado.totalAbonado || 0)}
+                                    </p>
+                                    <p className="text-xs text-gray-500">
+                                      Saldo: {formatPrice((apartado.total || 0) - (apartado.totalAbonado || 0))}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Sin historial */}
+                    {historialCliente.facturas.length === 0 &&
+                     historialCliente.pedidos.length === 0 &&
+                     historialCliente.apartados.length === 0 && (
+                      <div className="bg-white rounded-lg shadow-md p-8 text-center">
+                        <p className="text-gray-600">Este cliente no tiene historial de compras registrado.</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}
