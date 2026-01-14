@@ -246,12 +246,16 @@ const CierreCaja = () => { // <--- Nombre cambiado
 
       // 4. Ejecutar la consulta
       const querySnapshot = await getDocs(q);
-      const transactions = querySnapshot.docs.map(doc => ({
+      const allTransactions = querySnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
         // Convertir timestamp de Firebase a Date de JS
         fecha: doc.data().fecha.toDate(),
       }));
+
+      // FILTRAR transacciones pendientes (no afectan el flujo de caja)
+      // Solo se incluyen cuando se marcan como pagadas con el método real
+      const transactions = allTransactions.filter(t => t.metodoPago !== 'Pendiente');
 
       // 5. Procesar los datos
       let totalIngresos = 0;

@@ -99,8 +99,25 @@ const CuentasPorPagar = () => {
   };
 
   const handleMarcarComoPagado = async (sateliteId, entradaIds) => {
+    // Preguntar método de pago
+    const metodoPago = window.prompt(
+      'Selecciona el método de pago:\n\n1 = Efectivo (afecta Caja)\n2 = Transferencia/Cheque (cuenta Martha Romero)\n\nIngresa el número (1 o 2):'
+    );
+
+    if (!metodoPago) return; // Cancelado
+
+    let metodoPagoTexto;
+    if (metodoPago === '1') {
+      metodoPagoTexto = 'Efectivo';
+    } else if (metodoPago === '2') {
+      metodoPagoTexto = 'Transferencia';
+    } else {
+      alert('Opción inválida. Debe ser 1 o 2.');
+      return;
+    }
+
     const confirmacion = window.confirm(
-      '¿Estás seguro de marcar estas entradas como pagadas? Esta acción no se puede deshacer.'
+      `¿Confirmas el pago por ${metodoPagoTexto}?\n\nEsta acción no se puede deshacer.`
     );
 
     if (!confirmacion) return;
@@ -109,18 +126,39 @@ const CuentasPorPagar = () => {
     try {
       const batch = writeBatch(db);
 
-      // Marcar todas las entradas de este satélite como pagadas
-      entradaIds.forEach(entradaId => {
+      // Para cada entrada, buscar su transacción asociada y actualizarla
+      for (const entradaId of entradaIds) {
+        // Actualizar entrada como pagada
         const entradaRef = doc(db, 'stockEntries', entradaId);
         batch.update(entradaRef, {
           pagado: true,
-          fechaPago: serverTimestamp()
+          fechaPago: serverTimestamp(),
+          metodoPago: metodoPagoTexto
         });
-      });
+
+        // Buscar y actualizar la transacción asociada
+        const transQuery = query(
+          collection(db, 'transactions'),
+          where('entradaId', '==', entradaId),
+          where('tipo', '==', 'entrada_satelite')
+        );
+        const transSnapshot = await getDocs(transQuery);
+
+        if (!transSnapshot.empty) {
+          // Actualizar la transacción de 'Pendiente' al método real
+          transSnapshot.forEach(transDoc => {
+            const transRef = doc(db, 'transactions', transDoc.id);
+            batch.update(transRef, {
+              metodoPago: metodoPagoTexto,
+              fechaPago: serverTimestamp()
+            });
+          });
+        }
+      }
 
       await batch.commit();
 
-      alert('¡Entradas marcadas como pagadas exitosamente!');
+      alert(`✅ ¡Entradas marcadas como pagadas por ${metodoPagoTexto}!`);
 
       // Recargar datos
       await fetchCuentasPorPagar();
