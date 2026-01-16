@@ -220,12 +220,11 @@ const EntradaProveedor = () => {
       // PASO 4: Ejecutar todas las actualizaciones en batch
       const batch = writeBatch(db);
 
-      // 4.1. Calcular cuánto se asigna a pedidos listos
+      // 4.1. Calcular cuánto se asigna a pedidos (completos o parciales)
+      // IMPORTANTE: Se reserva TODA la cantidad asignada, no solo las completas
       let cantidadReservadaPedidos = 0;
       asignaciones.forEach(asig => {
-        if (asig.esCompleto) {
-          cantidadReservadaPedidos += asig.cantidadAsignada;
-        }
+        cantidadReservadaPedidos += asig.cantidadAsignada;
       });
 
       // 4.2. Actualizar stockTotal del producto (inventario físico)
@@ -253,13 +252,29 @@ const EntradaProveedor = () => {
         const updatedItems = [...pedidoData.items];
         const item = updatedItems[asig.itemIndex];
 
-        // Si se asignó completo, cambiar estado a "Listo para Entrega"
-        if (asig.esCompleto) {
-          updatedItems[asig.itemIndex] = {
-            ...item,
-            estadoItem: 'Listo para Entrega'
-          };
+        // Calcular nueva cantidad lista y estado
+        const cantidadTotal = item.cantidad;
+        const cantidadListaActual = item.cantidadLista || 0;
+        const cantidadEntregada = item.cantidadEntregada || 0;
+        const nuevaCantidadLista = cantidadListaActual + asig.cantidadAsignada;
+
+        // Determinar nuevo estado basado en cantidades
+        let nuevoEstado;
+        if (cantidadEntregada === cantidadTotal) {
+          nuevoEstado = 'Entregado';
+        } else if (nuevaCantidadLista + cantidadEntregada === cantidadTotal) {
+          nuevoEstado = 'Listo para Entrega';
+        } else if (nuevaCantidadLista > 0) {
+          nuevoEstado = 'Parcialmente Listo';
+        } else {
+          nuevoEstado = 'En Producción';
         }
+
+        updatedItems[asig.itemIndex] = {
+          ...item,
+          cantidadLista: nuevaCantidadLista,
+          estadoItem: nuevoEstado
+        };
 
         batch.update(pedidoRef, {
           items: updatedItems,

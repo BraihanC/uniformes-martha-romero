@@ -709,6 +709,7 @@ const POS = () => {
           stockChecks.push({
             ref: productRef,
             product: productSnap.data(),
+            currentStockTotal: stockTotal, // Guardar el stock actual para cálculo manual
             requestedQty: item.cantidad,
             availableStock: currentStock
           });
@@ -767,9 +768,12 @@ const POS = () => {
         transaction.set(saleRef, saleData);
 
         // 5. Descontar inventario (ya verificado que hay stock suficiente)
-        stockChecks.forEach(({ ref, requestedQty }) => {
+        // IMPORTANTE: Dentro de runTransaction, NO usar increment() - calcular manualmente
+        // Ver: https://firebase.google.com/docs/firestore/manage-data/transactions
+        stockChecks.forEach(({ ref, currentStockTotal, requestedQty }) => {
+          const newStockTotal = currentStockTotal - requestedQty;
           transaction.update(ref, {
-            stockTotal: increment(-requestedQty)
+            stockTotal: newStockTotal
           });
         });
 
@@ -839,7 +843,10 @@ const POS = () => {
       setVentaData({
         id: result.saleRef.id,
         ...result.saleData,
-        fecha: new Date().toLocaleDateString('es-CO')
+        fecha: new Date().toLocaleString('es-CO', {
+          dateStyle: 'short',
+          timeStyle: 'short'
+        })
       });
       setShowPrintModal(true);
 
@@ -1746,15 +1753,16 @@ const POS = () => {
               <div className="text-center mb-4">
                 <h3 className="font-bold text-lg">{companyConfig?.nombre || 'MARTHA ROMERO'}</h3>
                 {companyConfig?.nit && <p className="text-xs">NIT: {companyConfig.nit}</p>}
+                <p className="text-xs">No responsable de IVA</p>
                 {companyConfig?.direccion && <p className="text-xs">{companyConfig.direccion}</p>}
                 {companyConfig?.telefono && <p className="text-xs">Tel: {companyConfig.telefono}</p>}
-                <p className="font-bold text-sm mt-2" style={{ letterSpacing: '1px' }}>FACTURA DE VENTA</p>
+                <p className="font-bold text-sm mt-2" style={{ letterSpacing: '1px' }}>COMPROBANTE DE VENTA</p>
               </div>
 
               {/* Order Info */}
               <div className="border-t border-b border-dashed py-2 mb-2">
                 <div className="flex justify-between text-sm">
-                  <span className="font-medium">Factura N°:</span>
+                  <span className="font-medium">Comprobante N°:</span>
                   <span>{String(ventaData.numeroFactura).padStart(4, '0')}</span>
                 </div>
                 <div className="flex justify-between text-sm">

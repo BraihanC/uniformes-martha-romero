@@ -637,7 +637,8 @@ const Pedidos = () => {
   const handleUpdateItemEstado = async (itemIndex, nuevoEstado) => {
     if (!selectedPedido) return;
 
-    const estadoAnterior = selectedPedido.items[itemIndex].estadoItem;
+    const item = selectedPedido.items[itemIndex];
+    const estadoAnterior = item.estadoItem;
 
     // Evitar cambios si el estado ya es el mismo
     if (estadoAnterior === nuevoEstado) return;
@@ -649,30 +650,58 @@ const Pedidos = () => {
 
       // 1. Actualizar el estado del item específico
       const updatedItems = [...selectedPedido.items];
-      updatedItems[itemIndex].estadoItem = nuevoEstado;
 
-      const item = selectedPedido.items[itemIndex];
+      // Calcular cantidadLista según el nuevo estado
+      const cantidadTotal = item.cantidad;
+      const cantidadEntregada = item.cantidadEntregada || 0;
+      let nuevaCantidadLista = item.cantidadLista || 0;
+
+      // Si cambia a "Listo para Entrega", toda la cantidad pendiente está lista
+      if (nuevoEstado === 'Listo para Entrega') {
+        nuevaCantidadLista = cantidadTotal - cantidadEntregada;
+      }
+      // Si cambia a "En Producción", no hay nada listo
+      else if (nuevoEstado === 'En Producción') {
+        nuevaCantidadLista = 0;
+      }
+      // Si cambia a "Parcialmente Listo", mantener el valor actual o usar la mitad como default
+      else if (nuevoEstado === 'Parcialmente Listo' && nuevaCantidadLista === 0) {
+        nuevaCantidadLista = Math.floor(cantidadTotal / 2) || 1;
+      }
+
+      // Actualizar el item con estado y cantidadLista
+      updatedItems[itemIndex] = {
+        ...item,
+        estadoItem: nuevoEstado,
+        cantidadLista: nuevaCantidadLista
+      };
 
       // 2. Actualizar inventario según el cambio de estado
       const productoRef = doc(db, 'products', item.productoId);
+      const cantidadListaAnterior = item.cantidadLista || 0;
+      const diferenciaCantidadLista = nuevaCantidadLista - cantidadListaAnterior;
 
       // Si cambia de "En Producción" a "Listo para Entrega"
       if (estadoAnterior === 'En Producción' && nuevoEstado === 'Listo para Entrega') {
         // Cambio MANUAL: asume que se usa stock existente
         // Solo reserva el stock, NO incrementa stockTotal
-        // (El stockTotal se incrementa cuando llega físicamente por EntradaSatelite/Proveedor)
         batch.update(productoRef, {
-          stockReservadoPedidos: increment(item.cantidad), // Reservar para este pedido
+          stockReservadoPedidos: increment(item.cantidad),
           updatedAt: serverTimestamp()
         });
       }
-
       // Si cambia de "Listo para Entrega" a "En Producción" (poco común pero posible)
-      if (estadoAnterior === 'Listo para Entrega' && nuevoEstado === 'En Producción') {
+      else if (estadoAnterior === 'Listo para Entrega' && nuevoEstado === 'En Producción') {
         // Reversa del cambio manual: libera la reserva
-        // NO decrementa stockTotal (porque el cambio manual tampoco lo incrementó)
         batch.update(productoRef, {
-          stockReservadoPedidos: increment(-item.cantidad), // Liberar reserva
+          stockReservadoPedidos: increment(-cantidadListaAnterior),
+          updatedAt: serverTimestamp()
+        });
+      }
+      // Otros cambios que afectan la reserva (ej: Parcialmente Listo)
+      else if (diferenciaCantidadLista !== 0) {
+        batch.update(productoRef, {
+          stockReservadoPedidos: increment(diferenciaCantidadLista),
           updatedAt: serverTimestamp()
         });
       }
@@ -1382,15 +1411,17 @@ const Pedidos = () => {
 
       batch.update(productoRef, updateData);
 
-      // Actualizar pedido
+      // Verificar totales para el pedido
+      const totalAbonado = selectedPedido.totalAbonado || 0;
+      const nuevoSaldoPendiente = Math.max(0, nuevoTotal - totalAbonado);
+
+      // Actualizar pedido con total y saldo recalculados
       batch.update(pedidoRef, {
         items: updatedItems,
         totalPedido: nuevoTotal,
+        saldoPendiente: nuevoSaldoPendiente,
         updatedAt: serverTimestamp()
       });
-
-      // Verificar si necesitamos crear transacción de egreso
-      const totalAbonado = selectedPedido.totalAbonado || 0;
 
       // Solo crear transacción si nuevo total < total abonado (hay exceso de pago)
       if (nuevoTotal < totalAbonado) {
