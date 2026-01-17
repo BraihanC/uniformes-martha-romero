@@ -201,8 +201,10 @@ const EntradaSatelite = () => {
         const productosPendientes = (pedidoData.productos || [])
           .map((producto, index) => ({ ...producto, index }))
           .filter(producto => {
-            // Buscar por código o por descripción (ya que B2B usa descripcion)
-            const codigoMatch = producto.codigo === selectedProduct.referencia;
+            // Buscar por código (referencia) o por productoId (ID del documento en Firebase)
+            // Los productos B2B pueden tener 'codigo' o 'productoId'
+            const codigoMatch = producto.codigo === selectedProduct.referencia ||
+                               producto.productoId === selectedProduct.id;
             const tallaMatch = producto.talla === selectedProduct.talla;
             const estadoMatch = producto.estadoProduccion === 'pendiente' || producto.estadoProduccion === 'en_produccion';
 
@@ -295,19 +297,23 @@ const EntradaSatelite = () => {
       // PASO 4: Ejecutar todas las actualizaciones en batch
       const batch = writeBatch(db);
 
-      // 4.1. Calcular cuánto se asigna a pedidos regulares (POS)
-      // IMPORTANTE: Se debe incrementar stockReservadoPedidos por TODAS las asignaciones,
+      // 4.1. Calcular cuánto se asigna a pedidos POS y B2B
+      // IMPORTANTE: Se debe incrementar stockReservadoPedidos/stockReservadoB2B por TODAS las asignaciones,
       // no solo las completas, porque las prendas ya están listas en bodega
       let cantidadReservadaPedidos = 0;
+      let cantidadReservadaB2B = 0;
       asignaciones.forEach(asig => {
         if (asig.tipo === 'pedido') {
           cantidadReservadaPedidos += asig.cantidadAsignada;
+        } else if (asig.tipo === 'pedido_b2b') {
+          cantidadReservadaB2B += asig.cantidadAsignada;
         }
       });
 
       // 4.2. Actualizar stockTotal del producto (inventario físico)
       // totalPrendasPedidas se incrementa al crear el pedido
       // stockReservadoPedidos se incrementa aquí cuando las prendas llegan y se marcan "Listo para Entrega"
+      // stockReservadoB2B se incrementa cuando las prendas se asignan a pedidos B2B
       // IMPORTANTE: Solo sumamos las prendas BUENAS, no las defectuosas
       const productRef = doc(db, 'products', selectedProduct.id);
       const productUpdate = {
@@ -315,9 +321,14 @@ const EntradaSatelite = () => {
         updatedAt: serverTimestamp()
       };
 
-      // Si hay asignaciones completas a pedidos, incrementar stockReservadoPedidos
+      // Incrementar stockReservadoPedidos para asignaciones POS
       if (cantidadReservadaPedidos > 0) {
         productUpdate.stockReservadoPedidos = increment(cantidadReservadaPedidos);
+      }
+
+      // Incrementar stockReservadoB2B para asignaciones B2B
+      if (cantidadReservadaB2B > 0) {
+        productUpdate.stockReservadoB2B = increment(cantidadReservadaB2B);
       }
 
       batch.update(productRef, productUpdate);
@@ -516,7 +527,8 @@ const EntradaSatelite = () => {
     const stockTotal = product.stockTotal || 0;
     const stockReservadoPedidos = product.stockReservadoPedidos || 0;
     const stockReservadoApartados = product.stockReservadoApartados || 0;
-    const disponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+    const stockReservadoB2B = product.stockReservadoB2B || 0;
+    const disponible = stockTotal - stockReservadoPedidos - stockReservadoApartados - stockReservadoB2B;
     return Math.max(0, disponible); // Si es negativo, muestra 0
   };
 

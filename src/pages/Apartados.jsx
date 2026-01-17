@@ -337,7 +337,7 @@ const Apartados = () => {
   // Filtrar productos
   const productosFiltrados = ordenarPorTalla(
     productos.filter(producto => {
-      const disponible = (producto.stockTotal || 0) - (producto.stockReservadoPedidos || 0) - (producto.stockReservadoApartados || 0);
+      const disponible = (producto.stockTotal || 0) - (producto.stockReservadoPedidos || 0) - (producto.stockReservadoApartados || 0) - (producto.stockReservadoB2B || 0);
       const stockDisponible = Math.max(0, disponible); // Nunca muestra negativos
       const matchSearch = producto.nombre?.toLowerCase().includes(searchProducto.toLowerCase()) ||
                          producto.referencia?.toLowerCase().includes(searchProducto.toLowerCase());
@@ -359,7 +359,7 @@ const Apartados = () => {
 
   // Agregar producto al apartado
   const agregarProducto = (producto) => {
-    const disponible = (producto.stockTotal || 0) - (producto.stockReservadoPedidos || 0) - (producto.stockReservadoApartados || 0);
+    const disponible = (producto.stockTotal || 0) - (producto.stockReservadoPedidos || 0) - (producto.stockReservadoApartados || 0) - (producto.stockReservadoB2B || 0);
     const stockDisponible = Math.max(0, disponible); // Nunca muestra negativos
 
     if (stockDisponible <= 0) {
@@ -2356,7 +2356,7 @@ const Apartados = () => {
                       <p className="text-center text-gray-500">No se encontraron productos con stock disponible</p>
                     ) : (
                       productosFiltrados.map(producto => {
-                        const disponible = (producto.stockTotal || 0) - (producto.stockReservadoPedidos || 0) - (producto.stockReservadoApartados || 0);
+                        const disponible = (producto.stockTotal || 0) - (producto.stockReservadoPedidos || 0) - (producto.stockReservadoApartados || 0) - (producto.stockReservadoB2B || 0);
                         const stockDisponible = Math.max(0, disponible); // Nunca muestra negativos
                         const tallaKey = `${producto.id}`;
                         return (

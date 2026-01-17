@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, arrayUnion, serverTimestamp, query, orderBy, addDoc, where, limit, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, arrayUnion, serverTimestamp, query, orderBy, addDoc, where, limit, getDoc, writeBatch, increment } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { Package, DollarSign, CheckCircle, Clock, Eye, Plus, Calendar, CreditCard, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer } from 'lucide-react';
 import jsPDF from 'jspdf';
@@ -240,9 +240,59 @@ const PedidosB2B = () => {
     }
 
     try {
+      // Buscar el producto en inventario
+      // El pedido B2B puede tener:
+      // - codigo: la referencia del producto (ej: EN007ET14)
+      // - productoId: el ID del documento en Firebase
+      const codigoProducto = productoAlistar.codigo;
+      const productoIdFirebase = productoAlistar.productoId;
+
+      let productoInventario = null;
+
+      // Primero intentar buscar por ID directo del documento (productoId)
+      if (productoIdFirebase) {
+        const productoDoc = await getDoc(doc(db, 'products', productoIdFirebase));
+        if (productoDoc.exists()) {
+          productoInventario = { id: productoDoc.id, ...productoDoc.data() };
+        }
+      }
+
+      // Si no se encontró por ID, buscar por referencia (codigo)
+      if (!productoInventario && codigoProducto) {
+        const productosQuery = query(
+          collection(db, 'products'),
+          where('referencia', '==', codigoProducto)
+        );
+        const productosSnapshot = await getDocs(productosQuery);
+
+        productosSnapshot.forEach(docSnap => {
+          const data = docSnap.data();
+          // Verificar que coincida la talla también
+          if (data.talla === productoAlistar.talla) {
+            productoInventario = { id: docSnap.id, ...data };
+          }
+        });
+      }
+
+      // Verificar stock disponible si encontramos el producto
+      if (productoInventario) {
+        const stockDisponible = (productoInventario.stockTotal || 0) -
+                               (productoInventario.stockReservadoPedidos || 0) -
+                               (productoInventario.stockReservadoApartados || 0) -
+                               (productoInventario.stockReservadoB2B || 0);
+
+        if (cantidad > stockDisponible) {
+          alert(`Stock insuficiente. Solo hay ${stockDisponible} unidades disponibles en inventario.`);
+          return;
+        }
+      }
+
+      // Usar batch para actualizar pedido B2B e inventario atómicamente
+      const batch = writeBatch(db);
+
       const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
 
-      // Actualizar el producto específico
+      // Actualizar el producto específico en el pedido B2B
       const productosActualizados = selectedPedido.productos.map((p, idx) => {
         if (idx === productoAlistar.index) {
           const nuevaCantidadAlistada = (p.cantidadAlistada || 0) + cantidad;
@@ -256,10 +306,22 @@ const PedidosB2B = () => {
         return p;
       });
 
-      await updateDoc(pedidoRef, {
+      batch.update(pedidoRef, {
         productos: productosActualizados,
         updatedAt: serverTimestamp()
       });
+
+      // Si encontramos el producto en inventario, incrementar stockReservadoB2B
+      if (productoInventario) {
+        const productRef = doc(db, 'products', productoInventario.id);
+        batch.update(productRef, {
+          stockReservadoB2B: increment(cantidad),
+          updatedAt: serverTimestamp()
+        });
+      }
+
+      // Ejecutar batch
+      await batch.commit();
 
       // Actualizar selectedPedido localmente para reflejar cambios inmediatamente en el modal
       setSelectedPedido({
@@ -267,7 +329,11 @@ const PedidosB2B = () => {
         productos: productosActualizados
       });
 
-      alert(`${cantidad} unidad(es) de ${productoAlistar.descripcion} alistada(s) exitosamente`);
+      const mensajeInventario = productoInventario
+        ? ` (${cantidad} unidades reservadas del inventario)`
+        : ' (producto no encontrado en inventario)';
+
+      alert(`${cantidad} unidad(es) de ${productoAlistar.descripcion} alistada(s) exitosamente${mensajeInventario}`);
       setShowAlistarModal(false);
       setCantidadAlistar('');
       setProductoAlistar(null);
@@ -308,12 +374,22 @@ const PedidosB2B = () => {
     if (!window.confirm(mensaje)) return;
 
     try {
+      const batch = writeBatch(db);
       const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
+
+      // Mapear productos a enviar con sus cantidades
+      const productosParaEnviar = [];
 
       // Actualizar productos: mover cantidadAlistada a cantidadEnviada
       const productosActualizados = selectedPedido.productos.map(p => {
         const cantidadAEnviar = Math.max(0, (p.cantidadAlistada || 0) - (p.cantidadEnviada || 0));
         if (cantidadAEnviar > 0) {
+          productosParaEnviar.push({
+            codigo: p.codigo, // Referencia del producto (puede ser null en B2B)
+            productoId: p.productoId, // ID del documento Firebase (usado en B2B)
+            talla: p.talla,
+            cantidadAEnviar
+          });
           const nuevaCantidadEnviada = (p.cantidadEnviada || 0) + cantidadAEnviar;
           return {
             ...p,
@@ -325,11 +401,59 @@ const PedidosB2B = () => {
         return p;
       });
 
-      await updateDoc(pedidoRef, {
+      batch.update(pedidoRef, {
         productos: productosActualizados,
         estado: nuevoEstado,
         updatedAt: serverTimestamp()
       });
+
+      // Actualizar inventario: decrementar stockReservadoB2B y stockTotal
+      for (const producto of productosParaEnviar) {
+        let productoEncontrado = null;
+
+        // Primero intentar buscar por ID directo del documento (productoId) - usado en B2B
+        if (producto.productoId) {
+          const productoDoc = await getDoc(doc(db, 'products', producto.productoId));
+          if (productoDoc.exists()) {
+            const data = productoDoc.data();
+            // Verificar que la talla coincida
+            if (data.talla === producto.talla) {
+              productoEncontrado = { id: productoDoc.id, ...data };
+            }
+          }
+        }
+
+        // Si no se encontró por ID, buscar por referencia (codigo)
+        if (!productoEncontrado && producto.codigo) {
+          const productosQuery = query(
+            collection(db, 'products'),
+            where('referencia', '==', producto.codigo)
+          );
+          const productosSnapshot = await getDocs(productosQuery);
+
+          productosSnapshot.forEach(docSnap => {
+            const data = docSnap.data();
+            if (data.talla === producto.talla) {
+              productoEncontrado = { id: docSnap.id, ...data };
+            }
+          });
+        }
+
+        // Si encontramos el producto, actualizar inventario
+        if (productoEncontrado) {
+          const productRef = doc(db, 'products', productoEncontrado.id);
+          batch.update(productRef, {
+            // Liberar la reserva B2B
+            stockReservadoB2B: increment(-producto.cantidadAEnviar),
+            // Decrementar stock total (sale del inventario)
+            stockTotal: increment(-producto.cantidadAEnviar),
+            updatedAt: serverTimestamp()
+          });
+        }
+      }
+
+      // Ejecutar batch
+      await batch.commit();
 
       // Actualizar selectedPedido localmente para reflejar cambios inmediatamente
       setSelectedPedido({

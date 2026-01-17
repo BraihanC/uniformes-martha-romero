@@ -805,29 +805,49 @@ const Pedidos = () => {
   const confirmarEntrega = async () => {
     if (!selectedPedido) return;
 
+    // Calcular valor de entrega ANTES de la validación
+    const valorDeEntrega = selectedItemsForDelivery.reduce((sum, index) => {
+      const item = selectedPedido.items[index];
+      const esParcial = item.estadoItem === 'Parcialmente Listo';
+
+      if (esParcial) {
+        const cantidadLista = item.cantidadLista || 0;
+        const precioUnitario = item.precio;
+        return sum + (cantidadLista * precioUnitario);
+      } else {
+        return sum + item.subtotal;
+      }
+    }, 0);
+
+    const abonoNuevo = Number(nuevoAbono) || 0;
+    const totalAbonado = selectedPedido.totalAbonado || 0;
+
+    // VALIDACIÓN: Si se mostró el formulario de abono, verificar que ingresaron un monto válido
+    if (showAbonoForm) {
+      const saldoRequerido = valorDeEntrega - totalAbonado;
+
+      if (abonoNuevo <= 0) {
+        alert(`⚠️ Debes ingresar el abono para continuar.\n\nSaldo mínimo requerido: $${saldoRequerido.toLocaleString('es-CO')}`);
+        return;
+      }
+
+      if (abonoNuevo < saldoRequerido) {
+        const faltante = saldoRequerido - abonoNuevo;
+        const confirmar = window.confirm(
+          `⚠️ El abono ingresado ($${abonoNuevo.toLocaleString('es-CO')}) es menor al saldo requerido ($${saldoRequerido.toLocaleString('es-CO')}).\n\n` +
+          `Faltarían: $${faltante.toLocaleString('es-CO')}\n\n` +
+          `¿Deseas continuar de todos modos? (El cliente quedará debiendo)`
+        );
+        if (!confirmar) return;
+      }
+    }
+
     setLoading(true);
     try {
       const batch = writeBatch(db);
       const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
 
-      // Calcular nuevo total abonado y saldo
-      const valorDeEntrega = selectedItemsForDelivery.reduce((sum, index) => {
-        const item = selectedPedido.items[index];
-        const esParcial = item.estadoItem === 'Parcialmente Listo';
-
-        if (esParcial) {
-          // Para entregas parciales, calcular valor proporcional
-          const cantidadLista = item.cantidadLista || 0;
-          const precioUnitario = item.precio;
-          return sum + (cantidadLista * precioUnitario);
-        } else {
-          // Para entregas totales, usar subtotal completo
-          return sum + item.subtotal;
-        }
-      }, 0);
-
-      const abonoNuevo = Number(nuevoAbono) || 0;
-      const nuevoTotalAbonado = (selectedPedido.totalAbonado || 0) + abonoNuevo;
+      const nuevoTotalAbonado = totalAbonado + abonoNuevo;
       const nuevoSaldoPendiente = selectedPedido.total - nuevoTotalAbonado;
 
       // Actualizar items: cambiar estado según si es entrega parcial o total

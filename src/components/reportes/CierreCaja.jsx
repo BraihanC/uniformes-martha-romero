@@ -253,9 +253,20 @@ const CierreCaja = () => { // <--- Nombre cambiado
         fecha: doc.data().fecha.toDate(),
       }));
 
-      // FILTRAR transacciones pendientes (no afectan el flujo de caja)
-      // Solo se incluyen cuando se marcan como pagadas con el método real
-      const transactions = allTransactions.filter(t => t.metodoPago !== 'Pendiente');
+      // FILTRAR transacciones que no afectan el flujo de caja:
+      // 1. Pendientes: Solo se incluyen cuando se marcan como pagadas con el método real
+      // 2. Entradas de satélite: Solo incluir si afectaCaja === true (pagadas desde caja del local)
+      const transactions = allTransactions.filter(t => {
+        // Excluir transacciones pendientes
+        if (t.metodoPago === 'Pendiente') return false;
+
+        // Para entradas de satélite: solo incluir si afectaCaja es true
+        if (t.tipo === 'entrada_satelite') {
+          return t.afectaCaja === true;
+        }
+
+        return true;
+      });
 
       // 5. Procesar los datos
       let totalIngresos = 0;

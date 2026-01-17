@@ -99,9 +99,36 @@ const CuentasPorPagar = () => {
   };
 
   const handleMarcarComoPagado = async (sateliteId, entradaIds) => {
-    // Preguntar método de pago
+    // Paso 1: Preguntar de dónde sale el dinero
+    const origenDinero = window.prompt(
+      '¿De dónde sale el dinero para este pago?\n\n' +
+      '1 = CAJA (efectivo del local - aparecerá en Cierre de Caja)\n' +
+      '2 = CUENTA PERSONAL (transferencia/efectivo Martha - NO aparece en Cierre de Caja)\n\n' +
+      'Ingresa el número (1 o 2):'
+    );
+
+    if (!origenDinero) return; // Cancelado
+
+    let origenDineroTexto;
+    let afectaCaja;
+    if (origenDinero === '1') {
+      origenDineroTexto = 'Caja';
+      afectaCaja = true;
+    } else if (origenDinero === '2') {
+      origenDineroTexto = 'Cuenta Personal';
+      afectaCaja = false;
+    } else {
+      alert('Opción inválida. Debe ser 1 o 2.');
+      return;
+    }
+
+    // Paso 2: Preguntar método de pago
     const metodoPago = window.prompt(
-      'Selecciona el método de pago:\n\n1 = Efectivo (afecta Caja)\n2 = Transferencia/Cheque (cuenta Martha Romero)\n\nIngresa el número (1 o 2):'
+      `Origen: ${origenDineroTexto}\n\n` +
+      'Ahora selecciona el método de pago:\n\n' +
+      '1 = Efectivo\n' +
+      '2 = Transferencia\n\n' +
+      'Ingresa el número (1 o 2):'
     );
 
     if (!metodoPago) return; // Cancelado
@@ -117,7 +144,11 @@ const CuentasPorPagar = () => {
     }
 
     const confirmacion = window.confirm(
-      `¿Confirmas el pago por ${metodoPagoTexto}?\n\nEsta acción no se puede deshacer.`
+      `¿Confirmas el pago?\n\n` +
+      `• Origen del dinero: ${origenDineroTexto}\n` +
+      `• Método de pago: ${metodoPagoTexto}\n` +
+      `${afectaCaja ? '• APARECERÁ en el Cierre de Caja' : '• NO aparecerá en el Cierre de Caja'}\n\n` +
+      `Esta acción no se puede deshacer.`
     );
 
     if (!confirmacion) return;
@@ -133,7 +164,9 @@ const CuentasPorPagar = () => {
         batch.update(entradaRef, {
           pagado: true,
           fechaPago: serverTimestamp(),
-          metodoPago: metodoPagoTexto
+          metodoPago: metodoPagoTexto,
+          origenDinero: origenDineroTexto,
+          afectaCaja: afectaCaja
         });
 
         // Buscar y actualizar la transacción asociada
@@ -145,11 +178,13 @@ const CuentasPorPagar = () => {
         const transSnapshot = await getDocs(transQuery);
 
         if (!transSnapshot.empty) {
-          // Actualizar la transacción de 'Pendiente' al método real
+          // Actualizar la transacción con el método real y origen del dinero
           transSnapshot.forEach(transDoc => {
             const transRef = doc(db, 'transactions', transDoc.id);
             batch.update(transRef, {
               metodoPago: metodoPagoTexto,
+              origenDinero: origenDineroTexto,
+              afectaCaja: afectaCaja,
               fechaPago: serverTimestamp()
             });
           });
@@ -158,7 +193,7 @@ const CuentasPorPagar = () => {
 
       await batch.commit();
 
-      alert(`✅ ¡Entradas marcadas como pagadas por ${metodoPagoTexto}!`);
+      alert(`✅ ¡Entradas marcadas como pagadas!\n\n• Método: ${metodoPagoTexto}\n• Origen: ${origenDineroTexto}`);
 
       // Recargar datos
       await fetchCuentasPorPagar();

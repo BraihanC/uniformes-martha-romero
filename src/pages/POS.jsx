@@ -115,15 +115,50 @@ const POS = () => {
   };
 
   // Cargar estado del carrito desde localStorage
-  const loadCartFromStorage = () => {
+  const loadCartFromStorage = (loadedProducts = []) => {
     try {
       const savedData = localStorage.getItem(CART_STORAGE_KEY);
       if (savedData) {
         const cartData = JSON.parse(savedData);
 
-        // Restaurar estados
+        // Restaurar estados - VALIDAR STOCK antes de restaurar
         if (cartData.cartItems && cartData.cartItems.length > 0) {
-          setCartItems(cartData.cartItems);
+          // Filtrar items que aún tienen stock disponible
+          const validItems = cartData.cartItems.filter(item => {
+            // Buscar el producto actualizado en la lista de productos cargados
+            const currentProduct = loadedProducts.find(p => p.id === item.product.id);
+            if (!currentProduct) {
+              console.warn(`Producto ${item.product.nombre} ya no existe, removiendo del carrito`);
+              return false;
+            }
+
+            // Calcular stock disponible actual
+            const stockDisponible = (currentProduct.stockTotal || 0) -
+                                   (currentProduct.stockReservadoPedidos || 0) -
+                                   (currentProduct.stockReservadoApartados || 0) -
+                                   (currentProduct.stockReservadoB2B || 0);
+
+            if (stockDisponible < item.cantidad) {
+              console.warn(`Stock insuficiente para ${item.product.nombre}: solicitado ${item.cantidad}, disponible ${stockDisponible}`);
+              // Ajustar cantidad si hay algo de stock, o remover si no hay
+              if (stockDisponible > 0) {
+                item.cantidad = stockDisponible;
+                item.product = currentProduct; // Actualizar datos del producto
+                return true;
+              }
+              return false;
+            }
+
+            // Actualizar datos del producto con los más recientes
+            item.product = currentProduct;
+            return true;
+          });
+
+          if (validItems.length !== cartData.cartItems.length) {
+            console.log('Algunos productos fueron ajustados o removidos del carrito por falta de stock');
+          }
+
+          setCartItems(validItems);
         }
         if (cartData.selectedClient) {
           setSelectedClient(cartData.selectedClient);
@@ -207,7 +242,8 @@ const POS = () => {
       }
 
       // Cargar carrito guardado DESPUÉS de cargar todos los datos
-      loadCartFromStorage();
+      // Pasar los productos cargados para validar stock actualizado
+      loadCartFromStorage(productsData);
 
       setLoading(false);
     } catch (error) {
@@ -340,7 +376,8 @@ const POS = () => {
     const stockTotal = product.stockTotal || 0;
     const stockReservadoPedidos = product.stockReservadoPedidos || 0;
     const stockReservadoApartados = product.stockReservadoApartados || 0;
-    const disponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+    const stockReservadoB2B = product.stockReservadoB2B || 0;
+    const disponible = stockTotal - stockReservadoPedidos - stockReservadoApartados - stockReservadoB2B;
     return Math.max(0, disponible); // Nunca muestra negativos
   };
 
@@ -687,12 +724,13 @@ const POS = () => {
           }
 
           // IMPORTANTE: Validar contra stock DISPONIBLE, no solo stockTotal
-          // Stock disponible = Stock físico - Reservas de pedidos - Reservas de apartados
+          // Stock disponible = Stock físico - Reservas de pedidos - Reservas de apartados - Reservas B2B
           const productData = productSnap.data();
           const stockTotal = productData.stockTotal || 0;
           const stockReservadoPedidos = productData.stockReservadoPedidos || 0;
           const stockReservadoApartados = productData.stockReservadoApartados || 0;
-          const currentStock = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+          const stockReservadoB2B = productData.stockReservadoB2B || 0;
+          const currentStock = stockTotal - stockReservadoPedidos - stockReservadoApartados - stockReservadoB2B;
 
           if (currentStock < item.cantidad) {
             throw new Error(
@@ -702,7 +740,8 @@ const POS = () => {
               `Detalle:\n` +
               `Stock físico total: ${stockTotal}\n` +
               `Reservado pedidos: ${stockReservadoPedidos}\n` +
-              `Reservado apartados: ${stockReservadoApartados}`
+              `Reservado apartados: ${stockReservadoApartados}\n` +
+              `Reservado B2B: ${stockReservadoB2B}`
             );
           }
 

@@ -125,28 +125,37 @@ const EntradaProveedor = () => {
     setLoading(true);
     try {
       // PASO 1: Buscar pedidos pendientes del mismo producto (referencia + talla)
+      const pedidosPendientes = [];
+
+      // Buscar en PEDIDOS POS
       const pedidosQuery = query(
         collection(db, 'pedidos'),
         orderBy('createdAt', 'asc') // Del más antiguo al más reciente
       );
       const pedidosSnapshot = await getDocs(pedidosQuery);
 
-      const pedidosPendientes = [];
       for (const pedidoDoc of pedidosSnapshot.docs) {
         const pedidoData = pedidoDoc.data();
 
         // Buscar items que coincidan con el producto y estén en producción
         const itemsPendientes = pedidoData.items
           .map((item, index) => ({ ...item, index }))
-          .filter(item =>
-            item.referencia === selectedProduct.referencia &&
-            item.talla === selectedProduct.talla &&
-            item.estadoItem === 'En Producción'
-          );
+          .filter(item => {
+            const cantidadTotal = item.cantidad;
+            const cantidadLista = item.cantidadLista || 0;
+            const cantidadEntregada = item.cantidadEntregada || 0;
+            const cantidadPendiente = cantidadTotal - cantidadLista - cantidadEntregada;
+
+            return item.referencia === selectedProduct.referencia &&
+              item.talla === selectedProduct.talla &&
+              (item.estadoItem === 'En Producción' || item.estadoItem === 'Parcialmente Listo') &&
+              cantidadPendiente > 0;
+          });
 
         if (itemsPendientes.length > 0) {
           pedidosPendientes.push({
             id: pedidoDoc.id,
+            tipo: 'pedido', // Tipo POS
             numeroPedido: pedidoData.numeroPedido,
             clienteNombre: pedidoData.clienteNombre,
             createdAt: pedidoData.createdAt,
@@ -155,6 +164,49 @@ const EntradaProveedor = () => {
           });
         }
       }
+
+      // Buscar en PEDIDOS B2B (PORTAL)
+      const pedidosB2BQuery = query(
+        collection(db, 'pedidos_b2b'),
+        orderBy('createdAt', 'asc') // Del más antiguo al más reciente
+      );
+      const pedidosB2BSnapshot = await getDocs(pedidosB2BQuery);
+
+      for (const pedidoDoc of pedidosB2BSnapshot.docs) {
+        const pedidoData = pedidoDoc.data();
+
+        // Buscar productos que coincidan con el producto y estén pendientes
+        const productosPendientes = (pedidoData.productos || [])
+          .map((producto, index) => ({ ...producto, index }))
+          .filter(producto => {
+            // B2B products have productoId (Firebase doc ID), not codigo
+            const codigoMatch = producto.codigo === selectedProduct.referencia ||
+                               producto.productoId === selectedProduct.id;
+            const tallaMatch = producto.talla === selectedProduct.talla;
+            const estadoMatch = producto.estadoProduccion === 'pendiente' || producto.estadoProduccion === 'en_produccion';
+
+            return codigoMatch && tallaMatch && estadoMatch;
+          });
+
+        if (productosPendientes.length > 0) {
+          pedidosPendientes.push({
+            id: pedidoDoc.id,
+            tipo: 'pedido_b2b', // Tipo B2B
+            numeroPedido: pedidoData.numeroPedido,
+            clienteNombre: pedidoData.clienteNombre,
+            createdAt: pedidoData.createdAt,
+            productos: pedidoData.productos,
+            itemsPendientes: productosPendientes
+          });
+        }
+      }
+
+      // Ordenar todos los pedidos por fecha de creación (más antiguo primero)
+      pedidosPendientes.sort((a, b) => {
+        const fechaA = a.createdAt?.toDate?.() || new Date(a.createdAt);
+        const fechaB = b.createdAt?.toDate?.() || new Date(b.createdAt);
+        return fechaA - fechaB;
+      });
 
       // PASO 2: Asignar prendas a pedidos (del más antiguo al más reciente)
       let cantidadRestante = numCantidad;
@@ -167,17 +219,26 @@ const EntradaProveedor = () => {
         for (const itemPendiente of pedido.itemsPendientes) {
           if (cantidadRestante <= 0) break;
 
-          const cantidadNecesaria = itemPendiente.cantidad;
-          const cantidadAAsignar = Math.min(cantidadNecesaria, cantidadRestante);
+          // Calcular cantidad pendiente real
+          const cantidadTotal = itemPendiente.cantidad;
+          const cantidadLista = itemPendiente.cantidadLista || 0;
+          const cantidadAlistada = itemPendiente.cantidadAlistada || 0; // Para B2B
+          const cantidadEntregada = itemPendiente.cantidadEntregada || 0;
+          const cantidadPendiente = pedido.tipo === 'pedido_b2b'
+            ? cantidadTotal - cantidadAlistada
+            : cantidadTotal - cantidadLista - cantidadEntregada;
+
+          const cantidadAAsignar = Math.min(cantidadPendiente, cantidadRestante);
 
           asignaciones.push({
             pedidoId: pedido.id,
+            tipo: pedido.tipo, // 'pedido' o 'pedido_b2b'
             numeroPedido: pedido.numeroPedido,
             clienteNombre: pedido.clienteNombre,
             itemIndex: itemPendiente.index,
             cantidadAsignada: cantidadAAsignar,
-            cantidadNecesaria: cantidadNecesaria,
-            esCompleto: cantidadAAsignar === cantidadNecesaria
+            cantidadNecesaria: cantidadPendiente,
+            esCompleto: cantidadAAsignar === cantidadPendiente
           });
 
           cantidadRestante -= cantidadAAsignar;
@@ -197,7 +258,8 @@ const EntradaProveedor = () => {
       if (asignaciones.length > 0) {
         resumenMensaje += `✅ PRENDAS ASIGNADAS A PEDIDOS (${cantidadAsignada}):\n\n`;
         asignaciones.forEach((asig, idx) => {
-          resumenMensaje += `${idx + 1}. Pedido #${String(asig.numeroPedido).padStart(4, '0')} - ${asig.clienteNombre}\n`;
+          const tipoPedido = asig.tipo === 'pedido_b2b' ? '[B2B]' : '[POS]';
+          resumenMensaje += `${idx + 1}. ${tipoPedido} Pedido #${String(asig.numeroPedido).padStart(4, '0')} - ${asig.clienteNombre}\n`;
           resumenMensaje += `   → ${asig.cantidadAsignada} de ${asig.cantidadNecesaria} prendas`;
           if (!asig.esCompleto) {
             resumenMensaje += ` (quedan ${asig.cantidadNecesaria - asig.cantidadAsignada} pendientes)`;
@@ -220,66 +282,98 @@ const EntradaProveedor = () => {
       // PASO 4: Ejecutar todas las actualizaciones en batch
       const batch = writeBatch(db);
 
-      // 4.1. Calcular cuánto se asigna a pedidos (completos o parciales)
-      // IMPORTANTE: Se reserva TODA la cantidad asignada, no solo las completas
+      // 4.1. Calcular cuánto se asigna a pedidos POS y B2B
       let cantidadReservadaPedidos = 0;
+      let cantidadReservadaB2B = 0;
       asignaciones.forEach(asig => {
-        cantidadReservadaPedidos += asig.cantidadAsignada;
+        if (asig.tipo === 'pedido') {
+          cantidadReservadaPedidos += asig.cantidadAsignada;
+        } else if (asig.tipo === 'pedido_b2b') {
+          cantidadReservadaB2B += asig.cantidadAsignada;
+        }
       });
 
       // 4.2. Actualizar stockTotal del producto (inventario físico)
-      // totalPrendasPedidas se incrementa al crear el pedido
-      // stockReservadoPedidos se incrementa aquí cuando las prendas llegan y se marcan "Listo para Entrega"
       const productRef = doc(db, 'products', selectedProduct.id);
       const productUpdate = {
         stockTotal: increment(numCantidad),
         updatedAt: serverTimestamp()
       };
 
-      // Si hay asignaciones completas a pedidos, incrementar stockReservadoPedidos
+      // Incrementar stockReservadoPedidos para POS
       if (cantidadReservadaPedidos > 0) {
         productUpdate.stockReservadoPedidos = increment(cantidadReservadaPedidos);
+      }
+
+      // Incrementar stockReservadoB2B para B2B
+      if (cantidadReservadaB2B > 0) {
+        productUpdate.stockReservadoB2B = increment(cantidadReservadaB2B);
       }
 
       batch.update(productRef, productUpdate);
 
       // 4.3. Actualizar pedidos con items asignados
       for (const asig of asignaciones) {
-        const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
-        const pedidoSnap = await getDoc(pedidoRef);
-        const pedidoData = pedidoSnap.data();
+        if (asig.tipo === 'pedido') {
+          // PEDIDO POS
+          const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
+          const pedidoSnap = await getDoc(pedidoRef);
+          const pedidoData = pedidoSnap.data();
 
-        const updatedItems = [...pedidoData.items];
-        const item = updatedItems[asig.itemIndex];
+          const updatedItems = [...pedidoData.items];
+          const item = updatedItems[asig.itemIndex];
 
-        // Calcular nueva cantidad lista y estado
-        const cantidadTotal = item.cantidad;
-        const cantidadListaActual = item.cantidadLista || 0;
-        const cantidadEntregada = item.cantidadEntregada || 0;
-        const nuevaCantidadLista = cantidadListaActual + asig.cantidadAsignada;
+          // Calcular nueva cantidad lista y estado
+          const cantidadTotal = item.cantidad;
+          const cantidadListaActual = item.cantidadLista || 0;
+          const cantidadEntregada = item.cantidadEntregada || 0;
+          const nuevaCantidadLista = cantidadListaActual + asig.cantidadAsignada;
 
-        // Determinar nuevo estado basado en cantidades
-        let nuevoEstado;
-        if (cantidadEntregada === cantidadTotal) {
-          nuevoEstado = 'Entregado';
-        } else if (nuevaCantidadLista + cantidadEntregada === cantidadTotal) {
-          nuevoEstado = 'Listo para Entrega';
-        } else if (nuevaCantidadLista > 0) {
-          nuevoEstado = 'Parcialmente Listo';
-        } else {
-          nuevoEstado = 'En Producción';
+          // Determinar nuevo estado basado en cantidades
+          let nuevoEstado;
+          if (cantidadEntregada === cantidadTotal) {
+            nuevoEstado = 'Entregado';
+          } else if (nuevaCantidadLista + cantidadEntregada === cantidadTotal) {
+            nuevoEstado = 'Listo para Entrega';
+          } else if (nuevaCantidadLista > 0) {
+            nuevoEstado = 'Parcialmente Listo';
+          } else {
+            nuevoEstado = 'En Producción';
+          }
+
+          updatedItems[asig.itemIndex] = {
+            ...item,
+            cantidadLista: nuevaCantidadLista,
+            estadoItem: nuevoEstado
+          };
+
+          batch.update(pedidoRef, {
+            items: updatedItems,
+            updatedAt: serverTimestamp()
+          });
+
+        } else if (asig.tipo === 'pedido_b2b') {
+          // PEDIDO B2B
+          const pedidoRef = doc(db, 'pedidos_b2b', asig.pedidoId);
+          const pedidoSnap = await getDoc(pedidoRef);
+          const pedidoData = pedidoSnap.data();
+
+          const updatedProductos = [...pedidoData.productos];
+          const producto = updatedProductos[asig.itemIndex];
+
+          // Actualizar cantidad alistada y estado de producción
+          updatedProductos[asig.itemIndex] = {
+            ...producto,
+            cantidadAlistada: (producto.cantidadAlistada || 0) + asig.cantidadAsignada,
+            estadoProduccion: asig.esCompleto ? 'alistado' : 'en_produccion',
+            fechaAlistado: asig.esCompleto ? serverTimestamp() : producto.fechaAlistado
+          };
+
+          batch.update(pedidoRef, {
+            productos: updatedProductos,
+            updatedAt: serverTimestamp()
+          });
         }
-
-        updatedItems[asig.itemIndex] = {
-          ...item,
-          cantidadLista: nuevaCantidadLista,
-          estadoItem: nuevoEstado
-        };
-
-        batch.update(pedidoRef, {
-          items: updatedItems,
-          updatedAt: serverTimestamp()
-        });
       }
 
       // 4.4. Crear registro de auditoría en stockEntries
@@ -297,7 +391,8 @@ const EntradaProveedor = () => {
           pedidoId: a.pedidoId,
           numeroPedido: a.numeroPedido,
           clienteNombre: a.clienteNombre,
-          cantidad: a.cantidadAsignada
+          cantidad: a.cantidadAsignada,
+          tipo: a.tipo // 'pedido' o 'pedido_b2b'
         })),
         costoUnitario: costoCompra,
         costoTotal: costoCompra * numCantidad,
@@ -384,7 +479,8 @@ const EntradaProveedor = () => {
     const stockTotal = product.stockTotal || 0;
     const stockReservadoPedidos = product.stockReservadoPedidos || 0;
     const stockReservadoApartados = product.stockReservadoApartados || 0;
-    const disponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+    const stockReservadoB2B = product.stockReservadoB2B || 0;
+    const disponible = stockTotal - stockReservadoPedidos - stockReservadoApartados - stockReservadoB2B;
     return Math.max(0, disponible); // Si es negativo, muestra 0
   };
 

@@ -388,7 +388,8 @@ const Devoluciones = () => {
     const stockTotal = producto.stockTotal || 0;
     const stockReservadoPedidos = producto.stockReservadoPedidos || 0;
     const stockReservadoApartados = producto.stockReservadoApartados || 0;
-    const stockDisponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+    const stockReservadoB2B = producto.stockReservadoB2B || 0;
+    const stockDisponible = stockTotal - stockReservadoPedidos - stockReservadoApartados - stockReservadoB2B;
 
     const matchSearch = producto.nombre?.toLowerCase().includes(searchProducto.toLowerCase()) ||
                        producto.referencia?.toLowerCase().includes(searchProducto.toLowerCase());
@@ -412,7 +413,8 @@ const Devoluciones = () => {
     const stockTotal = producto.stockTotal || 0;
     const stockReservadoPedidos = producto.stockReservadoPedidos || 0;
     const stockReservadoApartados = producto.stockReservadoApartados || 0;
-    const stockDisponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+    const stockReservadoB2B = producto.stockReservadoB2B || 0;
+    const stockDisponible = stockTotal - stockReservadoPedidos - stockReservadoApartados - stockReservadoB2B;
 
     setProductosNuevos([...productosNuevos, {
       id: producto.id,
@@ -530,7 +532,8 @@ const Devoluciones = () => {
         const stockTotal = productData.stockTotal || 0;
         const stockReservadoPedidos = productData.stockReservadoPedidos || 0;
         const stockReservadoApartados = productData.stockReservadoApartados || 0;
-        const stockDisponible = stockTotal - stockReservadoPedidos - stockReservadoApartados;
+        const stockReservadoB2B = productData.stockReservadoB2B || 0;
+        const stockDisponible = stockTotal - stockReservadoPedidos - stockReservadoApartados - stockReservadoB2B;
 
         if (stockDisponible < item.cantidad) {
           throw new Error(
