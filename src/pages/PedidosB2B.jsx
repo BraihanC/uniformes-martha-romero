@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, arrayUnion, serverTimestamp, query, orderBy, addDoc, where, limit, getDoc, writeBatch, increment } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, arrayUnion, serverTimestamp, query, orderBy, addDoc, where, limit, getDoc, writeBatch, increment, runTransaction } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
-import { Package, DollarSign, CheckCircle, Clock, Eye, Plus, Calendar, CreditCard, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer } from 'lucide-react';
+import { Package, DollarSign, CheckCircle, Clock, Eye, Plus, Calendar, CreditCard, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer, Loader2 } from 'lucide-react';
 import jsPDF from 'jspdf';
 
 const PedidosB2B = () => {
@@ -28,6 +28,21 @@ const PedidosB2B = () => {
   const [notasPedidoTienda, setNotasPedidoTienda] = useState('');
   const [creandoPedido, setCreandoPedido] = useState(false);
   const [cargandoProductos, setCargandoProductos] = useState(false);
+
+  // Estados para filtros
+  const [busquedaPedido, setBusquedaPedido] = useState('');
+  const [filtroEstado, setFiltroEstado] = useState('todos');
+  const [filtroEstadoPago, setFiltroEstadoPago] = useState('todos');
+
+  // Estados para paginación
+  const [paginaActual, setPaginaActual] = useState(1);
+  const pedidosPorPagina = 10;
+
+  // Estados de carga para operaciones
+  const [aprobandoPedido, setAprobandoPedido] = useState(null); // ID del pedido que se está aprobando
+  const [registrandoAbono, setRegistrandoAbono] = useState(false);
+  const [alistandoProducto, setAlistandoProducto] = useState(false);
+  const [enviandoProductos, setEnviandoProductos] = useState(false);
 
   useEffect(() => {
     fetchPedidos();
@@ -114,6 +129,81 @@ const PedidosB2B = () => {
     }
   };
 
+  // Filtrar pedidos según los criterios seleccionados
+  const pedidosFiltrados = pedidos.filter(pedido => {
+    // Filtro por búsqueda (número de pedido o cliente)
+    if (busquedaPedido.trim()) {
+      const busqueda = busquedaPedido.toLowerCase().trim();
+      const numeroPedido = String(pedido.numeroPedido || '').padStart(4, '0');
+      const clienteNombre = (pedido.clienteNombre || '').toLowerCase();
+      const codigoColegio = (pedido.codigoColegio || '').toLowerCase();
+
+      if (!numeroPedido.includes(busqueda) &&
+          !clienteNombre.includes(busqueda) &&
+          !codigoColegio.includes(busqueda)) {
+        return false;
+      }
+    }
+
+    // Filtro por estado del pedido
+    if (filtroEstado !== 'todos' && pedido.estado !== filtroEstado) {
+      return false;
+    }
+
+    // Filtro por estado de pago
+    if (filtroEstadoPago !== 'todos') {
+      const estadoPago = calcularEstadoPago(pedido.total, pedido.abonos);
+      if (estadoPago !== filtroEstadoPago) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  // Cálculos de paginación
+  const totalPaginas = Math.ceil(pedidosFiltrados.length / pedidosPorPagina);
+  const indiceInicio = (paginaActual - 1) * pedidosPorPagina;
+  const indiceFin = indiceInicio + pedidosPorPagina;
+  const pedidosPaginados = pedidosFiltrados.slice(indiceInicio, indiceFin);
+
+  // Resetear página cuando cambian los filtros
+  useEffect(() => {
+    setPaginaActual(1);
+  }, [busquedaPedido, filtroEstado, filtroEstadoPago]);
+
+  // Función auxiliar para buscar producto en inventario por ID o referencia
+  const buscarProductoEnInventario = async (productoId, codigo, talla) => {
+    // Primero intentar buscar por ID directo del documento
+    if (productoId) {
+      const productoDoc = await getDoc(doc(db, 'products', productoId));
+      if (productoDoc.exists()) {
+        const data = productoDoc.data();
+        if (data.talla === talla) {
+          return { id: productoDoc.id, ...data };
+        }
+      }
+    }
+
+    // Si no se encontró por ID, buscar por referencia (codigo)
+    if (codigo) {
+      const productosQuery = query(
+        collection(db, 'products'),
+        where('referencia', '==', codigo)
+      );
+      const productosSnapshot = await getDocs(productosQuery);
+
+      for (const docSnap of productosSnapshot.docs) {
+        const data = docSnap.data();
+        if (data.talla === talla) {
+          return { id: docSnap.id, ...data };
+        }
+      }
+    }
+
+    return null;
+  };
+
   const crearNotificacion = async (pedido, tipo, titulo, mensaje) => {
     try {
       await addDoc(collection(db, 'notificaciones_portal'), {
@@ -133,6 +223,7 @@ const PedidosB2B = () => {
   const handleAprobarPedido = async (pedido) => {
     if (!window.confirm('¿Aprobar este pedido?')) return;
 
+    setAprobandoPedido(pedido.id);
     try {
       const pedidoRef = doc(db, 'pedidos_b2b', pedido.id);
       await updateDoc(pedidoRef, {
@@ -156,6 +247,8 @@ const PedidosB2B = () => {
     } catch (error) {
       console.error('Error al aprobar pedido:', error);
       alert('Error al aprobar pedido: ' + error.message);
+    } finally {
+      setAprobandoPedido(null);
     }
   };
 
@@ -171,7 +264,11 @@ const PedidosB2B = () => {
       return;
     }
 
+    setRegistrandoAbono(true);
     try {
+      // Usar batch para operaciones atómicas
+      const batch = writeBatch(db);
+
       const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
       const nuevoAbono = {
         monto: monto,
@@ -180,16 +277,18 @@ const PedidosB2B = () => {
         notas: notasAbono.trim()
       };
 
-      await updateDoc(pedidoRef, {
+      // Calcular nuevo saldo antes del batch
+      const nuevoSaldo = calcularSaldoPendiente(selectedPedido.total, [...(selectedPedido.abonos || []), nuevoAbono]);
+
+      // 1. Actualizar pedido con el abono
+      batch.update(pedidoRef, {
         abonos: arrayUnion(nuevoAbono),
         updatedAt: serverTimestamp()
       });
 
-      // Calcular nuevo saldo
-      const nuevoSaldo = calcularSaldoPendiente(selectedPedido.total, [...(selectedPedido.abonos || []), nuevoAbono]);
-
-      // Crear registro en transacciones_b2b para contabilidad separada
-      await addDoc(collection(db, 'transacciones_b2b'), {
+      // 2. Crear registro en transacciones_b2b para contabilidad
+      const transaccionRef = doc(collection(db, 'transacciones_b2b'));
+      batch.set(transaccionRef, {
         tipo: 'abono_pedido_b2b',
         pedidoId: selectedPedido.id,
         numeroPedido: selectedPedido.numeroPedido || 0,
@@ -206,13 +305,20 @@ const PedidosB2B = () => {
         createdBy: user?.displayName || user?.email || 'Administrador'
       });
 
-      // Crear notificación para el cliente
-      await crearNotificacion(
-        selectedPedido,
-        'abono_registrado',
-        'Pago Registrado',
-        `Se ha registrado un pago de ${formatCurrency(monto)} en tu pedido #${String(selectedPedido.numeroPedido || 0).padStart(4, '0')}. Saldo pendiente: ${formatCurrency(nuevoSaldo)}`
-      );
+      // 3. Crear notificación para el cliente
+      const notificacionRef = doc(collection(db, 'notificaciones_portal'));
+      batch.set(notificacionRef, {
+        clienteId: selectedPedido.clienteId,
+        tipo: 'abono_registrado',
+        titulo: 'Pago Registrado',
+        mensaje: `Se ha registrado un pago de ${formatCurrency(monto)} en tu pedido #${String(selectedPedido.numeroPedido || 0).padStart(4, '0')}. Saldo pendiente: ${formatCurrency(nuevoSaldo)}`,
+        leida: false,
+        pedidoId: selectedPedido.id,
+        createdAt: serverTimestamp()
+      });
+
+      // Ejecutar todas las operaciones atómicamente
+      await batch.commit();
 
       alert('Abono registrado exitosamente');
       setShowAbonoModal(false);
@@ -222,6 +328,8 @@ const PedidosB2B = () => {
     } catch (error) {
       console.error('Error al registrar abono:', error);
       alert('Error al registrar abono: ' + error.message);
+    } finally {
+      setRegistrandoAbono(false);
     }
   };
 
@@ -239,97 +347,81 @@ const PedidosB2B = () => {
       return;
     }
 
+    setAlistandoProducto(true);
     try {
-      // Buscar el producto en inventario
-      // El pedido B2B puede tener:
-      // - codigo: la referencia del producto (ej: EN007ET14)
-      // - productoId: el ID del documento en Firebase
-      const codigoProducto = productoAlistar.codigo;
-      const productoIdFirebase = productoAlistar.productoId;
-
-      let productoInventario = null;
-
-      // Primero intentar buscar por ID directo del documento (productoId)
-      if (productoIdFirebase) {
-        const productoDoc = await getDoc(doc(db, 'products', productoIdFirebase));
-        if (productoDoc.exists()) {
-          productoInventario = { id: productoDoc.id, ...productoDoc.data() };
-        }
-      }
-
-      // Si no se encontró por ID, buscar por referencia (codigo)
-      if (!productoInventario && codigoProducto) {
-        const productosQuery = query(
-          collection(db, 'products'),
-          where('referencia', '==', codigoProducto)
-        );
-        const productosSnapshot = await getDocs(productosQuery);
-
-        productosSnapshot.forEach(docSnap => {
-          const data = docSnap.data();
-          // Verificar que coincida la talla también
-          if (data.talla === productoAlistar.talla) {
-            productoInventario = { id: docSnap.id, ...data };
-          }
-        });
-      }
-
-      // Verificar stock disponible si encontramos el producto
-      if (productoInventario) {
-        const stockDisponible = (productoInventario.stockTotal || 0) -
-                               (productoInventario.stockReservadoPedidos || 0) -
-                               (productoInventario.stockReservadoApartados || 0) -
-                               (productoInventario.stockReservadoB2B || 0);
-
-        if (cantidad > stockDisponible) {
-          alert(`Stock insuficiente. Solo hay ${stockDisponible} unidades disponibles en inventario.`);
-          return;
-        }
-      }
-
-      // Usar batch para actualizar pedido B2B e inventario atómicamente
-      const batch = writeBatch(db);
+      // Primero buscar el producto para obtener su ID (fuera de la transacción)
+      const productoInventarioInicial = await buscarProductoEnInventario(
+        productoAlistar.productoId,
+        productoAlistar.codigo,
+        productoAlistar.talla
+      );
 
       const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
+      const productRef = productoInventarioInicial
+        ? doc(db, 'products', productoInventarioInicial.id)
+        : null;
 
-      // Actualizar el producto específico en el pedido B2B
-      const productosActualizados = selectedPedido.productos.map((p, idx) => {
-        if (idx === productoAlistar.index) {
-          const nuevaCantidadAlistada = (p.cantidadAlistada || 0) + cantidad;
-          return {
-            ...p,
-            cantidadAlistada: nuevaCantidadAlistada,
-            estadoProduccion: nuevaCantidadAlistada >= p.cantidad ? 'alistado' : 'pendiente',
-            fechaAlistado: new Date()
-          };
+      // Usar transacción para garantizar consistencia del stock
+      const resultado = await runTransaction(db, async (transaction) => {
+        // Si hay producto en inventario, leer datos frescos dentro de la transacción
+        let productoInventario = null;
+        if (productRef) {
+          const productoDoc = await transaction.get(productRef);
+          if (productoDoc.exists()) {
+            productoInventario = { id: productoDoc.id, ...productoDoc.data() };
+          }
         }
-        return p;
-      });
 
-      batch.update(pedidoRef, {
-        productos: productosActualizados,
-        updatedAt: serverTimestamp()
-      });
+        // Verificar stock disponible con datos frescos
+        if (productoInventario) {
+          const stockDisponible = (productoInventario.stockTotal || 0) -
+                                 (productoInventario.stockReservadoPedidos || 0) -
+                                 (productoInventario.stockReservadoApartados || 0) -
+                                 (productoInventario.stockReservadoB2B || 0);
 
-      // Si encontramos el producto en inventario, incrementar stockReservadoB2B
-      if (productoInventario) {
-        const productRef = doc(db, 'products', productoInventario.id);
-        batch.update(productRef, {
-          stockReservadoB2B: increment(cantidad),
+          if (cantidad > stockDisponible) {
+            throw new Error(`Stock insuficiente. Solo hay ${stockDisponible} unidades disponibles en inventario.`);
+          }
+        }
+
+        // Preparar actualización de productos del pedido B2B
+        const productosActualizados = selectedPedido.productos.map((p, idx) => {
+          if (idx === productoAlistar.index) {
+            const nuevaCantidadAlistada = (p.cantidadAlistada || 0) + cantidad;
+            return {
+              ...p,
+              cantidadAlistada: nuevaCantidadAlistada,
+              estadoProduccion: nuevaCantidadAlistada >= p.cantidad ? 'alistado' : 'pendiente',
+              fechaAlistado: new Date()
+            };
+          }
+          return p;
+        });
+
+        // Actualizar pedido B2B
+        transaction.update(pedidoRef, {
+          productos: productosActualizados,
           updatedAt: serverTimestamp()
         });
-      }
 
-      // Ejecutar batch
-      await batch.commit();
+        // Si hay producto en inventario, incrementar stockReservadoB2B
+        if (productoInventario && productRef) {
+          transaction.update(productRef, {
+            stockReservadoB2B: increment(cantidad),
+            updatedAt: serverTimestamp()
+          });
+        }
+
+        return { productosActualizados, tieneInventario: !!productoInventario };
+      });
 
       // Actualizar selectedPedido localmente para reflejar cambios inmediatamente en el modal
       setSelectedPedido({
         ...selectedPedido,
-        productos: productosActualizados
+        productos: resultado.productosActualizados
       });
 
-      const mensajeInventario = productoInventario
+      const mensajeInventario = resultado.tieneInventario
         ? ` (${cantidad} unidades reservadas del inventario)`
         : ' (producto no encontrado en inventario)';
 
@@ -341,6 +433,8 @@ const PedidosB2B = () => {
     } catch (error) {
       console.error('Error al alistar producto:', error);
       alert('Error al alistar producto: ' + error.message);
+    } finally {
+      setAlistandoProducto(false);
     }
   };
 
@@ -373,6 +467,7 @@ const PedidosB2B = () => {
 
     if (!window.confirm(mensaje)) return;
 
+    setEnviandoProductos(true);
     try {
       const batch = writeBatch(db);
       const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
@@ -409,35 +504,12 @@ const PedidosB2B = () => {
 
       // Actualizar inventario: decrementar stockReservadoB2B y stockTotal
       for (const producto of productosParaEnviar) {
-        let productoEncontrado = null;
-
-        // Primero intentar buscar por ID directo del documento (productoId) - usado en B2B
-        if (producto.productoId) {
-          const productoDoc = await getDoc(doc(db, 'products', producto.productoId));
-          if (productoDoc.exists()) {
-            const data = productoDoc.data();
-            // Verificar que la talla coincida
-            if (data.talla === producto.talla) {
-              productoEncontrado = { id: productoDoc.id, ...data };
-            }
-          }
-        }
-
-        // Si no se encontró por ID, buscar por referencia (codigo)
-        if (!productoEncontrado && producto.codigo) {
-          const productosQuery = query(
-            collection(db, 'products'),
-            where('referencia', '==', producto.codigo)
-          );
-          const productosSnapshot = await getDocs(productosQuery);
-
-          productosSnapshot.forEach(docSnap => {
-            const data = docSnap.data();
-            if (data.talla === producto.talla) {
-              productoEncontrado = { id: docSnap.id, ...data };
-            }
-          });
-        }
+        // Buscar producto usando la función auxiliar
+        const productoEncontrado = await buscarProductoEnInventario(
+          producto.productoId,
+          producto.codigo,
+          producto.talla
+        );
 
         // Si encontramos el producto, actualizar inventario
         if (productoEncontrado) {
@@ -480,6 +552,8 @@ const PedidosB2B = () => {
     } catch (error) {
       console.error('Error al enviar productos:', error);
       alert('Error al enviar productos: ' + error.message);
+    } finally {
+      setEnviandoProductos(false);
     }
   };
 
@@ -962,7 +1036,10 @@ const PedidosB2B = () => {
               <span>Pedidos B2B</span>
             </h1>
             <p className="text-sm md:text-base text-gray-600">
-              {pedidos.length} {pedidos.length === 1 ? 'pedido registrado' : 'pedidos registrados'}
+              {pedidosFiltrados.length === pedidos.length
+                ? `${pedidos.length} ${pedidos.length === 1 ? 'pedido registrado' : 'pedidos registrados'}`
+                : `${pedidosFiltrados.length} de ${pedidos.length} pedidos`
+              }
             </p>
           </div>
           <button
@@ -974,15 +1051,95 @@ const PedidosB2B = () => {
             <span>Crear Pedido desde Tienda</span>
           </button>
         </div>
+
+        {/* Filtros */}
+        <div className="mt-4 pt-4 border-t border-gray-200">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            {/* Búsqueda */}
+            <div className="md:col-span-2">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+                <input
+                  type="text"
+                  value={busquedaPedido}
+                  onChange={(e) => setBusquedaPedido(e.target.value)}
+                  placeholder="Buscar por # pedido, cliente o colegio..."
+                  className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                />
+              </div>
+            </div>
+
+            {/* Filtro por Estado */}
+            <div>
+              <select
+                value={filtroEstado}
+                onChange={(e) => setFiltroEstado(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              >
+                <option value="todos">Todos los estados</option>
+                <option value="Pendiente">Pendiente</option>
+                <option value="En Preparación">En Preparación</option>
+                <option value="Enviado Parcial">Enviado Parcial</option>
+                <option value="Enviado">Enviado</option>
+                <option value="Entregado">Entregado</option>
+              </select>
+            </div>
+
+            {/* Filtro por Estado de Pago */}
+            <div>
+              <select
+                value={filtroEstadoPago}
+                onChange={(e) => setFiltroEstadoPago(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+              >
+                <option value="todos">Todos los pagos</option>
+                <option value="Sin Pagar">Sin Pagar</option>
+                <option value="Pago Parcial">Pago Parcial</option>
+                <option value="Pagado">Pagado</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Botón limpiar filtros */}
+          {(busquedaPedido || filtroEstado !== 'todos' || filtroEstadoPago !== 'todos') && (
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={() => {
+                  setBusquedaPedido('');
+                  setFiltroEstado('todos');
+                  setFiltroEstadoPago('todos');
+                }}
+                className="text-sm text-gray-500 hover:text-gray-700 underline"
+              >
+                Limpiar filtros
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Lista de Pedidos */}
-      {pedidos.length === 0 ? (
+      {pedidosFiltrados.length === 0 ? (
         <div className="bg-white rounded-lg shadow-md p-12 text-center">
           <Package size={48} className="md:w-16 md:h-16 mx-auto text-gray-300 mb-4" />
           <h3 className="text-base md:text-lg font-semibold text-gray-700 mb-2">
-            No hay pedidos B2B registrados
+            {pedidos.length === 0
+              ? 'No hay pedidos B2B registrados'
+              : 'No se encontraron pedidos con los filtros aplicados'
+            }
           </h3>
+          {pedidos.length > 0 && (
+            <button
+              onClick={() => {
+                setBusquedaPedido('');
+                setFiltroEstado('todos');
+                setFiltroEstadoPago('todos');
+              }}
+              className="mt-3 text-sm text-pink-600 hover:text-pink-800 underline"
+            >
+              Limpiar filtros
+            </button>
+          )}
         </div>
       ) : (
         <>
@@ -1022,7 +1179,7 @@ const PedidosB2B = () => {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {pedidos.map((pedido) => {
+                  {pedidosPaginados.map((pedido) => {
                     const totalAbonado = calcularTotalAbonado(pedido.abonos);
                     const saldoPendiente = calcularSaldoPendiente(pedido.total, pedido.abonos);
                     const estadoPago = calcularEstadoPago(pedido.total, pedido.abonos);
@@ -1099,10 +1256,15 @@ const PedidosB2B = () => {
                             {pedido.estado === 'Pendiente' && !pedido.aprobado && (
                               <button
                                 onClick={() => handleAprobarPedido(pedido)}
-                                className="text-purple-600 hover:text-purple-900"
+                                disabled={aprobandoPedido === pedido.id}
+                                className="text-purple-600 hover:text-purple-900 disabled:opacity-50 disabled:cursor-not-allowed"
                                 title="Aprobar pedido"
                               >
-                                <CheckCircle size={18} />
+                                {aprobandoPedido === pedido.id ? (
+                                  <Loader2 size={18} className="animate-spin" />
+                                ) : (
+                                  <CheckCircle size={18} />
+                                )}
                               </button>
                             )}
                           </div>
@@ -1117,7 +1279,7 @@ const PedidosB2B = () => {
 
           {/* Vista Mobile/Tablet - Cards */}
           <div className="lg:hidden space-y-4">
-            {pedidos.map((pedido) => {
+            {pedidosPaginados.map((pedido) => {
               const totalAbonado = calcularTotalAbonado(pedido.abonos);
               const saldoPendiente = calcularSaldoPendiente(pedido.total, pedido.abonos);
               const estadoPago = calcularEstadoPago(pedido.total, pedido.abonos);
@@ -1211,10 +1373,15 @@ const PedidosB2B = () => {
                     {pedido.estado === 'Pendiente' && !pedido.aprobado && (
                       <button
                         onClick={() => handleAprobarPedido(pedido)}
-                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                        disabled={aprobandoPedido === pedido.id}
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <CheckCircle size={16} />
-                        Aprobar Pedido
+                        {aprobandoPedido === pedido.id ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <CheckCircle size={16} />
+                        )}
+                        {aprobandoPedido === pedido.id ? 'Aprobando...' : 'Aprobar Pedido'}
                       </button>
                     )}
                   </div>
@@ -1222,6 +1389,48 @@ const PedidosB2B = () => {
               );
             })}
           </div>
+
+          {/* Controles de Paginación */}
+          {totalPaginas > 1 && (
+            <div className="bg-white rounded-lg shadow-md p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="text-sm text-gray-600">
+                Mostrando {indiceInicio + 1}-{Math.min(indiceFin, pedidosFiltrados.length)} de {pedidosFiltrados.length} pedidos
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPaginaActual(1)}
+                  disabled={paginaActual === 1}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Primera
+                </button>
+                <button
+                  onClick={() => setPaginaActual(paginaActual - 1)}
+                  disabled={paginaActual === 1}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Anterior
+                </button>
+                <span className="px-3 py-1 text-sm font-medium">
+                  Página {paginaActual} de {totalPaginas}
+                </span>
+                <button
+                  onClick={() => setPaginaActual(paginaActual + 1)}
+                  disabled={paginaActual === totalPaginas}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Siguiente
+                </button>
+                <button
+                  onClick={() => setPaginaActual(totalPaginas)}
+                  disabled={paginaActual === totalPaginas}
+                  className="px-3 py-1 text-sm border border-gray-300 rounded-lg hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Última
+                </button>
+              </div>
+            </div>
+          )}
         </>
       )}
 
@@ -1272,11 +1481,16 @@ const PedidosB2B = () => {
                     return (
                       <button
                         onClick={handleEnviarProductosAlistados}
-                        className="flex items-center gap-2 px-4 py-2 text-sm text-white rounded-lg hover:opacity-90 transition-colors"
+                        disabled={enviandoProductos}
+                        className="flex items-center gap-2 px-4 py-2 text-sm text-white rounded-lg hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         style={{ backgroundColor: '#D50565' }}
                       >
-                        <Truck size={16} />
-                        {textoBoton}
+                        {enviandoProductos ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Truck size={16} />
+                        )}
+                        {enviandoProductos ? 'Enviando...' : textoBoton}
                       </button>
                     );
                   })()}
@@ -1500,10 +1714,12 @@ const PedidosB2B = () => {
                 </button>
                 <button
                   onClick={handleRegistrarAbono}
-                  className="w-full sm:flex-1 px-4 py-2 text-sm md:text-base text-white rounded-lg hover:opacity-90"
+                  disabled={registrandoAbono}
+                  className="w-full sm:flex-1 px-4 py-2 text-sm md:text-base text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   style={{ backgroundColor: '#D50565' }}
                 >
-                  Registrar Abono
+                  {registrandoAbono && <Loader2 size={18} className="animate-spin" />}
+                  {registrandoAbono ? 'Registrando...' : 'Registrar Abono'}
                 </button>
               </div>
             </div>
@@ -1601,9 +1817,11 @@ const PedidosB2B = () => {
                 </button>
                 <button
                   onClick={handleAlistarProducto}
-                  className="w-full sm:flex-1 px-4 py-2 text-sm md:text-base bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  disabled={alistandoProducto}
+                  className="w-full sm:flex-1 px-4 py-2 text-sm md:text-base bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  Confirmar Alistado
+                  {alistandoProducto && <Loader2 size={18} className="animate-spin" />}
+                  {alistandoProducto ? 'Alistando...' : 'Confirmar Alistado'}
                 </button>
               </div>
             </div>

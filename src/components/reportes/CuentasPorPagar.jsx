@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react';
 import { db } from '../../services/firebase';
 import { collection, getDocs, query, where, writeBatch, doc, serverTimestamp, getDoc, increment } from 'firebase/firestore';
-import { ChevronDown, ChevronUp, CheckCircle, XCircle } from 'lucide-react';
+import { ChevronDown, ChevronUp, CheckCircle, XCircle, History, Clock } from 'lucide-react';
 
 const CuentasPorPagar = () => {
   const [satelites, setSatelites] = useState([]);
   const [cuentasPorSatelite, setCuentasPorSatelite] = useState([]);
+  const [historialPorSatelite, setHistorialPorSatelite] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expandedSatelite, setExpandedSatelite] = useState(null);
+  const [expandedHistorial, setExpandedHistorial] = useState(null);
   const [processingPayment, setProcessingPayment] = useState(false);
   const [processingAnulacion, setProcessingAnulacion] = useState(false);
+  const [activeTab, setActiveTab] = useState('pendientes'); // 'pendientes' o 'historial'
 
   useEffect(() => {
     fetchCuentasPorPagar();
@@ -26,26 +29,27 @@ const CuentasPorPagar = () => {
       }));
       setSatelites(satelitesData);
 
-      // 2. Obtener todas las entradas de satélite NO PAGADAS y NO ANULADAS
-      const q = query(
+      // 2. Obtener TODAS las entradas de satélite (pagadas y no pagadas)
+      const qTodas = query(
         collection(db, 'stockEntries'),
-        where('tipoEntrada', '==', 'satelite'),
-        where('pagado', '==', false)
+        where('tipoEntrada', '==', 'satelite')
       );
-      const entradasSnapshot = await getDocs(q);
-      const entradas = entradasSnapshot.docs
+      const todasEntradasSnapshot = await getDocs(qTodas);
+      const todasEntradas = todasEntradasSnapshot.docs
         .map(doc => ({
           id: doc.id,
           ...doc.data()
         }))
         .filter(entrada => !entrada.anulada); // Excluir entradas anuladas
 
-      // 3. Agrupar por satélite y calcular totales
+      // 3. Separar entradas pendientes y pagadas
+      const entradasPendientes = todasEntradas.filter(e => e.pagado === false || e.pagado === undefined);
+      const entradasPagadas = todasEntradas.filter(e => e.pagado === true);
+
+      // 4. Agrupar PENDIENTES por satélite
       const cuentasMap = new Map();
-
-      entradas.forEach(entrada => {
+      entradasPendientes.forEach(entrada => {
         const sateliteId = entrada.sateliteId;
-
         if (!cuentasMap.has(sateliteId)) {
           cuentasMap.set(sateliteId, {
             sateliteId: sateliteId,
@@ -53,7 +57,6 @@ const CuentasPorPagar = () => {
             totalAdeudado: 0
           });
         }
-
         const cuenta = cuentasMap.get(sateliteId);
         cuenta.entradas.push(entrada);
         cuenta.totalAdeudado += entrada.costoTotal || 0;
@@ -64,11 +67,11 @@ const CuentasPorPagar = () => {
         cuenta.entradas.sort((a, b) => {
           const fechaA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
           const fechaB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
-          return fechaB - fechaA; // Descendente (más reciente primero)
+          return fechaB - fechaA;
         });
       });
 
-      // 4. Convertir a array y agregar información del satélite
+      // 5. Convertir a array y agregar información del satélite
       const cuentasArray = Array.from(cuentasMap.values()).map(cuenta => {
         const satelite = satelitesData.find(s => s.id === cuenta.sateliteId);
         return {
@@ -77,11 +80,60 @@ const CuentasPorPagar = () => {
           sateliteCodigo: satelite?.codigo || 'N/A'
         };
       });
-
-      // 5. Ordenar por monto adeudado (mayor a menor)
       cuentasArray.sort((a, b) => b.totalAdeudado - a.totalAdeudado);
-
       setCuentasPorSatelite(cuentasArray);
+
+      // 6. Agrupar HISTORIAL (pagadas) por satélite - TODOS los satélites
+      const historialMap = new Map();
+
+      // Inicializar todos los satélites en el historial
+      satelitesData.forEach(sat => {
+        historialMap.set(sat.id, {
+          sateliteId: sat.id,
+          sateliteNombre: sat.nombre || 'Sin nombre',
+          sateliteCodigo: sat.codigo || 'N/A',
+          entradasPagadas: [],
+          totalPagado: 0,
+          entradasPendientesCount: 0,
+          totalPendiente: 0
+        });
+      });
+
+      // Agregar entradas pagadas
+      entradasPagadas.forEach(entrada => {
+        const sateliteId = entrada.sateliteId;
+        if (historialMap.has(sateliteId)) {
+          const historial = historialMap.get(sateliteId);
+          historial.entradasPagadas.push(entrada);
+          historial.totalPagado += entrada.costoTotal || 0;
+        }
+      });
+
+      // Agregar conteo de pendientes
+      entradasPendientes.forEach(entrada => {
+        const sateliteId = entrada.sateliteId;
+        if (historialMap.has(sateliteId)) {
+          const historial = historialMap.get(sateliteId);
+          historial.entradasPendientesCount += 1;
+          historial.totalPendiente += entrada.costoTotal || 0;
+        }
+      });
+
+      // Ordenar entradas pagadas por fecha de pago (más reciente primero)
+      historialMap.forEach(historial => {
+        historial.entradasPagadas.sort((a, b) => {
+          const fechaA = a.fechaPago?.toDate ? a.fechaPago.toDate() : (a.createdAt?.toDate ? a.createdAt.toDate() : new Date(0));
+          const fechaB = b.fechaPago?.toDate ? b.fechaPago.toDate() : (b.createdAt?.toDate ? b.createdAt.toDate() : new Date(0));
+          return fechaB - fechaA;
+        });
+      });
+
+      // Convertir a array y ordenar por nombre
+      const historialArray = Array.from(historialMap.values())
+        .sort((a, b) => a.sateliteNombre.localeCompare(b.sateliteNombre));
+
+      setHistorialPorSatelite(historialArray);
+
     } catch (error) {
       console.error('Error al cargar cuentas por pagar:', error);
       alert('Error al cargar las cuentas por pagar.');
@@ -95,6 +147,14 @@ const CuentasPorPagar = () => {
       setExpandedSatelite(null);
     } else {
       setExpandedSatelite(sateliteId);
+    }
+  };
+
+  const toggleExpandHistorial = (sateliteId) => {
+    if (expandedHistorial === sateliteId) {
+      setExpandedHistorial(null);
+    } else {
+      setExpandedHistorial(sateliteId);
     }
   };
 
@@ -358,6 +418,8 @@ ${entrada.asignaciones.map(asig =>
     );
   }
 
+  const totalHistorialPagado = historialPorSatelite.reduce((sum, h) => sum + h.totalPagado, 0);
+
   return (
     <div>
       <div className="mb-6">
@@ -365,22 +427,67 @@ ${entrada.asignaciones.map(asig =>
         <p className="text-gray-600 mt-1">Gestiona los pagos pendientes a talleres satélite.</p>
       </div>
 
-      {/* Resumen General */}
-      <div className="bg-gradient-to-r from-pink-500 to-pink-600 rounded-lg shadow-lg p-6 mb-6 text-white">
-        <div className="flex justify-between items-center">
-          <div>
-            <p className="text-pink-100 text-sm">Total Adeudado a Satélites</p>
-            <p className="text-3xl font-bold mt-1">{formatCurrency(totalGeneral)}</p>
-          </div>
-          <div className="text-right">
-            <p className="text-pink-100 text-sm">Satélites con Saldo Pendiente</p>
-            <p className="text-3xl font-bold mt-1">{cuentasPorSatelite.length}</p>
-          </div>
-        </div>
+      {/* Pestañas */}
+      <div className="flex gap-2 mb-6">
+        <button
+          onClick={() => setActiveTab('pendientes')}
+          className={`px-6 py-3 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+            activeTab === 'pendientes'
+              ? 'bg-pink-600 text-white'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          <Clock size={18} />
+          Pendientes ({cuentasPorSatelite.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('historial')}
+          className={`px-6 py-3 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+            activeTab === 'historial'
+              ? 'bg-green-600 text-white'
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          <History size={18} />
+          Historial ({historialPorSatelite.length} satélites)
+        </button>
       </div>
 
-      {/* Lista de Cuentas por Satélite */}
-      {cuentasPorSatelite.length === 0 ? (
+      {/* Resumen General - Solo en pestaña Pendientes */}
+      {activeTab === 'pendientes' && (
+        <div className="bg-gradient-to-r from-pink-500 to-pink-600 rounded-lg shadow-lg p-6 mb-6 text-white">
+          <div className="flex justify-between items-center">
+            <div>
+              <p className="text-pink-100 text-sm">Total Adeudado a Satélites</p>
+              <p className="text-3xl font-bold mt-1">{formatCurrency(totalGeneral)}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-pink-100 text-sm">Satélites con Saldo Pendiente</p>
+              <p className="text-3xl font-bold mt-1">{cuentasPorSatelite.length}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resumen Historial - Solo en pestaña Historial */}
+      {activeTab === 'historial' && (
+        <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-lg shadow-lg p-6 mb-6 text-white">
+          <div className="flex justify-between items-center">
+            <div>
+              <p className="text-green-100 text-sm">Total Pagado a Satélites</p>
+              <p className="text-3xl font-bold mt-1">{formatCurrency(totalHistorialPagado)}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-green-100 text-sm">Total de Satélites</p>
+              <p className="text-3xl font-bold mt-1">{historialPorSatelite.length}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lista de Cuentas por Satélite - Pendientes */}
+      {activeTab === 'pendientes' && (
+        cuentasPorSatelite.length === 0 ? (
         <div className="bg-white rounded-lg shadow-md p-8 text-center">
           <CheckCircle size={48} className="mx-auto text-green-500 mb-4" />
           <h3 className="text-xl font-semibold text-gray-800 mb-2">¡No hay cuentas pendientes!</h3>
@@ -500,6 +607,117 @@ ${entrada.asignaciones.map(asig =>
                       {processingPayment ? 'Procesando...' : 'Marcar como Pagado'}
                     </button>
                   </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )
+      )}
+
+      {/* Lista de Historial por Satélite */}
+      {activeTab === 'historial' && (
+        <div className="space-y-4">
+          {historialPorSatelite.map((historial) => (
+            <div key={historial.sateliteId} className="bg-white rounded-lg shadow-md overflow-hidden">
+              {/* Header - Resumen del Satélite */}
+              <div
+                onClick={() => toggleExpandHistorial(historial.sateliteId)}
+                className="flex justify-between items-center p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold text-gray-800">
+                    {historial.sateliteNombre}
+                  </h3>
+                  <p className="text-sm text-gray-500">Código: {historial.sateliteCodigo}</p>
+                </div>
+                <div className="flex items-center gap-6">
+                  {/* Total Pagado */}
+                  <div className="text-right">
+                    <p className="text-xs text-gray-500">Total Pagado</p>
+                    <p className="text-lg font-bold text-green-600">
+                      {formatCurrency(historial.totalPagado)}
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      {historial.entradasPagadas.length} entrada(s)
+                    </p>
+                  </div>
+                  {expandedHistorial === historial.sateliteId ? (
+                    <ChevronUp className="text-gray-400" />
+                  ) : (
+                    <ChevronDown className="text-gray-400" />
+                  )}
+                </div>
+              </div>
+
+              {/* Detalle de Entradas Pagadas (Expandible) */}
+              {expandedHistorial === historial.sateliteId && (
+                <div className="border-t border-gray-200 p-4 bg-gray-50">
+                  <h4 className="font-medium text-gray-700 mb-3">Historial de Pagos</h4>
+
+                  {historial.entradasPagadas.length === 0 ? (
+                    <p className="text-gray-500 text-center py-4">No hay pagos registrados para este satélite.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full bg-white rounded-lg overflow-hidden">
+                        <thead className="bg-gray-100">
+                          <tr>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">Fecha Entrada</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">Fecha Pago</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">Producto</th>
+                            <th className="px-4 py-2 text-right text-xs font-medium text-gray-600">Cantidad</th>
+                            <th className="px-4 py-2 text-right text-xs font-medium text-gray-600">Total</th>
+                            <th className="px-4 py-2 text-center text-xs font-medium text-gray-600">Método</th>
+                            <th className="px-4 py-2 text-center text-xs font-medium text-gray-600">Origen</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {historial.entradasPagadas.map((entrada) => (
+                            <tr key={entrada.id} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 text-sm text-gray-700">
+                                {formatDate(entrada.createdAt)}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-green-600 font-medium">
+                                {formatDate(entrada.fechaPago)}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-900">
+                                {entrada.nombre || entrada.referencia || 'N/A'}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-700 text-right">
+                                {entrada.cantidad}
+                              </td>
+                              <td className="px-4 py-3 text-sm font-semibold text-green-700 text-right">
+                                {formatCurrency(entrada.costoTotal || 0)}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-600 text-center">
+                                {entrada.metodoPago || 'N/A'}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-center">
+                                <span className={`px-2 py-1 rounded-full text-xs ${
+                                  entrada.origenDinero === 'Caja'
+                                    ? 'bg-blue-100 text-blue-700'
+                                    : 'bg-purple-100 text-purple-700'
+                                }`}>
+                                  {entrada.origenDinero || 'N/A'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot className="bg-green-50">
+                          <tr>
+                            <td colSpan="4" className="px-4 py-3 text-sm font-semibold text-gray-800 text-right">
+                              Total Pagado:
+                            </td>
+                            <td className="px-4 py-3 text-sm font-bold text-green-700 text-right">
+                              {formatCurrency(historial.totalPagado)}
+                            </td>
+                            <td colSpan="2"></td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -135,6 +135,11 @@ const Pedidos = () => {
   const [notasCambioEstado, setNotasCambioEstado] = useState('');
   const [cambiandoCantidadLista, setCambiandoCantidadLista] = useState(false);
 
+  // Estados para anular pedido completo
+  const [showAnularPedidoModal, setShowAnularPedidoModal] = useState(false);
+  const [motivoAnularPedido, setMotivoAnularPedido] = useState('');
+  const [anulandoPedido, setAnulandoPedido] = useState(false);
+
   // Cargar datos al iniciar
   useEffect(() => {
     fetchClients();
@@ -822,23 +827,35 @@ const Pedidos = () => {
     const abonoNuevo = Number(nuevoAbono) || 0;
     const totalAbonado = selectedPedido.totalAbonado || 0;
 
-    // VALIDACIÓN: Si se mostró el formulario de abono, verificar que ingresaron un monto válido
+    // VALIDACIÓN OBLIGATORIA: El cliente debe pagar al menos el valor de los productos que se lleva
+    // Si el total abonado (previo + nuevo) es menor al valor de entrega, NO se puede entregar
     if (showAbonoForm) {
       const saldoRequerido = valorDeEntrega - totalAbonado;
 
       if (abonoNuevo <= 0) {
-        alert(`⚠️ Debes ingresar el abono para continuar.\n\nSaldo mínimo requerido: $${saldoRequerido.toLocaleString('es-CO')}`);
+        alert(
+          `⚠️ ABONO REQUERIDO\n\n` +
+          `El cliente ha abonado: $${totalAbonado.toLocaleString('es-CO')}\n` +
+          `Valor de productos a entregar: $${valorDeEntrega.toLocaleString('es-CO')}\n\n` +
+          `Debe abonar mínimo: $${saldoRequerido.toLocaleString('es-CO')}\n\n` +
+          `No se puede entregar sin recibir el pago.`
+        );
         return;
       }
 
-      if (abonoNuevo < saldoRequerido) {
-        const faltante = saldoRequerido - abonoNuevo;
-        const confirmar = window.confirm(
-          `⚠️ El abono ingresado ($${abonoNuevo.toLocaleString('es-CO')}) es menor al saldo requerido ($${saldoRequerido.toLocaleString('es-CO')}).\n\n` +
-          `Faltarían: $${faltante.toLocaleString('es-CO')}\n\n` +
-          `¿Deseas continuar de todos modos? (El cliente quedará debiendo)`
+      const totalDespuesDeAbono = totalAbonado + abonoNuevo;
+      if (totalDespuesDeAbono < valorDeEntrega) {
+        const faltante = valorDeEntrega - totalDespuesDeAbono;
+        alert(
+          `⚠️ ABONO INSUFICIENTE\n\n` +
+          `El cliente ha abonado previamente: $${totalAbonado.toLocaleString('es-CO')}\n` +
+          `Abono ingresado ahora: $${abonoNuevo.toLocaleString('es-CO')}\n` +
+          `Total abonado: $${totalDespuesDeAbono.toLocaleString('es-CO')}\n\n` +
+          `Valor de productos a entregar: $${valorDeEntrega.toLocaleString('es-CO')}\n\n` +
+          `Faltan: $${faltante.toLocaleString('es-CO')}\n\n` +
+          `El cliente debe completar el pago de los productos que se lleva.`
         );
-        if (!confirmar) return;
+        return;
       }
     }
 
@@ -1438,7 +1455,7 @@ const Pedidos = () => {
       // Actualizar pedido con total y saldo recalculados
       batch.update(pedidoRef, {
         items: updatedItems,
-        totalPedido: nuevoTotal,
+        total: nuevoTotal,
         saldoPendiente: nuevoSaldoPendiente,
         updatedAt: serverTimestamp()
       });
@@ -1553,7 +1570,7 @@ const Pedidos = () => {
       // Actualizar pedido
       batch.update(pedidoRef, {
         items: updatedItems,
-        totalPedido: nuevoTotal,
+        total: nuevoTotal,
         updatedAt: serverTimestamp()
       });
 
@@ -2010,6 +2027,142 @@ const Pedidos = () => {
     }
   };
 
+  // ===== ANULAR PEDIDO COMPLETO =====
+  const handleOpenAnularPedido = () => {
+    setShowAnularPedidoModal(true);
+    setMotivoAnularPedido('');
+  };
+
+  const handleCloseAnularPedido = () => {
+    setShowAnularPedidoModal(false);
+    setMotivoAnularPedido('');
+  };
+
+  const handleAnularPedidoCompleto = async () => {
+    if (!selectedPedido) return;
+
+    if (!motivoAnularPedido.trim()) {
+      alert('Por favor, ingresa el motivo de la anulación.');
+      return;
+    }
+
+    // Calcular totales para el mensaje de confirmación
+    const totalAbonado = selectedPedido.totalAbonado || 0;
+    const itemsActivos = selectedPedido.items?.filter(item => !item.anulado) || [];
+
+    const confirmar = window.confirm(
+      `⚠️ ANULAR PEDIDO COMPLETO\n\n` +
+      `Pedido #${selectedPedido.numeroPedido}\n` +
+      `Cliente: ${selectedPedido.clienteNombre}\n` +
+      `Total: $${selectedPedido.total?.toLocaleString('es-CO')}\n` +
+      `Total Abonado: $${totalAbonado.toLocaleString('es-CO')}\n` +
+      `Productos: ${itemsActivos.length}\n\n` +
+      `Esta acción:\n` +
+      `• Marcará el pedido como ANULADO\n` +
+      `• Anulará todas las transacciones asociadas\n` +
+      `• Liberará el inventario reservado\n` +
+      `${totalAbonado > 0 ? `• ⚠️ IMPORTANTE: Debes devolver $${totalAbonado.toLocaleString('es-CO')} al cliente\n` : ''}` +
+      `\n¿Continuar con la anulación?`
+    );
+
+    if (!confirmar) return;
+
+    setAnulandoPedido(true);
+    try {
+      const batch = writeBatch(db);
+      const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
+
+      // 1. Marcar pedido como anulado
+      batch.update(pedidoRef, {
+        anulado: true,
+        estadoGeneral: 'Anulado',
+        fechaAnulacion: serverTimestamp(),
+        motivoAnulacion: motivoAnularPedido,
+        usuarioAnulacion: currentUser?.email || 'Admin',
+        updatedAt: serverTimestamp()
+      });
+
+      // 2. Revertir inventario de items activos
+      for (const item of itemsActivos) {
+        if (item.productoId) {
+          const productoRef = doc(db, 'products', item.productoId);
+          const updateData = {
+            totalPrendasPedidas: increment(-item.cantidad),
+            updatedAt: serverTimestamp()
+          };
+
+          // Si estaba "Listo para Entrega", también liberar stock reservado
+          if (item.estadoItem === 'Listo para Entrega' || item.estadoItem === 'Parcialmente Listo') {
+            const cantidadLista = item.cantidadLista || (item.estadoItem === 'Listo para Entrega' ? item.cantidad : 0);
+            if (cantidadLista > 0) {
+              updateData.stockReservadoPedidos = increment(-cantidadLista);
+            }
+          }
+
+          batch.update(productoRef, updateData);
+        }
+      }
+
+      // 3. Buscar y anular transacciones asociadas
+      const transQuery = query(
+        collection(db, 'transactions'),
+        where('pedidoId', '==', selectedPedido.id)
+      );
+      const transSnap = await getDocs(transQuery);
+
+      transSnap.docs.forEach(transDoc => {
+        batch.update(transDoc.ref, {
+          anulada: true,
+          fechaAnulacion: serverTimestamp(),
+          motivoAnulacion: `Pedido #${selectedPedido.numeroPedido} anulado: ${motivoAnularPedido}`
+        });
+      });
+
+      // 4. Crear registro de egreso si había abonos (para auditoría)
+      if (totalAbonado > 0) {
+        const egresoRef = doc(collection(db, 'transactions'));
+        batch.set(egresoRef, {
+          tipo: 'egreso',
+          monto: totalAbonado,
+          metodoPago: 'Devolución',
+          pedidoId: selectedPedido.id,
+          numeroPedido: selectedPedido.numeroPedido,
+          descripcion: `Devolución por anulación Pedido #${selectedPedido.numeroPedido}`,
+          motivo: motivoAnularPedido,
+          clienteId: selectedPedido.clienteId,
+          clienteNombre: selectedPedido.clienteNombre,
+          fecha: serverTimestamp(),
+          userId: currentUser?.uid
+        });
+      }
+
+      await batch.commit();
+
+      let mensaje = `✅ Pedido #${selectedPedido.numeroPedido} anulado exitosamente.\n\n`;
+      mensaje += `• Transacciones anuladas: ${transSnap.size}\n`;
+      mensaje += `• Productos liberados: ${itemsActivos.length}`;
+
+      if (totalAbonado > 0) {
+        mensaje += `\n\n⚠️ IMPORTANTE:\nDebes devolver $${totalAbonado.toLocaleString('es-CO')} al cliente.`;
+      }
+
+      alert(mensaje);
+
+      // Cerrar modales y recargar
+      handleCloseAnularPedido();
+      setShowManageModal(false);
+      setSelectedPedido(null);
+      fetchPedidos();
+      fetchProducts();
+
+    } catch (error) {
+      console.error('Error al anular pedido:', error);
+      alert('❌ Error al anular pedido: ' + error.message);
+    } finally {
+      setAnulandoPedido(false);
+    }
+  };
+
   // Imprimir tirilla desde el modal de gestión
   const handleImprimirTirillaGestion = () => {
     if (!selectedPedido) {
@@ -2196,6 +2349,8 @@ const Pedidos = () => {
         return 'bg-yellow-100 text-yellow-800';
       case 'Entregado':
         return 'bg-green-100 text-green-800';
+      case 'Anulado':
+        return 'bg-red-100 text-red-800';
       default:
         return 'bg-gray-100 text-gray-800';
     }
@@ -2292,6 +2447,14 @@ const Pedidos = () => {
           >
             Entregado
           </button>
+          <button
+            onClick={() => setFilterEstado('Anulado')}
+            className={`px-3 sm:px-4 py-2 text-sm sm:text-base rounded-lg font-medium transition-colors ${
+              filterEstado === 'Anulado' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-700 hover:bg-red-100'
+            }`}
+          >
+            Anulados
+          </button>
         </div>
       </div>
 
@@ -2319,11 +2482,11 @@ const Pedidos = () => {
             {/* Vista de Tarjetas - Solo Móvil */}
             <div className="md:hidden space-y-4">
               {pedidosPaginados.map((pedido) => (
-                <div key={pedido.id} className="bg-white border rounded-lg p-4 shadow-sm">
+                <div key={pedido.id} className={`bg-white border rounded-lg p-4 shadow-sm ${pedido.anulado ? 'opacity-60 border-red-300' : ''}`}>
                   {/* Header de la tarjeta */}
                   <div className="flex justify-between items-start mb-3">
                     <div>
-                      <span className="font-mono font-bold text-lg text-gray-800">
+                      <span className={`font-mono font-bold text-lg ${pedido.anulado ? 'text-red-600 line-through' : 'text-gray-800'}`}>
                         #{String(pedido.numeroPedido).padStart(4, '0')}
                       </span>
                       <p className="font-medium text-gray-900 mt-1">{pedido.clienteNombre}</p>
@@ -2398,14 +2561,17 @@ const Pedidos = () => {
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {pedidosPaginados.map((pedido) => (
-                    <tr key={pedido.id} className="hover:bg-gray-50">
+                    <tr key={pedido.id} className={`hover:bg-gray-50 ${pedido.anulado ? 'bg-red-50 opacity-70' : ''}`}>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="font-mono font-bold text-gray-800">
+                        <span className={`font-mono font-bold ${pedido.anulado ? 'text-red-600 line-through' : 'text-gray-800'}`}>
                           #{String(pedido.numeroPedido).padStart(4, '0')}
                         </span>
+                        {pedido.anulado && (
+                          <span className="ml-2 px-2 py-0.5 text-xs bg-red-100 text-red-800 rounded">ANULADO</span>
+                        )}
                       </td>
                       <td className="px-6 py-4">
-                        <p className="font-medium text-gray-800">{pedido.clienteNombre}</p>
+                        <p className={`font-medium ${pedido.anulado ? 'text-gray-500 line-through' : 'text-gray-800'}`}>{pedido.clienteNombre}</p>
                         {pedido.colegioNombre && (
                           <p className="text-sm text-gray-600">{pedido.colegioNombre}</p>
                         )}
@@ -2814,6 +2980,17 @@ const Pedidos = () => {
                     </svg>
                     Imprimir Tirilla
                   </button>
+                  {isAdmin && selectedPedido.estadoGeneral !== 'Anulado' && (
+                    <button
+                      onClick={handleOpenAnularPedido}
+                      className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center gap-2"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                      </svg>
+                      Anular Pedido
+                    </button>
+                  )}
                   <button
                     onClick={() => setShowManageModal(false)}
                     className="text-gray-500 hover:text-gray-700"
@@ -4339,6 +4516,73 @@ const Pedidos = () => {
               <button
                 onClick={handleCloseCambiarCantidadLista}
                 disabled={cambiandoCantidadLista}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Anular Pedido Completo */}
+      {showAnularPedidoModal && selectedPedido && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <h3 className="text-xl font-bold text-red-600 mb-4">
+              ⚠️ Anular Pedido #{String(selectedPedido.numeroPedido).padStart(4, '0')}
+            </h3>
+
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+              <p className="text-sm text-red-800 mb-2">
+                <strong>Cliente:</strong> {selectedPedido.clienteNombre}
+              </p>
+              <p className="text-sm text-red-800 mb-2">
+                <strong>Total:</strong> ${selectedPedido.total?.toLocaleString('es-CO')}
+              </p>
+              <p className="text-sm text-red-800">
+                <strong>Abonado:</strong> ${(selectedPedido.totalAbonado || 0).toLocaleString('es-CO')}
+              </p>
+            </div>
+
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+              <p className="text-sm text-yellow-800 font-medium mb-2">Esta acción:</p>
+              <ul className="text-sm text-yellow-700 list-disc list-inside space-y-1">
+                <li>Marcará el pedido como ANULADO</li>
+                <li>Anulará todas las transacciones asociadas</li>
+                <li>Liberará el inventario reservado</li>
+                {(selectedPedido.totalAbonado || 0) > 0 && (
+                  <li className="text-red-700 font-bold">
+                    Debes devolver ${(selectedPedido.totalAbonado || 0).toLocaleString('es-CO')} al cliente
+                  </li>
+                )}
+              </ul>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Motivo de anulación <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={motivoAnularPedido}
+                onChange={(e) => setMotivoAnularPedido(e.target.value)}
+                placeholder="Ingrese el motivo de la anulación..."
+                rows={3}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={handleAnularPedidoCompleto}
+                disabled={anulandoPedido || !motivoAnularPedido.trim()}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {anulandoPedido ? '⏳ Anulando...' : '⚠️ Confirmar Anulación'}
+              </button>
+              <button
+                onClick={handleCloseAnularPedido}
+                disabled={anulandoPedido}
                 className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancelar

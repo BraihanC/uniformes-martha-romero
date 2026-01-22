@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   collection,
   getDocs,
+  getDoc,
   doc,
   writeBatch,
   increment,
@@ -265,10 +266,11 @@ const Devoluciones = () => {
 
       // Actualizar stock
       for (const item of itemsDevueltos) {
-        const productoRef = doc(db, 'products', item.productoId || item.product?.id);
+        const productoId = item.productoId || item.product?.id;
+        const productoRef = doc(db, 'products', productoId);
 
-        // Si es defecto de fabricación, va a stock defectuoso
-        if (item.razon === 'Defecto de fabricación') {
+        // Si es defecto de fabricación o defecto en prenda, va a stock defectuoso y a reparación
+        if (item.razon === 'Defecto de fabricación' || item.razon === 'Defecto en prenda') {
           batch.update(productoRef, {
             stockDefectuoso: increment(item.cantidad),
             historialDefectos: arrayUnion({
@@ -281,6 +283,25 @@ const Devoluciones = () => {
               talla: item.talla,
               estado: 'pendiente' // pendiente, reparado, baja
             })
+          });
+
+          // Crear registro en productosReparacion
+          const reparacionRef = doc(collection(db, 'productosReparacion'));
+          batch.set(reparacionRef, {
+            productoId: productoId,
+            nombre: item.nombre,
+            referencia: item.referencia || item.product?.referencia,
+            talla: item.talla,
+            cantidad: item.cantidad,
+            razon: item.razon,
+            origen: 'devolucion',
+            ventaId: facturaEncontrada.id,
+            numeroFactura: facturaEncontrada.numeroFactura,
+            clienteNombre: facturaEncontrada.clienteNombre,
+            estado: 'Pendiente',
+            fechaIngreso: serverTimestamp(),
+            userId: currentUser.uid,
+            createdAt: serverTimestamp()
           });
         } else {
           // Si no es defecto, vuelve al stock normal
@@ -494,10 +515,18 @@ const Devoluciones = () => {
 
       // Actualizar stock devuelto (aumentar)
       for (const item of itemsDevueltos) {
-        const productoRef = doc(db, 'products', item.productoId || item.product?.id);
+        const productoId = item.productoId || item.product?.id;
 
-        // Si es defecto de fabricación, va a stock defectuoso
-        if (item.razon === 'Defecto de fabricación') {
+        // Saltar productos sin ID (como servicios, arreglos, etc.)
+        if (!productoId) {
+          console.log(`Saltando item sin productoId: ${item.nombre}`);
+          continue;
+        }
+
+        const productoRef = doc(db, 'products', productoId);
+
+        // Si es defecto de fabricación o defecto en prenda, va a stock defectuoso y a reparación
+        if (item.razon === 'Defecto de fabricación' || item.razon === 'Defecto en prenda') {
           batch.update(productoRef, {
             stockDefectuoso: increment(item.cantidad),
             historialDefectos: arrayUnion({
@@ -510,6 +539,25 @@ const Devoluciones = () => {
               talla: item.talla,
               estado: 'pendiente'
             })
+          });
+
+          // Crear registro en productosReparacion
+          const reparacionRef = doc(collection(db, 'productosReparacion'));
+          batch.set(reparacionRef, {
+            productoId: productoId,
+            nombre: item.nombre,
+            referencia: item.referencia || item.product?.referencia,
+            talla: item.talla,
+            cantidad: item.cantidad,
+            razon: item.razon,
+            origen: 'cambio',
+            ventaId: facturaEncontrada.id,
+            numeroFactura: facturaEncontrada.numeroFactura,
+            clienteNombre: facturaEncontrada.clienteNombre,
+            estado: 'Pendiente',
+            fechaIngreso: serverTimestamp(),
+            userId: currentUser.uid,
+            createdAt: serverTimestamp()
           });
         } else {
           // Si no es defecto, vuelve al stock normal
@@ -664,7 +712,7 @@ const Devoluciones = () => {
 
     } catch (error) {
       console.error('Error al registrar cambio:', error);
-      alert('Error al registrar cambio');
+      alert('Error al registrar cambio: ' + error.message);
     }
   };
 
@@ -691,6 +739,7 @@ const Devoluciones = () => {
   const razonesList = [
     'Talla incorrecta',
     'Defecto de fabricación',
+    'Defecto en prenda',
     'Preferencia del cliente',
     'Color incorrecto',
     'Otro'
@@ -1253,13 +1302,21 @@ const Devoluciones = () => {
                             <p className="p-4 text-center text-gray-500 text-sm">No se encontraron productos</p>
                           ) : (
                             <div className="divide-y divide-gray-200">
-                              {productosFiltrados.map(producto => (
+                              {productosFiltrados.map(producto => {
+                                // Calcular stock disponible
+                                const stockTotal = producto.stockTotal || 0;
+                                const stockReservadoPedidos = producto.stockReservadoPedidos || 0;
+                                const stockReservadoApartados = producto.stockReservadoApartados || 0;
+                                const stockReservadoB2B = producto.stockReservadoB2B || 0;
+                                const stockDisponible = stockTotal - stockReservadoPedidos - stockReservadoApartados - stockReservadoB2B;
+
+                                return (
                                 <div key={producto.id} className="p-3 hover:bg-gray-50">
                                   <div className="flex justify-between items-start mb-2">
                                     <div className="flex-1">
                                       <p className="font-medium text-sm text-gray-800">{producto.nombre}</p>
                                       <p className="text-xs text-gray-500">Ref: {producto.referencia}</p>
-                                      <p className="text-xs text-gray-600">Stock: {producto.stockTotal || 0}</p>
+                                      <p className="text-xs text-gray-600">Stock disponible: {stockDisponible}</p>
                                       <p className="text-sm font-semibold" style={{ color: '#EA5C2E' }}>
                                         ${(producto.precio || 0).toLocaleString()}
                                       </p>
@@ -1286,7 +1343,8 @@ const Devoluciones = () => {
                                     Agregar
                                   </button>
                                 </div>
-                              ))}
+                              );
+                              })}
                             </div>
                           )}
                         </div>
@@ -1717,7 +1775,7 @@ const Devoluciones = () => {
                                 {registro.tipo === 'devolucion' ? '🔄 DEVOLUCIÓN' : '🔁 CAMBIO'}
                               </span>
                               <span className="text-sm font-semibold text-gray-800">
-                                Factura #{registro.numeroFactura}
+                                Factura #{registro.numeroFacturaOriginal}
                               </span>
                             </div>
                             <p className="text-sm text-gray-700">
@@ -1836,7 +1894,7 @@ const Devoluciones = () => {
                           </div>
 
                           {/* Productos nuevos (solo en cambios) */}
-                          {registro.tipo === 'cambio' && registro.productosNuevos?.length > 0 && (
+                          {registro.tipo === 'cambio' && registro.itemsNuevos?.length > 0 && (
                             <div>
                               <h4 className="font-semibold text-gray-800 mb-2 flex items-center gap-2">
                                 <CheckCircle size={16} className="text-green-600" />
@@ -1853,7 +1911,7 @@ const Devoluciones = () => {
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-gray-200">
-                                    {registro.productosNuevos.map((item, idx) => (
+                                    {registro.itemsNuevos.map((item, idx) => (
                                       <tr key={idx} className="bg-white">
                                         <td className="px-3 py-2">
                                           <p className="font-medium text-gray-800">{item.nombre}</p>

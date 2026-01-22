@@ -254,9 +254,13 @@ const CierreCaja = () => { // <--- Nombre cambiado
       }));
 
       // FILTRAR transacciones que no afectan el flujo de caja:
-      // 1. Pendientes: Solo se incluyen cuando se marcan como pagadas con el método real
-      // 2. Entradas de satélite: Solo incluir si afectaCaja === true (pagadas desde caja del local)
+      // 1. Anuladas: Excluir transacciones marcadas como anuladas
+      // 2. Pendientes: Solo se incluyen cuando se marcan como pagadas con el método real
+      // 3. Entradas de satélite: Solo incluir si afectaCaja === true (pagadas desde caja del local)
       const transactions = allTransactions.filter(t => {
+        // Excluir transacciones anuladas
+        if (t.anulada === true) return false;
+
         // Excluir transacciones pendientes
         if (t.metodoPago === 'Pendiente') return false;
 

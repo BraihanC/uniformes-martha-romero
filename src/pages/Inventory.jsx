@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { db } from '../services/firebase';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, writeBatch, serverTimestamp, increment, getDoc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import { useAuth } from '../context/AuthContext';
 
 const Inventory = () => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, currentUser } = useAuth();
   const [products, setProducts] = useState([]);
   const [filteredProducts, setFilteredProducts] = useState([]);
   const [colegios, setColegios] = useState([]);
@@ -36,6 +36,8 @@ const Inventory = () => {
   const [filterProveedor, setFilterProveedor] = useState('');
   const [filterProductoHistorial, setFilterProductoHistorial] = useState('');
   const [expandedEntrada, setExpandedEntrada] = useState(null);
+  const [expandedProveedor, setExpandedProveedor] = useState(null);
+  const [processingAnulacion, setProcessingAnulacion] = useState(false);
 
   // Estado del formulario
   const [formData, setFormData] = useState({
@@ -221,6 +223,191 @@ const Inventory = () => {
       alert('Error al cargar el historial de entradas.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Anular entrada de proveedor
+  const handleAnularEntrada = async (entrada) => {
+    const proveedor = proveedores.find(p => p.id === entrada.proveedorId);
+
+    const detallesAnulacion = `
+⚠️ ANULAR ENTRADA DE PROVEEDOR
+
+Producto: ${entrada.nombre}
+Referencia: ${entrada.referencia}
+Talla: ${entrada.talla || 'Única'}
+Cantidad: ${entrada.cantidad}
+Proveedor: ${proveedor?.nombre || 'N/A'}
+${entrada.facturaProveedor ? `Factura: ${entrada.facturaProveedor}` : ''}
+
+Esta acción REVERTIRÁ:
+- Stock del producto (-${entrada.cantidad} unidades)
+${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignaciones a pedidos` : ''}
+
+¿Está seguro de anular esta entrada?`;
+
+    const confirmar = window.confirm(detallesAnulacion);
+    if (!confirmar) return;
+
+    // Pedir motivo de anulación
+    const motivo = window.prompt('Ingrese el motivo de la anulación:');
+    if (!motivo || !motivo.trim()) {
+      alert('Debe ingresar un motivo para anular la entrada.');
+      return;
+    }
+
+    setProcessingAnulacion(true);
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Revertir stock del producto
+      const productRef = doc(db, 'products', entrada.productId);
+      const productUpdate = {
+        stockTotal: increment(-entrada.cantidad),
+        updatedAt: serverTimestamp()
+      };
+
+      // Calcular cuánto stock reservado hay que revertir
+      let cantidadReservadaPedidos = 0;
+      let cantidadReservadaB2B = 0;
+
+      if (entrada.asignaciones && entrada.asignaciones.length > 0) {
+        entrada.asignaciones.forEach(asig => {
+          if (asig.tipo === 'pedido') {
+            cantidadReservadaPedidos += asig.cantidad;
+          } else if (asig.tipo === 'pedido_b2b') {
+            cantidadReservadaB2B += asig.cantidad;
+          }
+        });
+
+        if (cantidadReservadaPedidos > 0) {
+          productUpdate.stockReservadoPedidos = increment(-cantidadReservadaPedidos);
+        }
+        if (cantidadReservadaB2B > 0) {
+          productUpdate.stockReservadoB2B = increment(-cantidadReservadaB2B);
+        }
+      }
+
+      batch.update(productRef, productUpdate);
+
+      // 2. Revertir asignaciones a pedidos
+      if (entrada.asignaciones && entrada.asignaciones.length > 0) {
+        for (const asig of entrada.asignaciones) {
+          if (asig.tipo === 'pedido') {
+            // PEDIDO POS
+            const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
+            const pedidoSnap = await getDoc(pedidoRef);
+
+            if (pedidoSnap.exists()) {
+              const pedidoData = pedidoSnap.data();
+              const updatedItems = [...pedidoData.items];
+
+              // Buscar el item que coincide con el producto
+              const itemIndex = updatedItems.findIndex(item =>
+                item.referencia === entrada.referencia &&
+                item.talla === entrada.talla
+              );
+
+              if (itemIndex !== -1) {
+                const item = updatedItems[itemIndex];
+                const nuevaCantidadLista = Math.max(0, (item.cantidadLista || 0) - asig.cantidad);
+
+                // Determinar nuevo estado
+                let nuevoEstado;
+                const cantidadEntregada = item.cantidadEntregada || 0;
+                if (cantidadEntregada === item.cantidad) {
+                  nuevoEstado = 'Entregado';
+                } else if (nuevaCantidadLista + cantidadEntregada === item.cantidad) {
+                  nuevoEstado = 'Listo para Entrega';
+                } else if (nuevaCantidadLista > 0) {
+                  nuevoEstado = 'Parcialmente Listo';
+                } else {
+                  nuevoEstado = 'En Producción';
+                }
+
+                updatedItems[itemIndex] = {
+                  ...item,
+                  cantidadLista: nuevaCantidadLista,
+                  estadoItem: nuevoEstado
+                };
+
+                batch.update(pedidoRef, {
+                  items: updatedItems,
+                  updatedAt: serverTimestamp()
+                });
+              }
+            }
+          } else if (asig.tipo === 'pedido_b2b') {
+            // PEDIDO B2B
+            const pedidoRef = doc(db, 'pedidos_b2b', asig.pedidoId);
+            const pedidoSnap = await getDoc(pedidoRef);
+
+            if (pedidoSnap.exists()) {
+              const pedidoData = pedidoSnap.data();
+              const updatedProductos = [...pedidoData.productos];
+
+              // Buscar el producto que coincide
+              const prodIndex = updatedProductos.findIndex(prod =>
+                (prod.codigo === entrada.referencia || prod.productoId === entrada.productId) &&
+                prod.talla === entrada.talla
+              );
+
+              if (prodIndex !== -1) {
+                const producto = updatedProductos[prodIndex];
+                const nuevaCantidadAlistada = Math.max(0, (producto.cantidadAlistada || 0) - asig.cantidad);
+
+                updatedProductos[prodIndex] = {
+                  ...producto,
+                  cantidadAlistada: nuevaCantidadAlistada,
+                  estadoProduccion: nuevaCantidadAlistada > 0 ? 'en_produccion' : 'pendiente'
+                };
+
+                batch.update(pedidoRef, {
+                  productos: updatedProductos,
+                  updatedAt: serverTimestamp()
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // 3. Marcar la entrada como anulada
+      const entradaRef = doc(db, 'stockEntries', entrada.id);
+      batch.update(entradaRef, {
+        anulada: true,
+        fechaAnulacion: serverTimestamp(),
+        motivoAnulacion: motivo.trim(),
+        anuladaPor: currentUser?.email || currentUser?.uid || 'Admin'
+      });
+
+      // 4. Eliminar o anular la transacción asociada
+      const transactionsQuery = query(
+        collection(db, 'transactions'),
+        where('entradaId', '==', entrada.id)
+      );
+      const transactionsSnapshot = await getDocs(transactionsQuery);
+      transactionsSnapshot.docs.forEach(transDoc => {
+        batch.update(transDoc.ref, {
+          anulada: true,
+          fechaAnulacion: serverTimestamp(),
+          motivoAnulacion: motivo.trim()
+        });
+      });
+
+      await batch.commit();
+
+      alert(`✅ Entrada anulada exitosamente.\n\nSe han revertido:\n- Stock del producto: -${entrada.cantidad} unidades\n${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignación(es) a pedidos` : ''}`);
+
+      // Recargar datos
+      await fetchEntradas();
+      await fetchProducts();
+
+    } catch (error) {
+      console.error('Error al anular entrada:', error);
+      alert('Error al anular la entrada: ' + error.message);
+    } finally {
+      setProcessingAnulacion(false);
     }
   };
 
@@ -1330,7 +1517,7 @@ const Inventory = () => {
             </div>
           </div>
 
-          {/* Lista de entradas */}
+          {/* Lista de entradas agrupadas por proveedor */}
           {loading ? (
             <div className="bg-white rounded-lg shadow-md p-8 text-center">
               <p className="text-gray-600">Cargando historial de entradas...</p>
@@ -1340,151 +1527,216 @@ const Inventory = () => {
               <p className="text-gray-600">No se encontraron entradas de proveedor.</p>
             </div>
           ) : (
-            <div className="bg-white rounded-lg shadow-md overflow-hidden">
-              <div className="divide-y divide-gray-200">
-                {filteredEntradas.map((entrada) => {
-                  const proveedor = proveedores.find(p => p.id === entrada.proveedorId);
-                  const fechaEntrada = entrada.createdAt?.toDate ? entrada.createdAt.toDate() : new Date(entrada.createdAt || 0);
-                  const isExpanded = expandedEntrada === entrada.id;
+            <div className="space-y-4">
+              {/* Agrupar entradas por proveedor */}
+              {(() => {
+                // Agrupar por proveedor
+                const entradasPorProveedor = new Map();
+                filteredEntradas.forEach(entrada => {
+                  const provId = entrada.proveedorId || 'sin-proveedor';
+                  if (!entradasPorProveedor.has(provId)) {
+                    entradasPorProveedor.set(provId, {
+                      proveedorId: provId,
+                      entradas: [],
+                      totalPrendas: 0,
+                      totalCosto: 0
+                    });
+                  }
+                  const grupo = entradasPorProveedor.get(provId);
+                  grupo.entradas.push(entrada);
+                  grupo.totalPrendas += entrada.cantidad || 0;
+                  grupo.totalCosto += entrada.costoTotal || 0;
+                });
 
-                  return (
-                    <div key={entrada.id} className="hover:bg-gray-50 transition-colors">
-                      {/* Cabecera de la entrada */}
-                      <div
-                        className="p-4 cursor-pointer"
-                        onClick={() => setExpandedEntrada(isExpanded ? null : entrada.id)}
-                      >
-                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                          <div className="flex-1">
-                            <div className="flex items-start gap-3">
-                              <div className="flex-shrink-0 mt-1">
-                                <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
-                                  <span className="text-primary font-bold">📦</span>
-                                </div>
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <h4 className="text-lg font-semibold text-gray-900 truncate">
-                                  {entrada.nombre}
-                                </h4>
-                                <div className="flex flex-wrap items-center gap-2 mt-1 text-sm text-gray-600">
-                                  <span className="font-mono bg-gray-100 px-2 py-0.5 rounded">
-                                    Ref: {entrada.referencia}
-                                  </span>
-                                  <span>•</span>
-                                  <span>Talla: {entrada.talla}</span>
-                                  <span>•</span>
-                                  <span className="font-medium text-blue-600">
-                                    {entrada.cantidad} uds
-                                  </span>
-                                </div>
-                                <div className="flex flex-wrap items-center gap-2 mt-2 text-sm text-gray-500">
-                                  <span>🏢 {proveedor?.nombre || 'Proveedor desconocido'}</span>
-                                  {entrada.facturaProveedor && (
-                                    <>
-                                      <span>•</span>
-                                      <span>📄 Factura: {entrada.facturaProveedor}</span>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
+                // Convertir a array y ordenar por nombre de proveedor
+                const gruposArray = Array.from(entradasPorProveedor.values()).map(grupo => {
+                  const prov = proveedores.find(p => p.id === grupo.proveedorId);
+                  return {
+                    ...grupo,
+                    proveedorNombre: prov?.nombre || 'Proveedor desconocido'
+                  };
+                }).sort((a, b) => a.proveedorNombre.localeCompare(b.proveedorNombre));
 
-                          <div className="flex flex-col md:items-end gap-2">
-                            <div className="text-right">
-                              <p className="text-sm text-gray-500">Costo Total</p>
-                              <p className="text-xl font-bold text-gray-900">
-                                {formatPrice(entrada.costoTotal || 0)}
-                              </p>
-                              <p className="text-xs text-gray-500">
-                                ({formatPrice(entrada.costoUnitario || 0)} c/u)
-                              </p>
-                            </div>
-                            <div className="text-right text-sm text-gray-500">
-                              {fechaEntrada.toLocaleDateString('es-CO', {
-                                year: 'numeric',
-                                month: 'short',
-                                day: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                              })}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center">
-                            <button className="text-gray-400 hover:text-gray-600">
-                              {isExpanded ? '▼' : '▶'}
-                            </button>
-                          </div>
-                        </div>
+                return gruposArray.map(grupo => (
+                  <div key={grupo.proveedorId} className="bg-white rounded-lg shadow-md overflow-hidden">
+                    {/* Header del proveedor - Colapsable */}
+                    <div
+                      onClick={() => setExpandedProveedor(expandedProveedor === grupo.proveedorId ? null : grupo.proveedorId)}
+                      className="flex justify-between items-center p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+                    >
+                      <div className="flex-1">
+                        <h3 className="text-lg font-semibold text-gray-800">
+                          🏢 {grupo.proveedorNombre}
+                        </h3>
+                        <p className="text-sm text-gray-500">
+                          {grupo.entradas.length} entrada{grupo.entradas.length !== 1 ? 's' : ''} • {grupo.totalPrendas} prendas
+                        </p>
                       </div>
+                      <div className="flex items-center gap-4">
+                        <div className="text-right">
+                          <p className="text-xs text-gray-500">Costo Total</p>
+                          <p className="text-lg font-bold text-purple-700">
+                            {formatPrice(grupo.totalCosto)}
+                          </p>
+                        </div>
+                        <button className="text-gray-400 hover:text-gray-600 text-xl">
+                          {expandedProveedor === grupo.proveedorId ? '▼' : '▶'}
+                        </button>
+                      </div>
+                    </div>
 
-                      {/* Detalles expandidos */}
-                      {isExpanded && (
-                        <div className="px-4 pb-4 border-t border-gray-100 bg-gray-50">
-                          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {/* Distribución */}
-                            <div className="space-y-3">
-                              <h5 className="font-semibold text-gray-800">📊 Distribución</h5>
-                              <div className="bg-white rounded-lg p-3 border border-gray-200">
-                                <div className="flex justify-between items-center mb-2">
-                                  <span className="text-sm text-gray-600">Asignadas a pedidos:</span>
-                                  <span className="font-semibold text-green-600">
-                                    {entrada.cantidadAsignada || 0} uds
-                                  </span>
-                                </div>
-                                <div className="flex justify-between items-center">
-                                  <span className="text-sm text-gray-600">Disponibles para venta:</span>
-                                  <span className="font-semibold text-blue-600">
-                                    {entrada.cantidadDisponible || 0} uds
-                                  </span>
+                    {/* Entradas del proveedor (expandidas) */}
+                    {expandedProveedor === grupo.proveedorId && (
+                      <div className="border-t border-gray-200 divide-y divide-gray-100">
+                        {grupo.entradas.map((entrada) => {
+                          const fechaEntrada = entrada.createdAt?.toDate ? entrada.createdAt.toDate() : new Date(entrada.createdAt || 0);
+                          const isExpanded = expandedEntrada === entrada.id;
+
+                          return (
+                            <div key={entrada.id} className={`hover:bg-gray-50 transition-colors ${entrada.anulada ? 'opacity-60' : ''}`}>
+                              {/* Cabecera de la entrada */}
+                              <div
+                                className="p-4 cursor-pointer"
+                                onClick={() => setExpandedEntrada(isExpanded ? null : entrada.id)}
+                              >
+                                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                  <div className="flex-1">
+                                    <div className="flex items-start gap-3">
+                                      <div className="flex-1 min-w-0">
+                                        <h4 className="text-base font-semibold text-gray-900 truncate">
+                                          {entrada.nombre}
+                                        </h4>
+                                        <div className="flex flex-wrap items-center gap-2 mt-1 text-sm text-gray-600">
+                                          <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs">
+                                            Ref: {entrada.referencia}
+                                          </span>
+                                          <span>•</span>
+                                          <span>Talla: {entrada.talla}</span>
+                                          <span>•</span>
+                                          <span className="font-medium text-blue-600">
+                                            {entrada.cantidad} uds
+                                          </span>
+                                          {entrada.facturaProveedor && (
+                                            <>
+                                              <span>•</span>
+                                              <span className="text-gray-500">📄 {entrada.facturaProveedor}</span>
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-3">
+                                    <div className="text-right">
+                                      <p className="text-sm font-bold text-gray-900">
+                                        {formatPrice(entrada.costoTotal || 0)}
+                                      </p>
+                                      <p className="text-xs text-gray-500">
+                                        {fechaEntrada.toLocaleDateString('es-CO', {
+                                          day: '2-digit',
+                                          month: 'short',
+                                          year: 'numeric'
+                                        })}
+                                      </p>
+                                    </div>
+
+                                    {/* Botón Anular - Solo si no está anulada */}
+                                    {!entrada.anulada && isAdmin && (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleAnularEntrada(entrada);
+                                        }}
+                                        disabled={processingAnulacion}
+                                        className="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 rounded-md hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        title="Anular esta entrada"
+                                      >
+                                        {processingAnulacion ? 'Anulando...' : 'Anular'}
+                                      </button>
+                                    )}
+                                    {entrada.anulada && (
+                                      <span className="px-2 py-1 text-xs font-medium text-gray-500 bg-gray-100 rounded">
+                                        ANULADA
+                                      </span>
+                                    )}
+                                    <button className="text-gray-400 hover:text-gray-600">
+                                      {isExpanded ? '▼' : '▶'}
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
 
-                              {/* Notas */}
-                              {entrada.notas && (
-                                <div className="bg-yellow-50 rounded-lg p-3 border border-yellow-200">
-                                  <p className="text-sm font-semibold text-gray-700 mb-1">📝 Notas:</p>
-                                  <p className="text-sm text-gray-600">{entrada.notas}</p>
+                              {/* Detalles expandidos */}
+                              {isExpanded && (
+                                <div className="px-4 pb-4 border-t border-gray-100 bg-gray-50">
+                                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {/* Distribución */}
+                                    <div className="space-y-3">
+                                      <h5 className="font-semibold text-gray-800">📊 Distribución</h5>
+                                      <div className="bg-white rounded-lg p-3 border border-gray-200">
+                                        <div className="flex justify-between items-center mb-2">
+                                          <span className="text-sm text-gray-600">Asignadas a pedidos:</span>
+                                          <span className="font-semibold text-green-600">
+                                            {entrada.cantidadAsignada || 0} uds
+                                          </span>
+                                        </div>
+                                        <div className="flex justify-between items-center">
+                                          <span className="text-sm text-gray-600">Disponibles para venta:</span>
+                                          <span className="font-semibold text-blue-600">
+                                            {entrada.cantidadDisponible || 0} uds
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      {/* Notas */}
+                                      {entrada.notas && (
+                                        <div className="bg-yellow-50 rounded-lg p-3 border border-yellow-200">
+                                          <p className="text-sm font-semibold text-gray-700 mb-1">📝 Notas:</p>
+                                          <p className="text-sm text-gray-600">{entrada.notas}</p>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Asignaciones a pedidos */}
+                                    {entrada.asignaciones && entrada.asignaciones.length > 0 && (
+                                      <div className="space-y-3">
+                                        <h5 className="font-semibold text-gray-800">
+                                          ✅ Asignaciones a Pedidos ({entrada.asignaciones.length})
+                                        </h5>
+                                        <div className="bg-white rounded-lg border border-gray-200 max-h-48 overflow-y-auto">
+                                          {entrada.asignaciones.map((asig, idx) => (
+                                            <div
+                                              key={idx}
+                                              className="p-3 border-b border-gray-100 last:border-b-0"
+                                            >
+                                              <div className="flex justify-between items-start">
+                                                <div>
+                                                  <p className="font-semibold text-gray-900">
+                                                    Pedido #{String(asig.numeroPedido).padStart(4, '0')}
+                                                  </p>
+                                                  <p className="text-sm text-gray-600">{asig.clienteNombre}</p>
+                                                </div>
+                                                <span className="text-lg font-bold text-green-600">
+                                                  {asig.cantidad}
+                                                </span>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
                               )}
                             </div>
-
-                            {/* Asignaciones a pedidos */}
-                            {entrada.asignaciones && entrada.asignaciones.length > 0 && (
-                              <div className="space-y-3">
-                                <h5 className="font-semibold text-gray-800">
-                                  ✅ Asignaciones a Pedidos ({entrada.asignaciones.length})
-                                </h5>
-                                <div className="bg-white rounded-lg border border-gray-200 max-h-48 overflow-y-auto">
-                                  {entrada.asignaciones.map((asig, idx) => (
-                                    <div
-                                      key={idx}
-                                      className="p-3 border-b border-gray-100 last:border-b-0"
-                                    >
-                                      <div className="flex justify-between items-start">
-                                        <div>
-                                          <p className="font-semibold text-gray-900">
-                                            Pedido #{String(asig.numeroPedido).padStart(4, '0')}
-                                          </p>
-                                          <p className="text-sm text-gray-600">{asig.clienteNombre}</p>
-                                        </div>
-                                        <span className="text-lg font-bold text-green-600">
-                                          {asig.cantidad}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ));
+              })()}
             </div>
           )}
         </div>

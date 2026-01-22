@@ -255,10 +255,16 @@ const BuscadorFacturas = () => {
    * Prepara la factura para el modal de impresión
    */
   const handleVerFactura = (factura) => {
-    // La data de la factura necesita un campo 'fecha' legible
+    // La data de la factura necesita un campo 'fecha' legible con hora
     const fechaLegible = factura.createdAt?.toDate?.()
-      ? factura.createdAt.toDate().toLocaleDateString('es-CO')
-      : new Date().toLocaleDateString('es-CO');
+      ? factura.createdAt.toDate().toLocaleString('es-CO', {
+          dateStyle: 'short',
+          timeStyle: 'short'
+        })
+      : new Date().toLocaleString('es-CO', {
+          dateStyle: 'short',
+          timeStyle: 'short'
+        });
 
     setFacturaSeleccionada({
       ...factura,
@@ -1100,7 +1106,14 @@ const BuscadorFacturas = () => {
               <div key={factura.id} className="p-4">
                 <div className="flex justify-between items-start mb-2">
                   <div>
-                    <p className="font-bold text-gray-800 text-base">Factura #{factura.numeroFactura}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-gray-800 text-base">Factura #{factura.numeroFactura}</p>
+                      {factura.correccion && (
+                        <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs rounded-full font-medium">
+                          Corregida
+                        </span>
+                      )}
+                    </div>
                     <p className="text-sm text-gray-700">{factura.clienteNombre}</p>
                     {factura.clienteDocumento && (
                       <p className="text-xs text-gray-500">Doc: {factura.clienteDocumento}</p>
@@ -1140,7 +1153,16 @@ const BuscadorFacturas = () => {
               <tbody className="divide-y divide-gray-200">
                 {facturasPaginadas.map(factura => (
                   <tr key={factura.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm font-medium text-gray-800">#{factura.numeroFactura}</td>
+                    <td className="px-4 py-3 text-sm font-medium text-gray-800">
+                      <div className="flex items-center gap-2">
+                        #{factura.numeroFactura}
+                        {factura.correccion && (
+                          <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs rounded-full font-medium">
+                            Corregida
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-sm">
                       <p className="font-medium text-gray-800">{factura.clienteNombre}</p>
                       {factura.clienteDocumento && (
@@ -1219,6 +1241,18 @@ const BuscadorFacturas = () => {
 
             {/* Receipt Preview - Con scroll si es necesario */}
             <div className="flex-1 overflow-y-auto px-6 py-4">
+              {/* Alerta de corrección (solo visible, no se imprime) */}
+              {facturaSeleccionada.correccion && (
+                <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg no-print">
+                  <p className="text-yellow-800 font-medium text-sm">⚠️ Esta factura fue corregida</p>
+                  <p className="text-yellow-700 text-xs mt-1">
+                    {facturaSeleccionada.correccion.productoAnterior} → {facturaSeleccionada.correccion.productoNuevo}
+                  </p>
+                  {facturaSeleccionada.correccion.notas && (
+                    <p className="text-yellow-600 text-xs mt-1">Nota: {facturaSeleccionada.correccion.notas}</p>
+                  )}
+                </div>
+              )}
               <div className="flex justify-center">
                 <div id="receipt-print" className="border p-4 bg-white" style={{ maxWidth: '300px' }}>
 
@@ -1226,15 +1260,19 @@ const BuscadorFacturas = () => {
               <div className="text-center mb-4">
                 <h3 className="font-bold text-lg">{companyConfig?.nombre || 'MARTHA ROMERO'}</h3>
                 {companyConfig?.nit && <p className="text-xs">NIT: {companyConfig.nit}</p>}
+                <p className="text-xs">No responsable de IVA</p>
                 {companyConfig?.direccion && <p className="text-xs">{companyConfig.direccion}</p>}
                 {companyConfig?.telefono && <p className="text-xs">Tel: {companyConfig.telefono}</p>}
-                <p className="font-bold text-sm mt-2" style={{ letterSpacing: '1px' }}>FACTURA DE VENTA</p>
+                <p className="font-bold text-sm mt-2" style={{ letterSpacing: '1px' }}>COMPROBANTE DE VENTA</p>
+                {facturaSeleccionada.correccion && (
+                  <p className="text-xs text-yellow-700 mt-1">(CORREGIDA)</p>
+                )}
               </div>
 
               {/* Order Info */}
               <div className="border-t border-b border-dashed py-2 mb-2">
                 <div className="flex justify-between text-sm">
-                  <span className="font-medium">Factura N°:</span>
+                  <span className="font-medium">Comprobante N°:</span>
                   <span>{String(facturaSeleccionada.numeroFactura).padStart(4, '0')}</span>
                 </div>
                 <div className="flex justify-between text-sm">

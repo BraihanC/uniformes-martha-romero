@@ -30,3 +30,12 @@ dist-ssr
 
 # Firebase credentials - NEVER commit this file
 serviceAccountKey.json
+
+# Claude Code settings
+.claude/
+
+# Script data files (backups, logs with production data)
+scripts/*.json
+
+# Misc
+nul
