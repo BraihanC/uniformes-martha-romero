@@ -23,7 +23,8 @@ import {
   Wallet,
   Edit2,
   Save,
-  HandCoins
+  HandCoins,
+  Loader2
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -74,6 +75,10 @@ const CierreCaja = () => { // <--- Nombre cambiado
   const [retiroResponsable, setRetiroResponsable] = useState('Martha Romero');
   const [retiroNotas, setRetiroNotas] = useState('');
 
+  // Estados para prevenir doble clic
+  const [guardandoBase, setGuardandoBase] = useState(false);
+  const [registrandoRetiro, setRegistrandoRetiro] = useState(false);
+
   /**
    * Carga el reporte de "Hoy" la primera vez que el componente se monta.
    */
@@ -121,6 +126,10 @@ const CierreCaja = () => { // <--- Nombre cambiado
   const handleSaveBaseInicial = async () => {
     const monto = parseFloat(baseInputValue) || 0;
 
+    // Prevenir doble clic
+    if (guardandoBase) return;
+    setGuardandoBase(true);
+
     try {
       const dateKey = formatDateForInput(startDate);
       const baseDocRef = doc(db, 'bases_caja', dateKey);
@@ -137,6 +146,8 @@ const CierreCaja = () => { // <--- Nombre cambiado
     } catch (error) {
       console.error('Error al guardar base inicial:', error);
       alert('❌ Error al guardar base inicial: ' + error.message);
+    } finally {
+      setGuardandoBase(false);
     }
   };
 
@@ -181,6 +192,10 @@ const CierreCaja = () => { // <--- Nombre cambiado
 
     if (!confirmar) return;
 
+    // Prevenir doble clic
+    if (registrandoRetiro) return;
+    setRegistrandoRetiro(true);
+
     try {
       setLoading(true);
 
@@ -213,6 +228,7 @@ const CierreCaja = () => { // <--- Nombre cambiado
       alert('❌ Error al registrar el retiro: ' + error.message);
     } finally {
       setLoading(false);
+      setRegistrandoRetiro(false);
     }
   };
 
@@ -518,10 +534,11 @@ const CierreCaja = () => { // <--- Nombre cambiado
                 />
                 <button
                   onClick={handleSaveBaseInicial}
-                  className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  disabled={guardandoBase}
+                  className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
                   title="Guardar"
                 >
-                  <Save size={18} />
+                  {guardandoBase ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
                 </button>
                 <button
                   onClick={() => {
@@ -973,11 +990,12 @@ const CierreCaja = () => { // <--- Nombre cambiado
               </button>
               <button
                 onClick={handleRegistrarRetiro}
-                disabled={loading}
-                className="flex-1 px-4 py-3 text-white rounded-lg hover:opacity-90 font-medium disabled:opacity-50"
+                disabled={loading || registrandoRetiro}
+                className="flex-1 px-4 py-3 text-white rounded-lg hover:opacity-90 font-medium disabled:opacity-50 flex items-center justify-center gap-2"
                 style={{ backgroundColor: '#EA5C2E' }}
               >
-                {loading ? 'Registrando...' : 'Registrar Retiro'}
+                {registrandoRetiro && <Loader2 size={18} className="animate-spin" />}
+                {registrandoRetiro ? 'Registrando...' : 'Registrar Retiro'}
               </button>
             </div>
           </div>

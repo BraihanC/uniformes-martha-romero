@@ -27,6 +27,7 @@ const EntradaProveedor = () => {
 
   // Estados del formulario
   const [cantidad, setCantidad] = useState('');
+  const [cantidadDefectuosa, setCantidadDefectuosa] = useState('');
   const [proveedorId, setProveedorId] = useState('');
   const [facturaProveedor, setFacturaProveedor] = useState('');
   const [notas, setNotas] = useState('');
@@ -98,6 +99,7 @@ const EntradaProveedor = () => {
     setSearchTerm('');
     // Limpiar formulario
     setCantidad('');
+    setCantidadDefectuosa('');
     setProveedorId('');
     setFacturaProveedor('');
     setNotas('');
@@ -109,15 +111,27 @@ const EntradaProveedor = () => {
 
     // Validaciones
     const numCantidad = Number(cantidad);
+    const numCantidadDefectuosa = Number(cantidadDefectuosa) || 0;
 
     if (!numCantidad || numCantidad <= 0) {
-      alert('Por favor, ingresa una cantidad válida.');
+      alert('Por favor, ingresa una cantidad válida mayor a 0.');
       return;
     }
     if (!proveedorId) {
       alert('Por favor, selecciona un proveedor.');
       return;
     }
+    if (numCantidadDefectuosa < 0) {
+      alert('La cantidad defectuosa no puede ser negativa.');
+      return;
+    }
+    if (numCantidadDefectuosa > numCantidad) {
+      alert('La cantidad defectuosa no puede ser mayor que la cantidad total.');
+      return;
+    }
+
+    // Calcular cantidad buena (la que se suma al inventario)
+    const cantidadBuena = numCantidad - numCantidadDefectuosa;
 
     // Obtener el costo de compra del producto (configurado en Gestión de Costos)
     const costoCompra = selectedProduct.costoCompra || 0;
@@ -209,7 +223,8 @@ const EntradaProveedor = () => {
       });
 
       // PASO 2: Asignar prendas a pedidos (del más antiguo al más reciente)
-      let cantidadRestante = numCantidad;
+      // IMPORTANTE: Solo asignamos las prendas buenas (sin defectos)
+      let cantidadRestante = cantidadBuena;
       let cantidadAsignada = 0;
       const asignaciones = [];
 
@@ -294,9 +309,10 @@ const EntradaProveedor = () => {
       });
 
       // 4.2. Actualizar stockTotal del producto (inventario físico)
+      // IMPORTANTE: Solo sumamos las prendas BUENAS, no las defectuosas
       const productRef = doc(db, 'products', selectedProduct.id);
       const productUpdate = {
-        stockTotal: increment(numCantidad),
+        stockTotal: increment(cantidadBuena),
         updatedAt: serverTimestamp()
       };
 
@@ -366,7 +382,7 @@ const EntradaProveedor = () => {
             ...producto,
             cantidadAlistada: (producto.cantidadAlistada || 0) + asig.cantidadAsignada,
             estadoProduccion: asig.esCompleto ? 'alistado' : 'en_produccion',
-            fechaAlistado: asig.esCompleto ? serverTimestamp() : producto.fechaAlistado
+            fechaAlistado: asig.esCompleto ? new Date() : producto.fechaAlistado
           };
 
           batch.update(pedidoRef, {
@@ -428,7 +444,29 @@ const EntradaProveedor = () => {
         });
       }
 
-      // 4.5. Commit atómico
+      // 4.5. Registrar productos defectuosos en reparación
+      if (numCantidadDefectuosa > 0) {
+        const proveedorSeleccionado = proveedores.find(p => p.id === proveedorId);
+        const reparacionRef = doc(collection(db, 'productosReparacion'));
+        batch.set(reparacionRef, {
+          productId: selectedProduct.id,
+          referencia: selectedProduct.referencia,
+          nombre: selectedProduct.nombre,
+          talla: selectedProduct.talla || 'Única',
+          cantidad: numCantidadDefectuosa,
+          origen: 'proveedor', // Para distinguir de devoluciones de clientes
+          proveedorId: proveedorId,
+          proveedorNombre: proveedorSeleccionado?.nombre || '',
+          facturaProveedor: facturaProveedor.trim() || '',
+          estado: 'Pendiente',
+          fechaIngreso: serverTimestamp(),
+          userId: currentUser.uid,
+          notas: notas.trim() ? `Defectos de fábrica - ${notas.trim()}` : 'Defectos de fábrica reportados en entrada de proveedor',
+          createdAt: serverTimestamp()
+        });
+      }
+
+      // 4.6. Commit atómico
       await batch.commit();
 
       // Preparar datos del reporte para impresión
@@ -441,6 +479,8 @@ const EntradaProveedor = () => {
         referencia: selectedProduct.referencia,
         talla: selectedProduct.talla,
         cantidadTotal: numCantidad,
+        cantidadBuena: cantidadBuena,
+        cantidadDefectuosa: numCantidadDefectuosa,
         cantidadAsignada: cantidadAsignada,
         cantidadDisponible: cantidadDisponible,
         asignaciones: asignaciones,
@@ -457,7 +497,22 @@ const EntradaProveedor = () => {
       fetchAllProducts();
     } catch (error) {
       console.error('Error al guardar compra:', error);
-      alert('Error al guardar la compra: ' + error.message);
+
+      let mensajeError = 'Error al guardar la entrada de proveedor.';
+
+      if (error.message.includes('serverTimestamp')) {
+        mensajeError += ' Error de configuración en fechas. Por favor contacte al administrador.';
+      } else if (error.message.includes('permission')) {
+        mensajeError += ' No tienes permisos suficientes para realizar esta operación.';
+      } else if (error.message.includes('offline')) {
+        mensajeError += ' No hay conexión a internet. Verifica tu conexión e intenta nuevamente.';
+      } else if (error.message.includes('not found')) {
+        mensajeError += ' No se encontró el producto o proveedor seleccionado.';
+      } else {
+        mensajeError += '\n\nDetalle: ' + error.message;
+      }
+
+      alert(mensajeError);
     } finally {
       setLoading(false);
     }
@@ -467,6 +522,7 @@ const EntradaProveedor = () => {
   const handleCancel = () => {
     setSelectedProduct(null);
     setCantidad('');
+    setCantidadDefectuosa('');
     setProveedorId('');
     setFacturaProveedor('');
     setNotas('');
@@ -567,6 +623,26 @@ const EntradaProveedor = () => {
                 required
                 disabled={loading}
               />
+            </div>
+
+            {/* Cantidad Defectuosa */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Cantidad Defectuosa (Opcional)
+              </label>
+              <input
+                type="number"
+                min="0"
+                max={cantidad || 0}
+                value={cantidadDefectuosa}
+                onChange={(e) => setCantidadDefectuosa(e.target.value)}
+                placeholder="0"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                disabled={loading}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Productos que llegaron con defectos de fábrica y no se pueden vender
+              </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -683,9 +759,27 @@ const EntradaProveedor = () => {
                     </div>
                   )}
                   <div>
-                    <p className="text-sm text-gray-600">Cantidad Total:</p>
+                    <p className="text-sm text-gray-600">Cantidad Total Recibida:</p>
                     <p className="font-bold text-xl text-primary">{reporteData.cantidadTotal}</p>
                   </div>
+                  {reporteData.cantidadDefectuosa > 0 && (
+                    <>
+                      <div>
+                        <p className="text-sm text-gray-600">Cantidad Buena:</p>
+                        <p className="font-bold text-lg text-green-600">{reporteData.cantidadBuena}</p>
+                      </div>
+                      <div className="col-span-2">
+                        <div className="bg-red-50 border-2 border-red-300 rounded-lg p-3 print:border-red-600">
+                          <p className="text-sm text-red-700 font-medium">
+                            ⚠️ Productos Defectuosos: <span className="text-xl font-bold">{reporteData.cantidadDefectuosa}</span>
+                          </p>
+                          <p className="text-xs text-red-600 mt-1">
+                            Estos productos fueron registrados en "Productos en Reparación" y NO se sumaron al inventario
+                          </p>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 

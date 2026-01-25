@@ -13,6 +13,7 @@ import {
   updateDoc
 } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
+import { Loader2 } from 'lucide-react';
 
 const Egresos = () => {
   const { currentUser } = useAuth();
@@ -36,6 +37,10 @@ const Egresos = () => {
   const [editandoId, setEditandoId] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [egresoAEliminar, setEgresoAEliminar] = useState(null);
+
+  // Estados para prevenir doble clic
+  const [guardandoEgreso, setGuardandoEgreso] = useState(false);
+  const [eliminandoEgreso, setEliminandoEgreso] = useState(false);
 
   const categorias = [
     'Insumos y materiales',
@@ -92,6 +97,10 @@ const Egresos = () => {
       return;
     }
 
+    // Prevenir doble clic
+    if (guardandoEgreso) return;
+    setGuardandoEgreso(true);
+
     try {
       setLoading(true);
 
@@ -137,6 +146,7 @@ const Egresos = () => {
       alert('Error al guardar egreso');
     } finally {
       setLoading(false);
+      setGuardandoEgreso(false);
     }
   };
 
@@ -160,6 +170,10 @@ const Egresos = () => {
   const handleEliminar = async () => {
     if (!egresoAEliminar) return;
 
+    // Prevenir doble clic
+    if (eliminandoEgreso) return;
+    setEliminandoEgreso(true);
+
     try {
       setLoading(true);
       await deleteDoc(doc(db, 'transactions', egresoAEliminar.id));
@@ -172,6 +186,7 @@ const Egresos = () => {
       alert('Error al eliminar egreso');
     } finally {
       setLoading(false);
+      setEliminandoEgreso(false);
     }
   };
 
@@ -298,11 +313,12 @@ const Egresos = () => {
             <div className="flex gap-2">
               <button
                 type="submit"
-                disabled={loading}
-                className="px-6 py-2 text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+                disabled={loading || guardandoEgreso}
+                className="px-6 py-2 text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-2"
                 style={{ backgroundColor: '#D50565' }}
               >
-                {loading ? 'Guardando...' : (editandoId ? 'Actualizar Egreso' : 'Registrar Egreso')}
+                {guardandoEgreso && <Loader2 size={18} className="animate-spin" />}
+                {guardandoEgreso ? 'Guardando...' : (editandoId ? 'Actualizar Egreso' : 'Registrar Egreso')}
               </button>
 
               {editandoId && (
@@ -527,10 +543,11 @@ const Egresos = () => {
             <div className="flex gap-2">
               <button
                 onClick={handleEliminar}
-                disabled={loading}
-                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+                disabled={loading || eliminandoEgreso}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {loading ? 'Eliminando...' : 'Eliminar'}
+                {eliminandoEgreso && <Loader2 size={18} className="animate-spin" />}
+                {eliminandoEgreso ? 'Eliminando...' : 'Eliminar'}
               </button>
               <button
                 onClick={() => {

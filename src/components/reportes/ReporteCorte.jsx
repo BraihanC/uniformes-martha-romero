@@ -75,6 +75,11 @@ const ReporteCorte = () => {
       // 4. Procesar y Aplanar los datos
       const itemsAplanados = [];
       pedidos.forEach(pedido => {
+        // Excluir pedidos anulados
+        if (pedido.anulado === true || pedido.estadoGeneral === 'Anulado') {
+          return;
+        }
+
         // Filtrar items según el estado seleccionado
         let itemsParaCorte = [];
 

@@ -23,7 +23,8 @@ import {
   CheckCircle,
   XCircle,
   Printer,
-  AlertTriangle
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
 
 const Devoluciones = () => {
@@ -68,6 +69,10 @@ const Devoluciones = () => {
   // Estados de paginación para historial
   const [paginaActualHistorial, setPaginaActualHistorial] = useState(1);
   const registrosPorPagina = 10;
+
+  // Estados de loading para prevenir doble clic
+  const [procesandoCambio, setProcesandoCambio] = useState(false);
+  const [procesandoDevolucion, setProcesandoDevolucion] = useState(false);
 
   // Función para toggle de expansión de registros
   const toggleRegistroExpandido = (id) => {
@@ -251,6 +256,10 @@ const Devoluciones = () => {
   };
 
   const handleConfirmarDevolucion = async () => {
+    // Prevenir doble clic
+    if (procesandoDevolucion) return;
+    setProcesandoDevolucion(true);
+
     try {
       const batch = writeBatch(db);
       const itemsDevueltos = itemsSeleccionados.map(index => {
@@ -391,6 +400,8 @@ const Devoluciones = () => {
     } catch (error) {
       console.error('Error al registrar devolución:', error);
       alert('Error al registrar devolución');
+    } finally {
+      setProcesandoDevolucion(false);
     }
   };
 
@@ -499,6 +510,10 @@ const Devoluciones = () => {
       alert('Agrega al menos un producto nuevo');
       return;
     }
+
+    // Prevenir doble clic
+    if (procesandoCambio) return;
+    setProcesandoCambio(true);
 
     try {
       const batch = writeBatch(db);
@@ -713,6 +728,8 @@ const Devoluciones = () => {
     } catch (error) {
       console.error('Error al registrar cambio:', error);
       alert('Error al registrar cambio: ' + error.message);
+    } finally {
+      setProcesandoCambio(false);
     }
   };
 
@@ -1205,11 +1222,16 @@ const Devoluciones = () => {
                 </button>
                 <button
                   onClick={handleConfirmarDevolucion}
-                  className="flex-1 px-6 py-3 text-white rounded-lg hover:opacity-90 font-medium flex items-center justify-center gap-2"
+                  disabled={procesandoDevolucion}
+                  className="flex-1 px-6 py-3 text-white rounded-lg hover:opacity-90 font-medium flex items-center justify-center gap-2 disabled:opacity-50"
                   style={{ backgroundColor: '#D50565' }}
                 >
-                  <CheckCircle size={20} />
-                  Confirmar Devolución
+                  {procesandoDevolucion ? (
+                    <Loader2 size={20} className="animate-spin" />
+                  ) : (
+                    <CheckCircle size={20} />
+                  )}
+                  {procesandoDevolucion ? 'Procesando...' : 'Confirmar Devolución'}
                 </button>
               </div>
             </div>
@@ -1495,12 +1517,16 @@ const Devoluciones = () => {
                 </button>
                 <button
                   onClick={handleConfirmarCambio}
-                  disabled={productosNuevos.length === 0}
+                  disabled={productosNuevos.length === 0 || procesandoCambio}
                   className="flex-1 px-6 py-3 text-white rounded-lg hover:opacity-90 font-medium flex items-center justify-center gap-2 disabled:opacity-50"
                   style={{ backgroundColor: '#EA5C2E' }}
                 >
-                  <RefreshCw size={20} />
-                  Confirmar Cambio
+                  {procesandoCambio ? (
+                    <Loader2 size={20} className="animate-spin" />
+                  ) : (
+                    <RefreshCw size={20} />
+                  )}
+                  {procesandoCambio ? 'Procesando...' : 'Confirmar Cambio'}
                 </button>
               </div>
             </div>

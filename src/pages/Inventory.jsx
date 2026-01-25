@@ -3,6 +3,7 @@ import { db } from '../services/firebase';
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, writeBatch, serverTimestamp, increment, getDoc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import { useAuth } from '../context/AuthContext';
+import { Loader2 } from 'lucide-react';
 
 const Inventory = () => {
   const { isAdmin, currentUser } = useAuth();
@@ -38,6 +39,7 @@ const Inventory = () => {
   const [expandedEntrada, setExpandedEntrada] = useState(null);
   const [expandedProveedor, setExpandedProveedor] = useState(null);
   const [processingAnulacion, setProcessingAnulacion] = useState(false);
+  const [guardandoProducto, setGuardandoProducto] = useState(false);
 
   // Estado del formulario
   const [formData, setFormData] = useState({
@@ -717,6 +719,10 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
       return;
     }
 
+    // Prevenir doble clic
+    if (guardandoProducto) return;
+    setGuardandoProducto(true);
+
     setLoading(true);
     try {
       if (editingProduct) {
@@ -771,6 +777,7 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
       alert('Error al guardar el producto.');
     } finally {
       setLoading(false);
+      setGuardandoProducto(false);
     }
   };
 
@@ -1649,9 +1656,10 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
                                           handleAnularEntrada(entrada);
                                         }}
                                         disabled={processingAnulacion}
-                                        className="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 rounded-md hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 rounded-md hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                                         title="Anular esta entrada"
                                       >
+                                        {processingAnulacion && <Loader2 size={12} className="animate-spin" />}
                                         {processingAnulacion ? 'Anulando...' : 'Anular'}
                                       </button>
                                     )}
@@ -1925,11 +1933,12 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
               <div className="flex space-x-3 mt-6 pt-4 border-t border-gray-200">
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || guardandoProducto}
                   style={{ backgroundColor: '#D50565' }}
-                  className="px-6 py-2 text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-6 py-2 text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  {loading ? 'Guardando...' : 'Guardar Producto'}
+                  {guardandoProducto && <Loader2 size={18} className="animate-spin" />}
+                  {guardandoProducto ? 'Guardando...' : 'Guardar Producto'}
                 </button>
                 <button
                   type="button"

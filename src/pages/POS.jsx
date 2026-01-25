@@ -16,6 +16,7 @@ import {
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
+import { Loader2 } from 'lucide-react';
 
 const POS = () => {
   const { currentUser } = useAuth();
@@ -1571,11 +1572,18 @@ const POS = () => {
               </button>
               <button
                 onClick={handleGenerateFactura}
-                disabled={cartItems.length === 0 || !selectedClient}
-                className="flex-1 px-3 md:px-4 py-2 md:py-3 text-sm md:text-base bg-orange-500 text-white rounded-md hover:bg-orange-600 font-medium disabled:bg-gray-300 disabled:cursor-not-allowed"
-                style={{ backgroundColor: cartItems.length > 0 && selectedClient ? '#EA5C2E' : undefined }}
+                disabled={cartItems.length === 0 || !selectedClient || loading}
+                className="flex-1 px-3 md:px-4 py-2 md:py-3 text-sm md:text-base bg-orange-500 text-white rounded-md hover:bg-orange-600 font-medium disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                style={{ backgroundColor: cartItems.length > 0 && selectedClient && !loading ? '#EA5C2E' : undefined }}
               >
-                Generar Factura
+                {loading && cartItems.length > 0 ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin" />
+                    Procesando...
+                  </>
+                ) : (
+                  'Generar Factura'
+                )}
               </button>
             </div>
           </div>

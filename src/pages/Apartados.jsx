@@ -30,7 +30,8 @@ import {
   AlertTriangle,
   Clock,
   Phone,
-  Trash2
+  Trash2,
+  Loader2
 } from 'lucide-react';
 
 const Apartados = () => {
@@ -126,6 +127,11 @@ const Apartados = () => {
   const [nuevoMetodoPagoAbono, setNuevoMetodoPagoAbono] = useState('');
   const [notasMetodoPagoAbono, setNotasMetodoPagoAbono] = useState('');
   const [cambiandoMetodoPagoAbono, setCambiandoMetodoPagoAbono] = useState(false);
+
+  // Estados para prevenir doble clic en operaciones críticas
+  const [creandoApartado, setCreandoApartado] = useState(false);
+  const [registrandoAbono, setRegistrandoAbono] = useState(false);
+  const [cancelandoApartado, setCancelandoApartado] = useState(false);
 
   // Cargar datos iniciales
   useEffect(() => {
@@ -505,6 +511,10 @@ const Apartados = () => {
       return;
     }
 
+    // Prevenir doble clic
+    if (creandoApartado) return;
+    setCreandoApartado(true);
+
     try {
       const cliente = clientes.find(c => c.id === selectedClienteId);
       const fechaLimite = new Date();
@@ -601,6 +611,8 @@ const Apartados = () => {
     } catch (error) {
       console.error('Error al crear apartado:', error);
       alert('Error al crear apartado');
+    } finally {
+      setCreandoApartado(false);
     }
   };
 
@@ -641,6 +653,10 @@ const Apartados = () => {
       alert('El abono no puede ser mayor al saldo pendiente');
       return;
     }
+
+    // Prevenir doble clic
+    if (registrandoAbono) return;
+    setRegistrandoAbono(true);
 
     setLoading(true); // Activar loading
     try {
@@ -762,6 +778,7 @@ const Apartados = () => {
       alert('Error al registrar abono: ' + error.message);
     } finally {
       setLoading(false); // Desactivar loading
+      setRegistrandoAbono(false);
     }
   };
 
@@ -812,6 +829,10 @@ const Apartados = () => {
 
     if (!confirmar) return;
 
+    // Prevenir doble clic
+    if (cancelandoApartado) return;
+    setCancelandoApartado(true);
+
     try {
       const batch = writeBatch(db);
 
@@ -845,6 +866,8 @@ const Apartados = () => {
     } catch (error) {
       console.error('Error al cancelar apartado:', error);
       alert('Error al cancelar apartado');
+    } finally {
+      setCancelandoApartado(false);
     }
   };
 
@@ -2532,11 +2555,18 @@ const Apartados = () => {
               </button>
               <button
                 onClick={handleCrearApartado}
-                disabled={!selectedClienteId || selectedProductos.length === 0}
-                className="px-6 py-2 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                disabled={!selectedClienteId || selectedProductos.length === 0 || creandoApartado}
+                className="px-6 py-2 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed font-medium flex items-center justify-center gap-2"
                 style={{ backgroundColor: '#D50565' }}
               >
-                Crear Apartado
+                {creandoApartado ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin" />
+                    Creando...
+                  </>
+                ) : (
+                  'Crear Apartado'
+                )}
               </button>
             </div>
           </div>
@@ -2788,12 +2818,16 @@ const Apartados = () => {
                     </div>
                     <button
                       onClick={handleRegistrarAbono}
-                      disabled={!nuevoAbono || parseFloat(nuevoAbono) <= 0}
+                      disabled={!nuevoAbono || parseFloat(nuevoAbono) <= 0 || registrandoAbono}
                       className="w-full px-4 py-2 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed font-medium flex items-center justify-center gap-2"
                       style={{ backgroundColor: '#D50565' }}
                     >
-                      <CheckCircle size={18} />
-                      Registrar Abono
+                      {registrandoAbono ? (
+                        <Loader2 size={18} className="animate-spin" />
+                      ) : (
+                        <CheckCircle size={18} />
+                      )}
+                      {registrandoAbono ? 'Registrando...' : 'Registrar Abono'}
                     </button>
                   </div>
                 </div>
@@ -2868,10 +2902,15 @@ const Apartados = () => {
                 <div className="border-t border-gray-200 pt-4">
                   <button
                     onClick={handleCancelarApartado}
-                    className="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium flex items-center justify-center gap-2"
+                    disabled={cancelandoApartado}
+                    className="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium flex items-center justify-center gap-2 disabled:opacity-50"
                   >
-                    <XCircle size={18} />
-                    Cancelar Apartado
+                    {cancelandoApartado ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <XCircle size={18} />
+                    )}
+                    {cancelandoApartado ? 'Cancelando...' : 'Cancelar Apartado'}
                   </button>
                   <p className="text-xs text-gray-500 text-center mt-2">
                     El inventario será liberado y el apartado quedará cancelado

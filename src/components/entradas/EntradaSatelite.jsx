@@ -390,7 +390,7 @@ const EntradaSatelite = () => {
             ...producto,
             cantidadAlistada: (producto.cantidadAlistada || 0) + asig.cantidadAsignada,
             estadoProduccion: asig.esCompleto ? 'alistado' : 'en_produccion',
-            fechaAlistado: asig.esCompleto ? serverTimestamp() : producto.fechaAlistado
+            fechaAlistado: asig.esCompleto ? new Date() : producto.fechaAlistado
           };
 
           batch.update(pedidoRef, {
@@ -504,7 +504,22 @@ const EntradaSatelite = () => {
       fetchAllProducts();
     } catch (error) {
       console.error('Error al guardar entrada:', error);
-      alert('Error al guardar la entrada: ' + error.message);
+
+      let mensajeError = 'Error al guardar la entrada de satélite.';
+
+      if (error.message.includes('serverTimestamp')) {
+        mensajeError += ' Error de configuración en fechas. Por favor contacte al administrador.';
+      } else if (error.message.includes('permission')) {
+        mensajeError += ' No tienes permisos suficientes para realizar esta operación.';
+      } else if (error.message.includes('offline')) {
+        mensajeError += ' No hay conexión a internet. Verifica tu conexión e intenta nuevamente.';
+      } else if (error.message.includes('not found')) {
+        mensajeError += ' No se encontró el producto o satélite seleccionado.';
+      } else {
+        mensajeError += '\n\nDetalle: ' + error.message;
+      }
+
+      alert(mensajeError);
     } finally {
       setLoading(false);
     }
