@@ -126,13 +126,15 @@ const BuscadorFacturas = () => {
   // Filtrar facturas por búsqueda y filtros
   const facturasFiltradas = todasFacturas
     .filter(factura => {
-      // Filtro por búsqueda
+      // Filtro por búsqueda - buscar en número de factura, nombre de cliente y documento
       if (searchTerm.trim()) {
         const searchLower = searchTerm.toLowerCase().trim();
+
         const matchNumero = String(factura.numeroFactura || '').includes(searchTerm);
         const matchNombre = (factura.clienteNombre || '').toLowerCase().includes(searchLower);
-        const matchDocumento = (factura.clienteDocumento || '').includes(searchTerm);
+        const matchDocumento = (factura.clienteDocumento || '').toLowerCase().includes(searchLower);
 
+        // Si no coincide con ningún campo, excluir esta factura
         if (!matchNumero && !matchNombre && !matchDocumento) {
           return false;
         }
@@ -367,6 +369,12 @@ const BuscadorFacturas = () => {
    * Abre el modal para corregir un producto específico de la factura
    */
   const handleOpenCorreccionModal = (itemIndex) => {
+    // Bloquear corrección en facturas de pedidos
+    if (facturaSeleccionada?.tipo === 'pedido') {
+      alert('⚠️ Esta factura pertenece a un PEDIDO.\n\nLas correcciones de productos en pedidos deben realizarse desde la sección de Pedidos, no desde el Buscador de Facturas.\n\nEsto garantiza que el inventario reservado y los abonos se manejen correctamente.');
+      return;
+    }
+
     setItemIndexToCorrect(itemIndex);
     setSearchProductoCorreccion('');
     setProductoNuevoSeleccionado(null);
@@ -619,6 +627,12 @@ const BuscadorFacturas = () => {
       return;
     }
 
+    // Bloquear anulación en facturas de pedidos
+    if (facturaSeleccionada?.tipo === 'pedido') {
+      alert('⚠️ Esta factura pertenece a un PEDIDO.\n\nLas anulaciones de productos en pedidos deben realizarse desde la sección de Pedidos, no desde el Buscador de Facturas.\n\nEsto garantiza que el inventario reservado y los abonos se manejen correctamente.');
+      return;
+    }
+
     if (!motivoAnulacion.trim()) {
       alert('Por favor, ingresa el motivo de la anulación.');
       return;
@@ -748,6 +762,12 @@ const BuscadorFacturas = () => {
   const handleRestaurarProducto = async (itemIndex) => {
     if (!facturaSeleccionada) return;
 
+    // Bloquear restauración en facturas de pedidos
+    if (facturaSeleccionada?.tipo === 'pedido') {
+      alert('⚠️ Esta factura pertenece a un PEDIDO.\n\nLas restauraciones de productos en pedidos deben realizarse desde la sección de Pedidos, no desde el Buscador de Facturas.\n\nEsto garantiza que el inventario reservado y los abonos se manejen correctamente.');
+      return;
+    }
+
     const itemToRestaurar = facturaSeleccionada.items[itemIndex];
 
     const confirmar = window.confirm(
@@ -848,6 +868,12 @@ const BuscadorFacturas = () => {
    * Abre el modal para cambiar el método de pago
    */
   const handleOpenMetodoPagoModal = () => {
+    // Bloquear cambio de método de pago en facturas de pedidos
+    if (facturaSeleccionada?.tipo === 'pedido') {
+      alert('⚠️ Esta factura pertenece a un PEDIDO.\n\nLos métodos de pago de pedidos se manejan a través de los abonos registrados en la sección de Pedidos.\n\nCada abono tiene su propio método de pago que puede modificarse desde ahí.');
+      return;
+    }
+
     setNuevoMetodoPago(facturaSeleccionada.metodoPago || 'Efectivo');
     setNotasMetodoPago('');
     setShowMetodoPagoModal(true);
@@ -1108,6 +1134,11 @@ const BuscadorFacturas = () => {
                   <div>
                     <div className="flex items-center gap-2">
                       <p className="font-bold text-gray-800 text-base">Factura #{factura.numeroFactura}</p>
+                      {factura.tipo === 'pedido' && (
+                        <span className="px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full font-medium">
+                          PEDIDO
+                        </span>
+                      )}
                       {factura.correccion && (
                         <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs rounded-full font-medium">
                           Corregida
@@ -1156,6 +1187,11 @@ const BuscadorFacturas = () => {
                     <td className="px-4 py-3 text-sm font-medium text-gray-800">
                       <div className="flex items-center gap-2">
                         #{factura.numeroFactura}
+                        {factura.tipo === 'pedido' && (
+                          <span className="px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full font-medium">
+                            PEDIDO
+                          </span>
+                        )}
                         {factura.correccion && (
                           <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs rounded-full font-medium">
                             Corregida

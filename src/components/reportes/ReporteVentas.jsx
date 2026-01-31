@@ -141,6 +141,11 @@ const ReporteVentas = () => {
 
         salesSnap.forEach(doc => {
           const sale = doc.data();
+
+          // ✅ EXCLUIR facturas de pedidos (son documentos de referencia, no ventas nuevas)
+          // Las ventas de pedidos ya se cuentan en la colección 'pedidos'
+          if (sale.tipo === 'pedido') return;
+
           sale.items?.forEach(item => {
             const subtotalItem = item.subtotal || 0;
             todasLasVentas.push({

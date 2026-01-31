@@ -35,6 +35,7 @@ const ReporteCorte = () => {
   const [searchColegio, setSearchColegio] = useState('');
   const [searchTalla, setSearchTalla] = useState('');
   const [searchReferencia, setSearchReferencia] = useState('');
+  const [soloCAmbiosTalla, setSoloCambiosTalla] = useState(false);
 
   /**
    * Función principal que busca y procesa los pedidos para corte
@@ -109,6 +110,20 @@ const ReporteCorte = () => {
         }
 
         itemsParaCorte.forEach(item => {
+          // Verificar si el item debe incluirse según su fechaSolicitud
+          // Si el item tiene fechaSolicitud, usarla; si no, usar la fecha del pedido
+          let incluirItem = true;
+
+          if (item.fechaSolicitud) {
+            // El item tiene fecha de solicitud individual (ej: cambio de talla)
+            const fechaSolicitudItem = new Date(item.fechaSolicitud);
+            incluirItem = fechaSolicitudItem >= start && fechaSolicitudItem <= end;
+          }
+          // Si no tiene fechaSolicitud, ya está incluido porque el pedido cumplió el filtro de fecha
+
+          // Si el item NO debe incluirse por su fecha individual, saltar
+          if (!incluirItem) return;
+
           // Usar el colegio guardado directamente en el pedido
           const colegioNombre = pedido.colegioNombre || 'General (Sin Colegio)';
 
@@ -126,6 +141,9 @@ const ReporteCorte = () => {
             detalleEstado = ` (${cantidadLista} listas, ${cantidadPendiente} pendientes)`;
           }
 
+          // Verificar si es un cambio de talla (por origenCambioTalla o fechaSolicitud)
+          const esCambioTalla = !!(item.origenCambioTalla || item.fechaSolicitud);
+
           itemsAplanados.push({
             colegio: colegioNombre,
             prenda: item.nombre,
@@ -134,6 +152,8 @@ const ReporteCorte = () => {
             cantidad: cantidadParaReporte,
             estadoItem: item.estadoItem,
             detalleEstado: detalleEstado,
+            esCambioTalla: esCambioTalla,
+            tallaAnterior: item.tallaAnterior || null,
             observaciones: pedido.observaciones || '',
             pedidoNum: pedido.numeroPedido || 'N/A',
             clienteNombre: pedido.clienteNombre || 'Sin nombre'
@@ -144,7 +164,9 @@ const ReporteCorte = () => {
       // 5. Agrupar los datos (¡La magia!)
       const agrupado = itemsAplanados.reduce((acc, item) => {
         // Creamos una llave única por cada grupo
-        const key = `${item.colegio}|${item.prenda}|${item.talla}|${item.observaciones}`;
+        // Separamos cambios de talla de items regulares para mejor visibilidad
+        const cambioKey = item.esCambioTalla ? '|CAMBIO' : '';
+        const key = `${item.colegio}|${item.prenda}|${item.talla}|${item.observaciones}${cambioKey}`;
 
         if (!acc[key]) {
           // Si no existe, lo creamos
@@ -158,7 +180,10 @@ const ReporteCorte = () => {
             pedidos: new Set(),
             clientes: new Set(),
             estados: new Set(),
-            detallesEstado: []
+            detallesEstado: [],
+            esCambioTalla: item.esCambioTalla,
+            tallasAnteriores: new Set(),
+            cantidadCambiosTalla: 0
           };
         }
 
@@ -171,6 +196,12 @@ const ReporteCorte = () => {
         if (item.detalleEstado) {
           acc[key].detallesEstado.push(item.detalleEstado);
         }
+        if (item.esCambioTalla) {
+          acc[key].cantidadCambiosTalla += item.cantidad;
+          if (item.tallaAnterior) {
+            acc[key].tallasAnteriores.add(item.tallaAnterior);
+          }
+        }
 
         return acc;
       }, {});
@@ -182,7 +213,8 @@ const ReporteCorte = () => {
         pedidos: Array.from(g.pedidos).join(', '),
         clientes: Array.from(g.clientes).join(', '),
         estadosString: Array.from(g.estados).join(', '),
-        detalleEstadoString: g.detallesEstado.join('; ')
+        detalleEstadoString: g.detallesEstado.join('; '),
+        tallasAnterioresString: Array.from(g.tallasAnteriores).join(', ')
       }));
 
       // Ordenar por colegio y luego por prenda
@@ -204,6 +236,8 @@ const ReporteCorte = () => {
         PRENDA: r.prenda,
         TALLA: r.talla,
         CANTIDAD: r.cantidadTotal,
+        CAMBIO_TALLA: r.esCambioTalla ? 'Sí' : 'No',
+        TALLA_ANTERIOR: r.tallasAnterioresString || '',
         REFERENCIAS: r.referencias,
         ESTADOS: r.estadosString,
         CLIENTES: r.clientes,
@@ -226,12 +260,17 @@ const ReporteCorte = () => {
     const matchColegio = !searchColegio || item.colegio.toLowerCase().includes(searchColegio.toLowerCase());
     const matchTalla = !searchTalla || item.talla.toLowerCase().includes(searchTalla.toLowerCase());
     const matchReferencia = !searchReferencia || item.referencias.toLowerCase().includes(searchReferencia.toLowerCase());
+    const matchCambioTalla = !soloCAmbiosTalla || item.esCambioTalla;
 
-    return matchPrenda && matchColegio && matchTalla && matchReferencia;
+    return matchPrenda && matchColegio && matchTalla && matchReferencia && matchCambioTalla;
   });
 
   // Calcular total de cantidad filtrada
   const totalCantidadFiltrada = filteredReportData.reduce((sum, item) => sum + item.cantidadTotal, 0);
+
+  // Calcular total de cambios de talla
+  const totalCambiosTalla = filteredReportData.filter(item => item.esCambioTalla).reduce((sum, item) => sum + item.cantidadTotal, 0);
+  const filasCambiosTalla = filteredReportData.filter(item => item.esCambioTalla).length;
 
   const handlePrint = () => {
     window.print();
@@ -248,6 +287,7 @@ const ReporteCorte = () => {
     setSearchColegio('');
     setSearchTalla('');
     setSearchReferencia('');
+    setSoloCambiosTalla(false);
   };
 
   return (
@@ -405,16 +445,41 @@ const ReporteCorte = () => {
             </div>
           </div>
 
+          {/* Filtro de Cambios de Talla */}
+          <div className="mt-3 flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="soloCambiosTalla"
+              checked={soloCAmbiosTalla}
+              onChange={(e) => setSoloCambiosTalla(e.target.checked)}
+              className="w-4 h-4 text-pink-600 border-gray-300 rounded focus:ring-pink-500"
+            />
+            <label htmlFor="soloCambiosTalla" className="text-sm font-medium text-gray-700">
+              🔄 Mostrar solo Cambios de Talla
+            </label>
+          </div>
+
           {/* Resumen de Filtrado */}
-          {(searchPrenda || searchColegio || searchTalla || searchReferencia) && (
+          {(searchPrenda || searchColegio || searchTalla || searchReferencia || soloCAmbiosTalla) && (
             <div className="mt-3 p-3 bg-pink-50 rounded-lg border border-pink-200">
               <p className="text-sm text-gray-700">
                 <span className="font-semibold">Resultados filtrados:</span> {filteredReportData.length} filas
                 <span className="ml-2">|</span>
                 <span className="ml-2 font-semibold">Total unidades:</span> {totalCantidadFiltrada}
+                {soloCAmbiosTalla && (
+                  <span className="ml-2 text-purple-600">| Solo cambios de talla</span>
+                )}
               </p>
             </div>
           )}
+
+          {/* Nota sobre cambios de talla */}
+          <div className="mt-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
+            <p className="text-xs text-purple-800">
+              <span className="font-semibold">💡 Nota:</span> Los <span className="font-medium">cambios de talla</span> se identifican con fondo morado y badge 🔄.
+              Se muestran según la fecha del pedido original. Si necesitas ver cambios de talla de pedidos más antiguos, amplía el rango de fechas.
+            </p>
+          </div>
         </div>
       )}
 
@@ -469,26 +534,41 @@ const ReporteCorte = () => {
               </h2>
               <p className="text-xs sm:text-sm text-gray-500">
                 Mostrando pedidos de {formatDateForInput(startDate)} a {formatDateForInput(endDate)}
-                {(searchPrenda || searchColegio || searchTalla || searchReferencia) && (
+                {(searchPrenda || searchColegio || searchTalla || searchReferencia || soloCAmbiosTalla) && (
                   <span className="ml-2 text-pink-600 font-medium">- Total filtrado: {totalCantidadFiltrada} unidades</span>
                 )}
               </p>
+              {filasCambiosTalla > 0 && (
+                <p className="text-xs sm:text-sm text-purple-600 mt-1">
+                  🔄 <span className="font-medium">{filasCambiosTalla} filas</span> son cambios de talla ({totalCambiosTalla} unidades)
+                </p>
+              )}
             </div>
 
             {/* Vista de Tarjetas - Solo Móvil */}
             <div className="md:hidden divide-y divide-gray-200">
               {filteredReportData.map((item, index) => (
-                <div key={index} className="p-4">
+                <div key={index} className={`p-4 ${item.esCambioTalla ? 'bg-purple-50 border-l-4 border-purple-500' : ''}`}>
                   <div className="flex justify-between items-start mb-2">
                     <div className="flex-1">
-                      <p className="font-bold text-gray-800 text-sm">{item.colegio}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-gray-800 text-sm">{item.colegio}</p>
+                        {item.esCambioTalla && (
+                          <span className="px-2 py-0.5 bg-purple-600 text-white text-xs rounded-full font-medium">
+                            🔄 CAMBIO
+                          </span>
+                        )}
+                      </div>
                       <p className="text-sm text-gray-700">{item.prenda} - Talla {item.talla}</p>
+                      {item.esCambioTalla && item.tallasAnterioresString && (
+                        <p className="text-xs text-purple-700">Talla anterior: {item.tallasAnterioresString}</p>
+                      )}
                     </div>
                     <span className="text-2xl font-bold ml-2" style={{color: '#D50565'}}>
                       {item.cantidadTotal}
                     </span>
                   </div>
-                  <div className="mb-2">
+                  <div className="mb-2 flex flex-wrap gap-1">
                     <span className={`px-2 py-1 rounded text-xs font-medium ${
                       item.estadosString.includes('En Producción') ? 'bg-blue-100 text-blue-800' :
                       item.estadosString.includes('Parcialmente Listo') ? 'bg-orange-100 text-orange-800' :
@@ -529,22 +609,43 @@ const ReporteCorte = () => {
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {filteredReportData.map((item, index) => (
-                    <tr key={index} className="hover:bg-gray-50">
-                      <td className="px-3 py-2 text-sm font-medium text-gray-800 whitespace-nowrap">{item.colegio}</td>
+                    <tr key={index} className={`hover:bg-gray-50 ${item.esCambioTalla ? 'bg-purple-50' : ''}`}>
+                      <td className="px-3 py-2 text-sm font-medium text-gray-800 whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          {item.colegio}
+                          {item.esCambioTalla && (
+                            <span className="px-1.5 py-0.5 bg-purple-600 text-white text-[10px] rounded-full font-medium">
+                              🔄
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-3 py-2 text-sm text-gray-700 whitespace-nowrap">{item.prenda}</td>
-                      <td className="px-3 py-2 text-sm text-gray-700 whitespace-nowrap">{item.talla}</td>
+                      <td className="px-3 py-2 text-sm text-gray-700 whitespace-nowrap">
+                        {item.talla}
+                        {item.esCambioTalla && item.tallasAnterioresString && (
+                          <div className="text-xs text-purple-600">← {item.tallasAnterioresString}</div>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-center text-lg font-bold text-pink-600" style={{color: '#D50565'}}>
                         {item.cantidadTotal}
                       </td>
                       <td className="px-3 py-2 text-sm">
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          item.estadosString.includes('En Producción') ? 'bg-blue-100 text-blue-800' :
-                          item.estadosString.includes('Parcialmente Listo') ? 'bg-orange-100 text-orange-800' :
-                          item.estadosString.includes('Listo para Entrega') ? 'bg-yellow-100 text-yellow-800' :
-                          'bg-gray-100 text-gray-800'
-                        }`}>
-                          {item.estadosString}
-                        </span>
+                        <div className="flex flex-wrap gap-1">
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                            item.estadosString.includes('En Producción') ? 'bg-blue-100 text-blue-800' :
+                            item.estadosString.includes('Parcialmente Listo') ? 'bg-orange-100 text-orange-800' :
+                            item.estadosString.includes('Listo para Entrega') ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {item.estadosString}
+                          </span>
+                          {item.esCambioTalla && (
+                            <span className="px-2 py-1 rounded text-xs font-medium bg-purple-100 text-purple-800">
+                              CAMBIO TALLA
+                            </span>
+                          )}
+                        </div>
                         {item.detalleEstadoString && (
                           <div className="text-xs text-gray-500 mt-1">{item.detalleEstadoString}</div>
                         )}

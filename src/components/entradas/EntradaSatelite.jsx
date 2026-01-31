@@ -95,6 +95,18 @@ const EntradaSatelite = () => {
 
   // Seleccionar un producto de los resultados
   const handleSelectProduct = (product) => {
+    // Verificar si hay productos duplicados con la misma referencia y talla
+    const duplicados = allProducts.filter(p =>
+      p.referencia === product.referencia &&
+      p.talla === product.talla
+    );
+
+    if (duplicados.length > 1) {
+      console.warn(`⚠️ ALERTA: Hay ${duplicados.length} productos con referencia ${product.referencia} y talla ${product.talla}`);
+      console.warn('IDs duplicados:', duplicados.map(p => p.id));
+      alert(`⚠️ ADVERTENCIA: Hay ${duplicados.length} productos con la misma referencia y talla. Esto puede causar descuadres en el inventario. Por favor notifica al administrador.`);
+    }
+
     setSelectedProduct(product);
     setSearchResults([]);
     setSearchTerm('');
@@ -149,10 +161,18 @@ const EntradaSatelite = () => {
       for (const pedidoDoc of pedidosSnapshot.docs) {
         const pedidoData = pedidoDoc.data();
 
+        // Saltar pedidos anulados o cancelados
+        if (pedidoData.estadoGeneral === 'Anulado' || pedidoData.estadoGeneral === 'Cancelado') {
+          continue;
+        }
+
         // Buscar items que coincidan con el producto y tengan unidades pendientes
         const itemsPendientes = pedidoData.items
           .map((item, index) => ({ ...item, index }))
           .filter(item => {
+            // Saltar items anulados
+            if (item.anulado === true) return false;
+
             const referenciaCoincide = item.referencia === selectedProduct.referencia;
             const tallaCoincide = item.talla === selectedProduct.talla;
 
@@ -197,10 +217,18 @@ const EntradaSatelite = () => {
       for (const pedidoDoc of pedidosB2BSnapshot.docs) {
         const pedidoData = pedidoDoc.data();
 
+        // Saltar pedidos anulados o cancelados
+        if (pedidoData.estadoGeneral === 'Anulado' || pedidoData.estadoGeneral === 'Cancelado') {
+          continue;
+        }
+
         // Buscar productos que coincidan con el producto y estén pendientes de producción
         const productosPendientes = (pedidoData.productos || [])
           .map((producto, index) => ({ ...producto, index }))
           .filter(producto => {
+            // Saltar productos anulados
+            if (producto.anulado === true) return false;
+
             // Buscar por código (referencia) o por productoId (ID del documento en Firebase)
             // Los productos B2B pueden tener 'codigo' o 'productoId'
             const codigoMatch = producto.codigo === selectedProduct.referencia ||
@@ -476,6 +504,29 @@ const EntradaSatelite = () => {
 
       // 4.6. Commit atómico
       await batch.commit();
+
+      // 4.7. VERIFICACIÓN POST-COMMIT: Confirmar que el stockTotal se actualizó correctamente
+      const stockAnterior = selectedProduct.stockTotal || 0;
+      const stockEsperado = stockAnterior + cantidadBuena;
+
+      // Leer el producto actualizado para verificar
+      const productoActualizado = await getDoc(productRef);
+      const stockReal = productoActualizado.data()?.stockTotal || 0;
+
+      if (stockReal !== stockEsperado) {
+        console.error('⚠️ DESCUADRE DETECTADO POST-COMMIT');
+        console.error(`   Stock anterior: ${stockAnterior}`);
+        console.error(`   Cantidad buena agregada: ${cantidadBuena}`);
+        console.error(`   Stock esperado: ${stockEsperado}`);
+        console.error(`   Stock real en BD: ${stockReal}`);
+        console.error(`   Producto ID: ${selectedProduct.id}`);
+
+        // Intentar corregir automáticamente
+        await updateDoc(productRef, { stockTotal: stockEsperado });
+        console.log('✅ Stock corregido automáticamente a:', stockEsperado);
+      } else {
+        console.log(`✅ Entrada verificada: stockTotal actualizado de ${stockAnterior} a ${stockReal}`);
+      }
 
       // Preparar datos del reporte para impresión
       const sateliteSeleccionado = satelites.find(s => s.id === sateliteId);

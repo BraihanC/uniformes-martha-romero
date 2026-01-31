@@ -81,6 +81,10 @@ const ReporteUtilidad = () => {
     ventasFiltradas.forEach(venta => {
       if (!venta.items) return;
 
+      // ✅ Excluir facturas de tipo 'pedido' - estas son documentos de referencia
+      // Las ventas de pedidos ya se cuentan por separado
+      if (venta.tipo === 'pedido') return;
+
       venta.items.forEach(item => {
         const producto = productosMap.get(item.productoId);
 

@@ -725,15 +725,29 @@ const Apartados = () => {
         batch.update(apartadoRef, { facturaId: ventaRef.id });
 
         // Actualizar inventario (decrementar stock y liberar reserva)
-        // IMPORTANTE: Solo procesar productos NO anulados
+        // IMPORTANTE: Solo procesar productos NO anulados y que aún existan
+        const productosNoEncontrados = [];
         for (const item of selectedApartado.items) {
           if (item.anulado) continue; // Saltar productos anulados (ya liberaron su reserva)
 
           const productoRef = doc(db, 'products', item.productoId);
+
+          // Verificar si el producto existe antes de actualizarlo
+          const productoSnap = await getDoc(productoRef);
+          if (!productoSnap.exists()) {
+            productosNoEncontrados.push(item.nombre || item.productoId);
+            continue; // Saltar productos que ya no existen
+          }
+
           batch.update(productoRef, {
             stockTotal: increment(-item.cantidad),
             stockReservadoApartados: increment(-item.cantidad)
           });
+        }
+
+        // Advertir sobre productos no encontrados (pero continuar)
+        if (productosNoEncontrados.length > 0) {
+          console.warn('Productos no encontrados en inventario:', productosNoEncontrados);
         }
       }
 
@@ -1637,15 +1651,29 @@ const Apartados = () => {
       });
 
       // Actualizar inventario: restar del total y liberar reserva
-      // IMPORTANTE: Solo procesar productos NO anulados
+      // IMPORTANTE: Solo procesar productos NO anulados y que aún existan
+      const productosNoEncontrados = [];
       for (const item of selectedApartado.items) {
         if (item.anulado) continue; // Saltar productos anulados (ya liberaron su reserva)
 
         const productoRef = doc(db, 'products', item.productoId);
+
+        // Verificar si el producto existe antes de actualizarlo
+        const productoSnap = await getDoc(productoRef);
+        if (!productoSnap.exists()) {
+          productosNoEncontrados.push(item.nombre || item.productoId);
+          continue; // Saltar productos que ya no existen
+        }
+
         batch.update(productoRef, {
           stockTotal: increment(-item.cantidad),
           stockReservadoApartados: increment(-item.cantidad)
         });
+      }
+
+      // Advertir sobre productos no encontrados (pero continuar con la facturación)
+      if (productosNoEncontrados.length > 0) {
+        console.warn('Productos no encontrados en inventario:', productosNoEncontrados);
       }
 
       // 5. (NUEVO) Registrar Transacción del Pago Final

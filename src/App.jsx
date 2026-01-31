@@ -22,8 +22,7 @@ import CierreCaja from './components/reportes/CierreCaja';
 import BuscadorFacturas from './components/reportes/BuscadorFacturas';
 import ReporteCorte from './components/reportes/ReporteCorte';
 import CuentasPorPagar from './components/reportes/CuentasPorPagar';
-import ReporteUtilidad from './components/reportes/ReporteUtilidad';
-import ReporteVentas from './components/reportes/ReporteVentas';
+import ReportesAnalisis from './components/reportes/ReportesAnalisis';
 import Config from './pages/Config';
 import Perfil from './pages/Perfil';
 
@@ -149,18 +148,10 @@ function App() {
                     }
                   />
                   <Route
-                    path="utilidad"
+                    path="analisis"
                     element={
                       <PrivateRoute requireAdmin>
-                        <ReporteUtilidad />
-                      </PrivateRoute>
-                    }
-                  />
-                  <Route
-                    path="ventas"
-                    element={
-                      <PrivateRoute requireAdmin>
-                        <ReporteVentas />
+                        <ReportesAnalisis />
                       </PrivateRoute>
                     }
                   />

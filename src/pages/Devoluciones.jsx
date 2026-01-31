@@ -807,13 +807,25 @@ const Devoluciones = () => {
             <div className="bg-white rounded-xl shadow-sm p-4 sm:p-6">
               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start mb-6 gap-3">
                 <div>
-                  <h2 className="text-lg sm:text-xl font-semibold text-gray-800">Factura #{facturaEncontrada.numeroFactura}</h2>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-lg sm:text-xl font-semibold text-gray-800">Factura #{facturaEncontrada.numeroFactura}</h2>
+                    {facturaEncontrada.tipo === 'pedido' && (
+                      <span className="px-2 py-0.5 bg-purple-100 text-purple-800 text-xs rounded-full font-medium">
+                        PEDIDO
+                      </span>
+                    )}
+                  </div>
                   <p className="text-gray-600 mt-1 text-sm sm:text-base">
                     Cliente: {facturaEncontrada.clienteNombre || 'Sin nombre'}
                   </p>
                   <p className="text-sm text-gray-500">
                     Fecha: {facturaEncontrada.createdAt?.toDate?.()?.toLocaleDateString('es-CO') || 'N/A'}
                   </p>
+                  {facturaEncontrada.tipo === 'pedido' && facturaEncontrada.numeroPedido && (
+                    <p className="text-sm text-purple-600 font-medium">
+                      Pedido #{String(facturaEncontrada.numeroPedido).padStart(4, '0')}
+                    </p>
+                  )}
                 </div>
                 <button
                   onClick={limpiarFormulario}

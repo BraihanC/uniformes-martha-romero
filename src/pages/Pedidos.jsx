@@ -149,6 +149,14 @@ const Pedidos = () => {
   const [restaurandoProducto, setRestaurandoProducto] = useState(false);
   const [creandoCliente, setCreandoCliente] = useState(false);
 
+  // Estados para cambio de talla
+  const [showCambiarTallaModal, setShowCambiarTallaModal] = useState(false);
+  const [itemIndexToCambiarTalla, setItemIndexToCambiarTalla] = useState(null);
+  const [searchNuevaTalla, setSearchNuevaTalla] = useState('');
+  const [productoNuevaTalla, setProductoNuevaTalla] = useState(null);
+  const [motivoCambioTalla, setMotivoCambioTalla] = useState('Cliente se probó y no le quedó');
+  const [cambiandoTalla, setCambiandoTalla] = useState(false);
+
   // Cargar datos al iniciar
   useEffect(() => {
     fetchClients();
@@ -528,6 +536,7 @@ const Pedidos = () => {
       const batch = writeBatch(db);
 
       // Formatear items con estado inicial
+      const fechaSolicitudInicial = new Date().toISOString();
       const itemsConEstado = cartItems.map(item => ({
         productoId: item.product.id,
         referencia: item.product.referencia,
@@ -536,7 +545,8 @@ const Pedidos = () => {
         cantidad: item.cantidad,
         precio: item.precio,
         subtotal: item.cantidad * item.precio,
-        estadoItem: 'En Producción' // Estado inicial
+        estadoItem: 'En Producción', // Estado inicial
+        fechaSolicitud: fechaSolicitudInicial // Fecha de solicitud para reporte de corte
       }));
 
       const totalPedido = calculateTotal();
@@ -1067,7 +1077,87 @@ const Pedidos = () => {
       // 4. Commit atómico
       await batch.commit();
 
-      alert('Entrega registrada correctamente.');
+      // 5. Si todos los items están entregados, generar factura automáticamente
+      let numeroFactura = null;
+      if (todosEntregados) {
+        try {
+          // Obtener número de factura consecutivo usando transacción atómica
+          const counterRef = doc(db, 'counters', 'facturas');
+          numeroFactura = await runTransaction(db, async (transaction) => {
+            const counterDoc = await transaction.get(counterRef);
+            let newNumber;
+
+            if (!counterDoc.exists()) {
+              // Si no existe el contador, buscar la última factura para inicializarlo
+              const q = query(collection(db, 'sales'), orderBy('numeroFactura', 'desc'), limit(1));
+              const snapshot = await getDocs(q);
+              const lastNumber = snapshot.empty ? 0 : (snapshot.docs[0].data().numeroFactura || 0);
+              newNumber = lastNumber + 1;
+              transaction.set(counterRef, { lastNumber: newNumber });
+            } else {
+              // Incrementar el contador existente
+              const currentNumber = counterDoc.data().lastNumber || 0;
+              newNumber = currentNumber + 1;
+              transaction.update(counterRef, { lastNumber: newNumber });
+            }
+
+            return newNumber;
+          });
+
+          // Obtener IDs de las transacciones de abono de este pedido
+          const transQuery = query(
+            collection(db, 'transactions'),
+            where('pedidoId', '==', pedidoRef.id),
+            where('tipo', '==', 'abono_pedido')
+          );
+          const transSnap = await getDocs(transQuery);
+          const transaccionesIds = transSnap.docs.map(doc => doc.id);
+
+          // Crear factura en collection 'sales'
+          const facturaData = {
+            numeroFactura: numeroFactura,
+            tipo: 'pedido', // Distinguir de ventas del POS
+            pedidoId: pedidoRef.id,
+            numeroPedido: selectedPedido.numeroPedido,
+            clienteId: selectedPedido.clienteId,
+            clienteNombre: selectedPedido.clienteNombre,
+            clienteDocumento: selectedPedido.clienteDocumento || '',
+            items: updatedItems.filter(item => !item.anulado && item.estadoItem !== 'Cambio de Talla'),
+            subtotal: selectedPedido.total,
+            total: selectedPedido.total,
+            totalAbonado: nuevoTotalAbonado,
+            saldoPendiente: nuevoSaldoPendiente,
+            abonos: updatedAbonos,
+            transaccionesIds: transaccionesIds, // Referencias a transacciones existentes
+            yaRegistradoEnCaja: true, // Importante: ya fue registrado en abonos
+            metodoPago: updatedAbonos.length > 0 ? updatedAbonos[updatedAbonos.length - 1].metodoPago : 'N/A',
+            fecha: serverTimestamp(),
+            userId: currentUser.uid,
+            colegioId: selectedPedido.colegioId,
+            colegioNombre: selectedPedido.colegioNombre
+          };
+
+          await addDoc(collection(db, 'sales'), facturaData);
+
+          // Actualizar pedido con el número de factura
+          await updateDoc(pedidoRef, {
+            facturado: true,
+            numeroFactura: numeroFactura,
+            fechaFacturacion: serverTimestamp()
+          });
+
+        } catch (error) {
+          console.error('Error al generar factura:', error);
+          alert('⚠️ La entrega se completó pero hubo un error al generar la factura. Por favor, contacta a soporte.');
+        }
+      }
+
+      let mensaje = '✅ Entrega registrada correctamente.';
+      if (numeroFactura) {
+        mensaje += `\n\n🧾 Factura #${numeroFactura} generada automáticamente.`;
+        mensaje += `\n\nPuedes buscar esta factura en el módulo de Devoluciones/Cambios si el cliente necesita hacer un cambio posteriormente.`;
+      }
+      alert(mensaje);
 
       // Recargar
       const pedidoSnap = await getDoc(pedidoRef);
@@ -1758,6 +1848,214 @@ const Pedidos = () => {
       alert('❌ Error al cambiar cliente: ' + error.message);
     } finally {
       setCambiandoCliente(false);
+    }
+  };
+
+  // Funciones para cambiar talla de un producto
+  const handleAbrirCambiarTalla = (itemIndex) => {
+    setItemIndexToCambiarTalla(itemIndex);
+    setShowCambiarTallaModal(true);
+    setSearchNuevaTalla('');
+    setProductoNuevaTalla(null);
+    setMotivoCambioTalla('Cliente se probó y no le quedó');
+  };
+
+  const handleCerrarCambiarTalla = () => {
+    setShowCambiarTallaModal(false);
+    setItemIndexToCambiarTalla(null);
+    setSearchNuevaTalla('');
+    setProductoNuevaTalla(null);
+    setMotivoCambioTalla('');
+  };
+
+  const handleCambiarTalla = async () => {
+    if (!selectedPedido || itemIndexToCambiarTalla === null) return;
+
+    const itemActual = selectedPedido.items[itemIndexToCambiarTalla];
+
+    if (!productoNuevaTalla) {
+      alert('Por favor, selecciona el producto con la nueva talla.');
+      return;
+    }
+
+    if (!motivoCambioTalla.trim()) {
+      alert('Por favor, ingresa el motivo del cambio de talla.');
+      return;
+    }
+
+    // Validar que sea diferente producto
+    if (itemActual.productoId === productoNuevaTalla.id) {
+      alert('El producto seleccionado es el mismo que el actual.');
+      return;
+    }
+
+    const confirmar = window.confirm(
+      `🔄 CAMBIO DE TALLA\n\n` +
+      `Producto Actual:\n` +
+      `- ${itemActual.nombre} - Talla ${itemActual.talla}\n` +
+      `- Estado: ${itemActual.estadoItem}\n` +
+      `- Precio: $${itemActual.precio?.toLocaleString('es-CO')}\n\n` +
+      `Nueva Talla:\n` +
+      `- ${productoNuevaTalla.nombre} - Talla ${productoNuevaTalla.talla}\n` +
+      `- Precio: $${productoNuevaTalla.precio?.toLocaleString('es-CO')}\n\n` +
+      `Motivo: ${motivoCambioTalla}\n\n` +
+      `Esta acción:\n` +
+      `• Liberará la talla actual (volverá a stock disponible)\n` +
+      `• Agregará la nueva talla en "En Producción"\n` +
+      `• Ajustará el total del pedido si hay diferencia de precio\n\n` +
+      `¿Continuar?`
+    );
+
+    if (!confirmar) return;
+
+    // Prevenir doble clic
+    if (cambiandoTalla) return;
+    setCambiandoTalla(true);
+
+    try {
+      const batch = writeBatch(db);
+      const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
+
+      // Crear copia de items
+      const updatedItems = [...selectedPedido.items];
+
+      // Marcar el item actual como "cambiado" (para historial)
+      const itemCambiado = {
+        ...itemActual,
+        estadoItem: 'Cambio de Talla',
+        cambioTalla: {
+          fecha: new Date().toISOString(),
+          tallaAnterior: itemActual.talla,
+          tallaNueva: productoNuevaTalla.talla,
+          motivo: motivoCambioTalla,
+          usuario: currentUser?.email || 'Admin'
+        }
+      };
+      updatedItems[itemIndexToCambiarTalla] = itemCambiado;
+
+      // Agregar el nuevo producto con la nueva talla
+      const nuevoItem = {
+        productoId: productoNuevaTalla.id,
+        nombre: productoNuevaTalla.nombre,
+        referencia: productoNuevaTalla.referencia,
+        talla: productoNuevaTalla.talla,
+        cantidad: itemActual.cantidad,
+        precio: productoNuevaTalla.precio || 0,
+        subtotal: (productoNuevaTalla.precio || 0) * itemActual.cantidad,
+        categoria: productoNuevaTalla.categoria || '',
+        estadoItem: 'En Producción',
+        fechaSolicitud: new Date().toISOString(), // ✅ Fecha de hoy para reporte de corte
+        origenCambioTalla: {
+          itemOriginalIndex: itemIndexToCambiarTalla,
+          tallaAnterior: itemActual.talla,
+          fechaCambio: new Date().toISOString()
+        }
+      };
+      updatedItems.push(nuevoItem);
+
+      // Recalcular total del pedido
+      const nuevoTotal = updatedItems
+        .filter(item => !item.anulado && item.estadoItem !== 'Cambio de Talla')
+        .reduce((sum, item) => sum + item.subtotal, 0);
+
+      const nuevoSaldoPendiente = nuevoTotal - (selectedPedido.totalAbonado || 0);
+
+      // Actualizar inventario
+      // 1. Liberar el producto anterior
+      const itemYaEntregado = itemActual.estadoItem === 'Entregado';
+      const itemTeniaReserva = itemActual.estadoItem === 'Listo para Entrega' || itemActual.estadoItem === 'Parcialmente Listo';
+      const cantidadReservada = itemTeniaReserva ? (itemActual.cantidadLista || itemActual.cantidad) : 0;
+
+      const productoAnteriorRef = doc(db, 'products', itemActual.productoId);
+      const updateAnterior = {
+        updatedAt: serverTimestamp()
+      };
+
+      if (itemYaEntregado) {
+        // Si ya fue entregado, devolver al stock total (cliente lo devuelve)
+        updateAnterior.stockTotal = increment(itemActual.cantidad);
+        // No modificar totalPrendasPedidas ni stockReservadoPedidos (ya se decrementaron al entregar)
+      } else {
+        // Si NO fue entregado, liberar las reservas normalmente
+        updateAnterior.totalPrendasPedidas = increment(-itemActual.cantidad);
+
+        if (itemTeniaReserva) {
+          // Liberar la reserva y devolver a stock disponible
+          updateAnterior.stockReservadoPedidos = increment(-cantidadReservada);
+        }
+      }
+
+      batch.update(productoAnteriorRef, updateAnterior);
+
+      // Si el item ya fue entregado, crear transacción de cambio/devolución
+      if (itemYaEntregado) {
+        const transaccionCambioRef = doc(collection(db, 'transactions'));
+        batch.set(transaccionCambioRef, {
+          tipo: 'cambio_talla',
+          monto: 0, // No afecta caja, es un cambio
+          metodoPago: 'Cambio',
+          pedidoId: selectedPedido.id,
+          numeroPedido: selectedPedido.numeroPedido,
+          descripcion: `Cambio de talla en Pedido #${selectedPedido.numeroPedido}: ${itemActual.nombre} Talla ${itemActual.talla} → Talla ${productoNuevaTalla.talla}`,
+          clienteId: selectedPedido.clienteId,
+          clienteNombre: selectedPedido.clienteNombre,
+          productoDevuelto: {
+            nombre: itemActual.nombre,
+            talla: itemActual.talla,
+            cantidad: itemActual.cantidad
+          },
+          productoNuevo: {
+            nombre: productoNuevaTalla.nombre,
+            talla: productoNuevaTalla.talla,
+            cantidad: itemActual.cantidad
+          },
+          motivo: motivoCambioTalla,
+          fecha: serverTimestamp(),
+          userId: currentUser?.uid,
+          afectaCaja: false // No afecta el cierre de caja
+        });
+      }
+
+      // 2. Reservar el nuevo producto (solo totalPrendasPedidas porque está en producción)
+      const productoNuevoRef = doc(db, 'products', productoNuevaTalla.id);
+      batch.update(productoNuevoRef, {
+        totalPrendasPedidas: increment(itemActual.cantidad),
+        updatedAt: serverTimestamp()
+      });
+
+      // Actualizar el pedido
+      batch.update(pedidoRef, {
+        items: updatedItems,
+        total: nuevoTotal,
+        saldoPendiente: nuevoSaldoPendiente,
+        updatedAt: serverTimestamp()
+      });
+
+      await batch.commit();
+
+      const diferenciaPrecio = (productoNuevaTalla.precio || 0) - (itemActual.precio || 0);
+      let mensaje = `✅ Talla cambiada exitosamente.\n\n`;
+      mensaje += `${itemActual.nombre} Talla ${itemActual.talla} → Talla ${productoNuevaTalla.talla}\n\n`;
+      mensaje += `Nuevo total del pedido: $${nuevoTotal.toLocaleString('es-CO')}`;
+
+      if (diferenciaPrecio !== 0) {
+        mensaje += `\n\n💰 Diferencia de precio: ${diferenciaPrecio > 0 ? '+' : ''}$${diferenciaPrecio.toLocaleString('es-CO')}`;
+      }
+
+      alert(mensaje);
+
+      // Recargar pedido
+      const pedidoSnap = await getDoc(pedidoRef);
+      setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
+      fetchPedidos();
+      fetchProducts();
+      handleCerrarCambiarTalla();
+
+    } catch (error) {
+      console.error('Error al cambiar talla:', error);
+      alert('❌ Error al cambiar talla: ' + error.message);
+    } finally {
+      setCambiandoTalla(false);
     }
   };
 
@@ -3178,7 +3476,7 @@ const Pedidos = () => {
                           <td className="px-4 py-3 text-center">
                             {!item.anulado ? (
                               <div className="flex flex-col gap-2">
-                                <div className="flex gap-2 justify-center">
+                                <div className="flex gap-2 justify-center flex-wrap">
                                   {item.estadoItem !== 'Entregado' && (
                                     <>
                                       <button
@@ -3196,6 +3494,19 @@ const Pedidos = () => {
                                         📦 Estado
                                       </button>
                                     </>
+                                  )}
+                                  {/* Botón de cambio de talla: permitir en items listos O entregados si el pedido NO está completo */}
+                                  {(item.estadoItem === 'Listo para Entrega' ||
+                                    item.estadoItem === 'Parcialmente Listo' ||
+                                    (item.estadoItem === 'Entregado' && selectedPedido.estadoGeneral !== 'Entregado')
+                                  ) && (
+                                    <button
+                                      onClick={() => handleAbrirCambiarTalla(index)}
+                                      className="px-3 py-1 bg-purple-500 text-white text-xs rounded hover:bg-purple-600 transition-colors"
+                                      title="Cambiar talla (cliente vuelve porque no le quedó)"
+                                    >
+                                      🔄 Talla
+                                    </button>
                                   )}
                                   <button
                                     onClick={() => handleOpenAnularProducto(index)}
@@ -4373,6 +4684,147 @@ const Pedidos = () => {
                 onClick={handleCloseAnularProducto}
                 disabled={anulandoProducto}
                 className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CAMBIO DE TALLA */}
+      {showCambiarTallaModal && selectedPedido && itemIndexToCambiarTalla !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] px-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-semibold text-gray-800">🔄 Cambiar Talla de Producto</h3>
+              <button
+                onClick={handleCerrarCambiarTalla}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Advertencia */}
+            <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <p className="text-sm text-yellow-800">
+                <strong>⚠️ Importante:</strong> Esta función es para cuando el cliente se prueba el producto y no le queda.
+                El producto actual volverá a stock disponible y se agregará la nueva talla en "En Producción".
+              </p>
+            </div>
+
+            {/* Producto Actual */}
+            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <h4 className="font-semibold text-blue-800 mb-2">Producto Actual</h4>
+              <div className="text-sm text-gray-700">
+                <p><strong>Nombre:</strong> {selectedPedido.items[itemIndexToCambiarTalla].nombre}</p>
+                <p><strong>Talla:</strong> {selectedPedido.items[itemIndexToCambiarTalla].talla}</p>
+                <p><strong>Estado:</strong> {selectedPedido.items[itemIndexToCambiarTalla].estadoItem}</p>
+                <p><strong>Cantidad:</strong> {selectedPedido.items[itemIndexToCambiarTalla].cantidad}</p>
+                <p><strong>Precio:</strong> ${selectedPedido.items[itemIndexToCambiarTalla].precio?.toLocaleString('es-CO')}</p>
+                <p><strong>Subtotal:</strong> ${selectedPedido.items[itemIndexToCambiarTalla].subtotal?.toLocaleString('es-CO')}</p>
+              </div>
+            </div>
+
+            {/* Buscador de Nueva Talla */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Buscar Nueva Talla <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                placeholder="Buscar por nombre, referencia o talla..."
+                value={searchNuevaTalla}
+                onChange={(e) => setSearchNuevaTalla(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+              />
+            </div>
+
+            {/* Lista de Productos */}
+            {searchNuevaTalla && (
+              <div className="mb-4 max-h-60 overflow-y-auto border border-gray-200 rounded-lg">
+                {allProducts
+                  .filter(p => {
+                    const searchLower = searchNuevaTalla.toLowerCase();
+                    return (
+                      (p.nombre?.toLowerCase().includes(searchLower) ||
+                      p.referencia?.toLowerCase().includes(searchLower) ||
+                      p.talla?.toLowerCase().includes(searchLower)) &&
+                      p.id !== selectedPedido.items[itemIndexToCambiarTalla].productoId
+                    );
+                  })
+                  .slice(0, 20)
+                  .map(producto => (
+                    <div
+                      key={producto.id}
+                      onClick={() => setProductoNuevaTalla(producto)}
+                      className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${
+                        productoNuevaTalla?.id === producto.id ? 'bg-green-50 border-green-200' : ''
+                      }`}
+                    >
+                      <p className="font-medium text-gray-800">{producto.nombre}</p>
+                      <p className="text-sm text-gray-600">
+                        Ref: {producto.referencia} | Talla: {producto.talla} | Precio: ${producto.precio?.toLocaleString('es-CO')}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Stock Disponible: {(producto.stockTotal || 0) - (producto.stockReservadoPedidos || 0) - (producto.stockReservadoApartados || 0)}
+                      </p>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            {/* Producto Nuevo Seleccionado */}
+            {productoNuevaTalla && (
+              <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                <h4 className="font-semibold text-green-800 mb-2">Nueva Talla Seleccionada</h4>
+                <div className="text-sm text-gray-700">
+                  <p><strong>Nombre:</strong> {productoNuevaTalla.nombre}</p>
+                  <p><strong>Talla:</strong> {productoNuevaTalla.talla}</p>
+                  <p><strong>Precio:</strong> ${productoNuevaTalla.precio?.toLocaleString('es-CO')}</p>
+                  <p><strong>Nuevo Subtotal:</strong> ${(productoNuevaTalla.precio * selectedPedido.items[itemIndexToCambiarTalla].cantidad)?.toLocaleString('es-CO')}</p>
+                  {productoNuevaTalla.precio !== selectedPedido.items[itemIndexToCambiarTalla].precio && (
+                    <p className="mt-2 text-orange-700">
+                      <strong>Diferencia:</strong> ${Math.abs(productoNuevaTalla.precio - selectedPedido.items[itemIndexToCambiarTalla].precio)?.toLocaleString('es-CO')}
+                      {productoNuevaTalla.precio > selectedPedido.items[itemIndexToCambiarTalla].precio ? ' (aumenta)' : ' (disminuye)'}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Motivo del Cambio */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Motivo del Cambio <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={motivoCambioTalla}
+                onChange={(e) => setMotivoCambioTalla(e.target.value)}
+                placeholder="Ej: Cliente se probó y no le quedó, necesita talla más grande..."
+                rows={3}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+              />
+            </div>
+
+            {/* Botones */}
+            <div className="flex gap-3">
+              <button
+                onClick={handleCambiarTalla}
+                disabled={cambiandoTalla || !productoNuevaTalla || !motivoCambioTalla.trim()}
+                style={{ backgroundColor: '#D50565' }}
+                className="flex-1 px-6 py-3 text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {cambiandoTalla && <Loader2 size={18} className="animate-spin" />}
+                {cambiandoTalla ? 'Cambiando Talla...' : '✓ Cambiar Talla'}
+              </button>
+              <button
+                onClick={handleCerrarCambiarTalla}
+                disabled={cambiandoTalla}
+                className="px-6 py-3 bg-gray-500 text-white font-medium rounded-lg hover:bg-gray-600 transition-colors disabled:opacity-50"
               >
                 Cancelar
               </button>

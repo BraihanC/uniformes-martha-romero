@@ -75,7 +75,7 @@ const Header = () => {
     await marcarComoLeida(notif.id);
     setShowNotifications(false);
     // Navigate to relevant page based on notification type
-    if (notif.tipo === 'nuevo_pedido_b2b') {
+    if (notif.tipo === 'nuevo_pedido_b2b' || notif.tipo === 'recepcion_producto') {
       navigate('/pedidos-b2b');
     } else if (notif.tipo === 'reporte_imperfecto') {
       navigate('/reportes-imperfectos');
@@ -174,33 +174,98 @@ const Header = () => {
                   </div>
                 ) : (
                   <div className="divide-y divide-gray-100">
-                    {notificaciones.map((notif) => (
-                      <div
-                        key={notif.id}
-                        onClick={() => handleNotificacionClick(notif)}
-                        className="p-4 hover:bg-gray-50 cursor-pointer transition-colors"
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="w-2 h-2 bg-blue-500 rounded-full mt-2 flex-shrink-0"></div>
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium text-gray-900 text-sm">
-                              {notif.titulo}
-                            </p>
-                            <p className="text-sm text-gray-600 mt-1">
-                              {notif.mensaje}
-                            </p>
-                            <p className="text-xs text-gray-400 mt-2">
-                              {notif.createdAt?.toDate?.()?.toLocaleDateString('es-MX', {
-                                day: 'numeric',
-                                month: 'short',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                              })}
-                            </p>
+                    {notificaciones.map((notif) => {
+                      // Detectar si es una notificación de recepción con datos estructurados
+                      const esRecepcion = notif.tipo === 'recepcion_producto';
+                      const tieneDiscrepancia = esRecepcion && notif.cantidadRecibidaReportada !== undefined &&
+                                               notif.cantidadRecibidaReportada < notif.cantidadEnviada;
+
+                      return (
+                        <div
+                          key={notif.id}
+                          onClick={() => handleNotificacionClick(notif)}
+                          className={`p-4 hover:bg-gray-50 cursor-pointer transition-colors ${
+                            tieneDiscrepancia ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''
+                          }`}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${
+                              tieneDiscrepancia ? 'bg-yellow-500' : 'bg-blue-500'
+                            }`}></div>
+                            <div className="flex-1 min-w-0">
+                              {esRecepcion && notif.cantidadRecibidaReportada !== undefined ? (
+                                // Vista mejorada para recepciones con datos estructurados
+                                <>
+                                  <div className="flex items-center gap-2 mb-1">
+                                    {tieneDiscrepancia && (
+                                      <span className="text-yellow-600 font-bold text-xs">⚠️</span>
+                                    )}
+                                    <p className="font-medium text-gray-900 text-sm">
+                                      {notif.titulo}
+                                    </p>
+                                  </div>
+
+                                  {/* Cliente */}
+                                  {notif.clienteNombre && (
+                                    <p className="text-xs text-gray-500 mb-2">
+                                      📍 Cliente: <span className="font-medium text-gray-700">{notif.clienteNombre}</span>
+                                    </p>
+                                  )}
+
+                                  {/* Pedido ID (últimos 8 caracteres) */}
+                                  {notif.pedidoId && (
+                                    <p className="text-xs text-gray-500 mb-2">
+                                      🔖 Pedido: <span className="font-mono text-gray-700">...{notif.pedidoId.slice(-8)}</span>
+                                    </p>
+                                  )}
+
+                                  {/* Producto */}
+                                  <p className="text-xs text-gray-700 font-medium mb-1">
+                                    📦 {notif.productoDescripcion} {notif.productoTalla ? `- Talla ${notif.productoTalla}` : ''}
+                                  </p>
+
+                                  {/* Cantidades */}
+                                  <div className="flex items-center gap-3 text-xs mt-2">
+                                    <span className="text-gray-600">
+                                      Enviadas: <span className="font-semibold">{notif.cantidadEnviada}</span>
+                                    </span>
+                                    <span className={tieneDiscrepancia ? 'text-yellow-700 font-semibold' : 'text-green-700 font-semibold'}>
+                                      Recibidas: <span className="font-bold">{notif.cantidadRecibidaReportada}</span>
+                                    </span>
+                                  </div>
+
+                                  {/* Observaciones */}
+                                  {notif.observaciones && (
+                                    <p className="text-xs text-gray-600 italic mt-2 pl-2 border-l-2 border-gray-300">
+                                      "{notif.observaciones}"
+                                    </p>
+                                  )}
+                                </>
+                              ) : (
+                                // Vista normal para otras notificaciones
+                                <>
+                                  <p className="font-medium text-gray-900 text-sm">
+                                    {notif.titulo}
+                                  </p>
+                                  <p className="text-sm text-gray-600 mt-1">
+                                    {notif.mensaje}
+                                  </p>
+                                </>
+                              )}
+
+                              <p className="text-xs text-gray-400 mt-2">
+                                {notif.createdAt?.toDate?.()?.toLocaleDateString('es-MX', {
+                                  day: 'numeric',
+                                  month: 'short',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                })}
+                              </p>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

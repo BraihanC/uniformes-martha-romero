@@ -456,9 +456,13 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
   // FUNCIÓN ADMINISTRATIVA: Recalcular stockReservadoPedidos desde los pedidos activos
   const recalcularInventarioCompleto = async () => {
     const confirmar = window.confirm(
-      '⚠️ RECALCULAR INVENTARIO COMPLETO\n\n' +
-      'Esta función recalculará el stockReservadoPedidos de TODOS los productos basándose en el estado real de TODOS los pedidos.\n\n' +
-      'Esto corregirá cualquier descuadre en el inventario.\n\n' +
+      '⚠️ RECALCULAR RESERVAS DE INVENTARIO\n\n' +
+      'Esta función recalculará las reservas de TODOS los productos:\n' +
+      '• totalPrendasPedidas (unidades pedidas pendientes de entrega)\n' +
+      '• stockReservadoPedidos (desde pedidos POS activos)\n' +
+      '• stockReservadoB2B (desde pedidos B2B activos)\n' +
+      '• stockReservadoApartados (desde apartados activos)\n\n' +
+      'NOTA: El stockTotal NO se modificará.\n\n' +
       '¿Deseas continuar?'
     );
 
@@ -466,14 +470,15 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
 
     setLoading(true);
     try {
-      console.log('🔄 Iniciando recálculo de inventario...');
+      console.log('🔄 Iniciando recálculo de reservas de inventario...');
 
-      // 1. Leer TODOS los pedidos (sin filtro para asegurar que no se pierda ninguno)
+      // PASO 1: Calcular stockReservadoPedidos y totalPrendasPedidas desde pedidos POS
+      console.log('\n📦 PASO 1: Calculando stockReservadoPedidos y totalPrendasPedidas desde pedidos POS...');
       const pedidosSnapshot = await getDocs(collection(db, 'pedidos'));
-      console.log(`📦 Total de pedidos encontrados: ${pedidosSnapshot.size}`);
+      console.log(`   Total de pedidos encontrados: ${pedidosSnapshot.size}`);
 
-      // 2. Calcular stock reservado por producto
       const stockReservadoPorProducto = {}; // { productoId: cantidadReservada }
+      const totalPrendasPedidasPorProducto = {}; // { productoId: cantidadPedida }
       const detallesPorProducto = {}; // Para debugging
 
       // Contadores para estadísticas
@@ -486,10 +491,14 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
 
       pedidosSnapshot.forEach(docSnap => {
         const pedido = docSnap.data();
-        const pedidoId = docSnap.id;
         const numeroPedido = pedido.numeroPedido;
         const estadoGeneral = pedido.estadoGeneral;
         const items = pedido.items || [];
+
+        // Saltar pedidos anulados o cancelados
+        if (estadoGeneral === 'Anulado' || estadoGeneral === 'Cancelado') {
+          return;
+        }
 
         pedidosRevisados++;
 
@@ -518,26 +527,27 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
           else if (estadoItem === 'Listo para Entrega') itemsListoParaEntrega++;
           else if (estadoItem === 'Entregado') itemsEntregados++;
 
+          // Calcular totalPrendasPedidas: unidades pendientes de entrega (no incluye Entregados)
+          if (estadoItem !== 'Entregado') {
+            const cantidadPendiente = Math.max(0, cantidadTotal - cantidadEntregada);
+            if (!totalPrendasPedidasPorProducto[productoId]) {
+              totalPrendasPedidasPorProducto[productoId] = 0;
+            }
+            totalPrendasPedidasPorProducto[productoId] += cantidadPendiente;
+          }
+
           // Calcular cuánto stock reserva este item
           let cantidadReservada = 0;
 
           if (estadoItem === 'Listo para Entrega') {
-            // Reserva todo lo que NO se ha entregado
-            // cantidadTotal incluye todo, entonces restamos lo entregado
             cantidadReservada = Math.max(0, cantidadTotal - cantidadEntregada);
           } else if (estadoItem === 'Parcialmente Listo') {
-            // IMPORTANTE: cantidadLista YA excluye las entregadas
-            // Cuando se entrega, cantidadLista se pone en 0 y se suma a cantidadEntregada
-            // Por lo tanto, cantidadLista = unidades listas que NO se han entregado
             cantidadReservada = cantidadLista;
           } else if (estadoItem === 'En Producción') {
-            // No reserva stock (aún no está en bodega)
             cantidadReservada = 0;
           } else if (estadoItem === 'Entregado') {
-            // Ya se entregó, no reserva stock
             cantidadReservada = 0;
           } else {
-            // Estado desconocido
             console.warn(`⚠️ Pedido #${numeroPedido}: Estado desconocido "${estadoItem}"`);
             cantidadReservada = 0;
           }
@@ -549,7 +559,6 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
           }
           stockReservadoPorProducto[productoId] += cantidadReservada;
 
-          // Guardar detalle para debugging
           if (cantidadReservada > 0) {
             detallesPorProducto[productoId].push({
               pedido: numeroPedido,
@@ -562,33 +571,142 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
         });
       });
 
-      console.log(`📊 Estadísticas de items:`);
-      console.log(`  - En Producción: ${itemsEnProduccion}`);
-      console.log(`  - Parcialmente Listo: ${itemsParcialmenteListo}`);
-      console.log(`  - Listo para Entrega: ${itemsListoParaEntrega}`);
-      console.log(`  - Entregados: ${itemsEntregados}`);
-      console.log(`  - Anulados: ${itemsAnulados}`);
+      console.log(`   Estadísticas de items POS:`);
+      console.log(`     - En Producción: ${itemsEnProduccion}`);
+      console.log(`     - Parcialmente Listo: ${itemsParcialmenteListo}`);
+      console.log(`     - Listo para Entrega: ${itemsListoParaEntrega}`);
+      console.log(`     - Entregados: ${itemsEntregados}`);
+      console.log(`     - Anulados: ${itemsAnulados}`);
 
-      // 3. Actualizar todos los productos
+      // PASO 2: Calcular stockReservadoB2B desde pedidos B2B
+      console.log('\n📦 PASO 2: Calculando stockReservadoB2B desde pedidos B2B...');
+      const pedidosB2BSnapshot = await getDocs(collection(db, 'pedidos_b2b'));
+      const stockReservadoB2BPorProducto = {}; // { productoId: cantidadReservada }
+
+      pedidosB2BSnapshot.forEach(docSnap => {
+        const pedido = docSnap.data();
+        const estadoGeneral = pedido.estadoGeneral;
+        const productos = pedido.productos || [];
+
+        // Saltar pedidos anulados o cancelados
+        if (estadoGeneral === 'Anulado' || estadoGeneral === 'Cancelado') {
+          return;
+        }
+
+        productos.forEach(producto => {
+          const productoId = producto.productoId;
+          if (!productoId) return;
+
+          // Saltar productos anulados
+          if (producto.anulado === true) return;
+
+          // Solo reservar si está alistado o en producción
+          if (producto.estadoProduccion === 'alistado' || producto.estadoProduccion === 'en_produccion') {
+            const cantidadAlistada = producto.cantidadAlistada || 0;
+            const cantidadEntregada = producto.cantidadEntregada || 0;
+            const cantidadReservada = Math.max(0, cantidadAlistada - cantidadEntregada);
+
+            if (!stockReservadoB2BPorProducto[productoId]) {
+              stockReservadoB2BPorProducto[productoId] = 0;
+            }
+            stockReservadoB2BPorProducto[productoId] += cantidadReservada;
+          }
+        });
+      });
+
+      console.log(`   Pedidos B2B procesados: ${pedidosB2BSnapshot.size}`);
+
+      // PASO 3: Calcular stockReservadoApartados desde apartados activos
+      console.log('\n📦 PASO 3: Calculando stockReservadoApartados desde apartados...');
+      const apartadosSnapshot = await getDocs(collection(db, 'apartados'));
+      const stockReservadoApartadosPorProducto = {}; // { productoId: cantidadReservada }
+
+      let apartadosActivos = 0;
+      apartadosSnapshot.forEach(docSnap => {
+        const apartado = docSnap.data();
+        const estadoGeneral = apartado.estadoGeneral;
+
+        // Solo contar apartados activos o vencidos (que aún tienen productos reservados)
+        if (estadoGeneral === 'Activo' || estadoGeneral === 'Vencido') {
+          apartadosActivos++;
+          const items = apartado.items || [];
+
+          items.forEach(item => {
+            const productoId = item.productoId;
+            if (!productoId) return;
+
+            // Solo contar items que no estén anulados
+            if (!item.anulado) {
+              const cantidad = item.cantidad || 0;
+
+              if (!stockReservadoApartadosPorProducto[productoId]) {
+                stockReservadoApartadosPorProducto[productoId] = 0;
+              }
+              stockReservadoApartadosPorProducto[productoId] += cantidad;
+            }
+          });
+        }
+      });
+
+      console.log(`   Apartados procesados: ${apartadosSnapshot.size}`);
+      console.log(`   Apartados activos/vencidos: ${apartadosActivos}`);
+
+      // PASO 4: Actualizar todos los productos (SOLO RESERVAS, NO stockTotal)
+      console.log('\n📦 PASO 4: Actualizando reservas en la base de datos...');
       const batch = writeBatch(db);
       const productosSnapshot = await getDocs(collection(db, 'products'));
 
       let productosActualizados = 0;
       let productosConCambios = [];
+      let totalPrendasCorregido = 0;
+      let stockReservadoCorregido = 0;
+      let stockB2BCorregido = 0;
+      let stockApartadosCorregido = 0;
 
       productosSnapshot.forEach(docSnap => {
         const productoId = docSnap.id;
         const productoData = docSnap.data();
+
+        const totalPrendasCalculado = totalPrendasPedidasPorProducto[productoId] || 0;
+        const totalPrendasActual = productoData.totalPrendasPedidas || 0;
+
         const stockReservadoCalculado = stockReservadoPorProducto[productoId] || 0;
         const stockReservadoActual = productoData.stockReservadoPedidos || 0;
 
-        // Solo actualizar si hay diferencia
-        if (stockReservadoCalculado !== stockReservadoActual) {
+        const stockB2BCalculado = stockReservadoB2BPorProducto[productoId] || 0;
+        const stockB2BActual = productoData.stockReservadoB2B || 0;
+
+        const stockApartadosCalculado = stockReservadoApartadosPorProducto[productoId] || 0;
+        const stockApartadosActual = productoData.stockReservadoApartados || 0;
+
+        // Verificar si hay diferencias (SOLO en reservas, NO en stockTotal)
+        const cambioTotalPrendas = totalPrendasCalculado !== totalPrendasActual;
+        const cambioReservado = stockReservadoCalculado !== stockReservadoActual;
+        const cambioB2B = stockB2BCalculado !== stockB2BActual;
+        const cambioApartados = stockApartadosCalculado !== stockApartadosActual;
+
+        if (cambioTotalPrendas || cambioReservado || cambioB2B || cambioApartados) {
           const productoRef = doc(db, 'products', productoId);
-          batch.update(productoRef, {
-            stockReservadoPedidos: stockReservadoCalculado,
-            updatedAt: serverTimestamp()
-          });
+          const updates = { updatedAt: serverTimestamp() };
+
+          if (cambioTotalPrendas) {
+            updates.totalPrendasPedidas = totalPrendasCalculado;
+            totalPrendasCorregido++;
+          }
+          if (cambioReservado) {
+            updates.stockReservadoPedidos = stockReservadoCalculado;
+            stockReservadoCorregido++;
+          }
+          if (cambioB2B) {
+            updates.stockReservadoB2B = stockB2BCalculado;
+            stockB2BCorregido++;
+          }
+          if (cambioApartados) {
+            updates.stockReservadoApartados = stockApartadosCalculado;
+            stockApartadosCorregido++;
+          }
+
+          batch.update(productoRef, updates);
           productosActualizados++;
 
           // Guardar para el reporte
@@ -596,34 +714,66 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
             nombre: productoData.nombre,
             referencia: productoData.referencia,
             talla: productoData.talla,
-            anterior: stockReservadoActual,
-            nuevo: stockReservadoCalculado,
-            diferencia: stockReservadoCalculado - stockReservadoActual
+            totalPrendas: {
+              anterior: totalPrendasActual,
+              nuevo: totalPrendasCalculado,
+              cambio: cambioTotalPrendas
+            },
+            stockReservado: {
+              anterior: stockReservadoActual,
+              nuevo: stockReservadoCalculado,
+              cambio: cambioReservado
+            },
+            stockB2B: {
+              anterior: stockB2BActual,
+              nuevo: stockB2BCalculado,
+              cambio: cambioB2B
+            },
+            stockApartados: {
+              anterior: stockApartadosActual,
+              nuevo: stockApartadosCalculado,
+              cambio: cambioApartados
+            }
           });
         }
       });
 
-      // 4. Commit
+      // Commit
       await batch.commit();
 
-      // 5. Mostrar reporte detallado
-      console.log(`\n📝 REPORTE DE CAMBIOS:`);
+      // Mostrar reporte detallado en consola
+      console.log(`\n📝 REPORTE DE CAMBIOS (${productosConCambios.length} productos):`);
       productosConCambios.forEach(p => {
-        console.log(`${p.referencia} ${p.talla}: ${p.anterior} → ${p.nuevo} (${p.diferencia > 0 ? '+' : ''}${p.diferencia})`);
+        console.log(`\n${p.referencia} ${p.talla} - ${p.nombre}`);
+        if (p.totalPrendas.cambio) {
+          console.log(`  totalPrendasPedidas: ${p.totalPrendas.anterior} → ${p.totalPrendas.nuevo}`);
+        }
+        if (p.stockReservado.cambio) {
+          console.log(`  stockReservadoPedidos: ${p.stockReservado.anterior} → ${p.stockReservado.nuevo}`);
+        }
+        if (p.stockB2B.cambio) {
+          console.log(`  stockReservadoB2B: ${p.stockB2B.anterior} → ${p.stockB2B.nuevo}`);
+        }
+        if (p.stockApartados.cambio) {
+          console.log(`  stockReservadoApartados: ${p.stockApartados.anterior} → ${p.stockApartados.nuevo}`);
+        }
       });
 
       alert(
-        `✅ INVENTARIO RECALCULADO EXITOSAMENTE\n\n` +
-        `📦 Pedidos revisados: ${pedidosRevisados}\n` +
-        `📊 Items procesados:\n` +
-        `   • En Producción: ${itemsEnProduccion}\n` +
-        `   • Parcialmente Listo: ${itemsParcialmenteListo}\n` +
-        `   • Listo para Entrega: ${itemsListoParaEntrega}\n` +
-        `   • Entregados: ${itemsEntregados}\n` +
-        `   • Anulados: ${itemsAnulados}\n\n` +
-        `🔧 Productos actualizados: ${productosActualizados}\n` +
+        `✅ RESERVAS RECALCULADAS EXITOSAMENTE\n\n` +
+        `📊 RESUMEN:\n` +
+        `   • Pedidos POS revisados: ${pedidosRevisados}\n` +
+        `   • Pedidos B2B revisados: ${pedidosB2BSnapshot.size}\n` +
+        `   • Apartados revisados: ${apartadosSnapshot.size} (${apartadosActivos} activos)\n\n` +
+        `🔧 CORRECCIONES APLICADAS:\n` +
+        `   • totalPrendasPedidas corregido: ${totalPrendasCorregido} productos\n` +
+        `   • stockReservadoPedidos corregido: ${stockReservadoCorregido} productos\n` +
+        `   • stockReservadoB2B corregido: ${stockB2BCorregido} productos\n` +
+        `   • stockReservadoApartados corregido: ${stockApartadosCorregido} productos\n\n` +
+        `📝 Total productos actualizados: ${productosActualizados}\n` +
         `📝 Total productos revisados: ${productosSnapshot.size}\n\n` +
-        `Revisa la consola para ver el detalle de cambios.`
+        `ℹ️ El stockTotal NO fue modificado.\n\n` +
+        `Revisa la consola (F12) para ver el detalle completo de cambios.`
       );
 
       // Recargar productos
@@ -958,7 +1108,7 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
               disabled={loading}
               style={{ backgroundColor: '#4CAF50' }}
               className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Recalcular stockReservadoPedidos basándose en el estado real de los pedidos"
+              title="Recalcular inventario completo: stockTotal desde entradas, stockReservadoPedidos desde pedidos POS, stockReservadoB2B desde pedidos B2B, y stockReservadoApartados desde apartados activos"
             >
               <span className="hidden sm:inline">🔄 Recalcular Inventario</span>
               <span className="sm:hidden">🔄 Recalc.</span>
