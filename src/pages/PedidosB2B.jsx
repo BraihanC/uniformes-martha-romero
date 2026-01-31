@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, arrayUnion, serverTimestamp, query, orderBy, addDoc, where, limit, getDoc, writeBatch, increment, runTransaction } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, serverTimestamp, query, orderBy, addDoc, where, limit, getDoc, writeBatch, increment, runTransaction } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
-import { Package, DollarSign, CheckCircle, Clock, Eye, Plus, Calendar, CreditCard, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer, Loader2 } from 'lucide-react';
+import { Package, CheckCircle, Eye, Calendar, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer, Loader2 } from 'lucide-react';
 import jsPDF from 'jspdf';
 
 const PedidosB2B = () => {
@@ -11,9 +11,6 @@ const PedidosB2B = () => {
   const [loading, setLoading] = useState(true);
   const [selectedPedido, setSelectedPedido] = useState(null);
   const [showDetalleModal, setShowDetalleModal] = useState(false);
-  const [showAbonoModal, setShowAbonoModal] = useState(false);
-  const [montoAbono, setMontoAbono] = useState('');
-  const [notasAbono, setNotasAbono] = useState('');
   const [showAlistarModal, setShowAlistarModal] = useState(false);
   const [productoAlistar, setProductoAlistar] = useState(null);
   const [cantidadAlistar, setCantidadAlistar] = useState('');
@@ -32,7 +29,9 @@ const PedidosB2B = () => {
   // Estados para filtros
   const [busquedaPedido, setBusquedaPedido] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('todos');
-  const [filtroEstadoPago, setFiltroEstadoPago] = useState('todos');
+  const [filtroEspecial, setFiltroEspecial] = useState('todos'); // 'discrepancias', 'pendientes', 'todos'
+  const [filtroProductosModal, setFiltroProductosModal] = useState(''); // Filtro dentro del modal de detalle
+  const [soloConPendientesModal, setSoloConPendientesModal] = useState(false); // Filtro de solo pendientes en modal
 
   // Estados para paginación
   const [paginaActual, setPaginaActual] = useState(1);
@@ -40,7 +39,6 @@ const PedidosB2B = () => {
 
   // Estados de carga para operaciones
   const [aprobandoPedido, setAprobandoPedido] = useState(null); // ID del pedido que se está aprobando
-  const [registrandoAbono, setRegistrandoAbono] = useState(false);
   const [alistandoProducto, setAlistandoProducto] = useState(false);
   const [enviandoProductos, setEnviandoProductos] = useState(false);
 
@@ -100,47 +98,37 @@ const PedidosB2B = () => {
     }).format(date);
   };
 
-  const calcularTotalAbonado = (abonos) => {
-    if (!abonos || abonos.length === 0) return 0;
-    return abonos.reduce((sum, abono) => sum + (abono.monto || 0), 0);
-  };
-
-  const calcularSaldoPendiente = (total, abonos) => {
-    return total - calcularTotalAbonado(abonos);
-  };
-
-  const calcularEstadoPago = (total, abonos) => {
-    const totalAbonado = calcularTotalAbonado(abonos);
-    if (totalAbonado === 0) return 'Sin Pagar';
-    if (totalAbonado >= total) return 'Pagado';
-    return 'Pago Parcial';
-  };
-
-  const getEstadoPagoBadgeColor = (estadoPago) => {
-    switch (estadoPago) {
-      case 'Pagado':
-        return 'bg-green-100 text-green-800 border-green-300';
-      case 'Pago Parcial':
-        return 'bg-yellow-100 text-yellow-800 border-yellow-300';
-      case 'Sin Pagar':
-        return 'bg-red-100 text-red-800 border-red-300';
-      default:
-        return 'bg-gray-100 text-gray-800 border-gray-300';
-    }
+  // Función para cerrar el modal de detalle y limpiar filtros
+  const cerrarModalDetalle = () => {
+    setShowDetalleModal(false);
+    setFiltroProductosModal('');
+    setSoloConPendientesModal(false);
   };
 
   // Filtrar pedidos según los criterios seleccionados
   const pedidosFiltrados = pedidos.filter(pedido => {
-    // Filtro por búsqueda (número de pedido o cliente)
+    // Filtro por búsqueda (número de pedido, cliente o productos)
     if (busquedaPedido.trim()) {
       const busqueda = busquedaPedido.toLowerCase().trim();
       const numeroPedido = String(pedido.numeroPedido || '').padStart(4, '0');
       const clienteNombre = (pedido.clienteNombre || '').toLowerCase();
       const codigoColegio = (pedido.codigoColegio || '').toLowerCase();
 
+      // Buscar en productos del pedido
+      const tieneProductoCoincidente = pedido.productos?.some(producto => {
+        const descripcion = (producto.descripcion || '').toLowerCase();
+        const codigo = (producto.codigo || '').toLowerCase();
+        const talla = (producto.talla || '').toLowerCase();
+
+        return descripcion.includes(busqueda) ||
+               codigo.includes(busqueda) ||
+               talla.includes(busqueda);
+      });
+
       if (!numeroPedido.includes(busqueda) &&
           !clienteNombre.includes(busqueda) &&
-          !codigoColegio.includes(busqueda)) {
+          !codigoColegio.includes(busqueda) &&
+          !tieneProductoCoincidente) {
         return false;
       }
     }
@@ -150,10 +138,32 @@ const PedidosB2B = () => {
       return false;
     }
 
-    // Filtro por estado de pago
-    if (filtroEstadoPago !== 'todos') {
-      const estadoPago = calcularEstadoPago(pedido.total, pedido.abonos);
-      if (estadoPago !== filtroEstadoPago) {
+    // Filtro especial (discrepancias o pendientes)
+    if (filtroEspecial === 'discrepancias') {
+      const tieneDiscrepancia = pedido.productos?.some(producto => {
+        const cantidadRecibida = producto.cantidadRecibida || 0;
+        const cantidadEnviada = producto.cantidadEnviada || 0;
+        return cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+      });
+      if (!tieneDiscrepancia) {
+        return false;
+      }
+    }
+
+    if (filtroEspecial === 'pendientes') {
+      const tienePendientes = pedido.productos?.some(producto => {
+        const cantidadPedida = producto.cantidad || 0;
+        const cantidadAlistada = producto.cantidadAlistada || 0;
+        const cantidadEnviada = producto.cantidadEnviada || 0;
+        const cantidadRecibida = producto.cantidadRecibida || 0;
+        const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+
+        const pendientesOriginal = Math.max(0, cantidadPedida - cantidadAlistada);
+        const pendientesPorDiscrepancia = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+
+        return (pendientesOriginal + pendientesPorDiscrepancia) > 0;
+      });
+      if (!tienePendientes) {
         return false;
       }
     }
@@ -170,7 +180,7 @@ const PedidosB2B = () => {
   // Resetear página cuando cambian los filtros
   useEffect(() => {
     setPaginaActual(1);
-  }, [busquedaPedido, filtroEstado, filtroEstadoPago]);
+  }, [busquedaPedido, filtroEstado, filtroEspecial]);
 
   // Función auxiliar para buscar producto en inventario por ID o referencia
   const buscarProductoEnInventario = async (productoId, codigo, talla) => {
@@ -252,90 +262,9 @@ const PedidosB2B = () => {
     }
   };
 
-  const handleRegistrarAbono = async () => {
-    const monto = parseFloat(montoAbono);
-    if (!monto || monto <= 0) {
-      alert('Ingresa un monto válido');
-      return;
-    }
-
-    if (!notasAbono.trim()) {
-      alert('Ingresa notas del abono');
-      return;
-    }
-
-    setRegistrandoAbono(true);
-    try {
-      // Usar batch para operaciones atómicas
-      const batch = writeBatch(db);
-
-      const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
-      const nuevoAbono = {
-        monto: monto,
-        fecha: new Date(),
-        registradoPor: user?.displayName || user?.email || 'Administrador',
-        notas: notasAbono.trim()
-      };
-
-      // Calcular nuevo saldo antes del batch
-      const nuevoSaldo = calcularSaldoPendiente(selectedPedido.total, [...(selectedPedido.abonos || []), nuevoAbono]);
-
-      // 1. Actualizar pedido con el abono
-      batch.update(pedidoRef, {
-        abonos: arrayUnion(nuevoAbono),
-        updatedAt: serverTimestamp()
-      });
-
-      // 2. Crear registro en transacciones_b2b para contabilidad
-      const transaccionRef = doc(collection(db, 'transacciones_b2b'));
-      batch.set(transaccionRef, {
-        tipo: 'abono_pedido_b2b',
-        pedidoId: selectedPedido.id,
-        numeroPedido: selectedPedido.numeroPedido || 0,
-        clienteId: selectedPedido.clienteId || '',
-        clienteNombre: selectedPedido.clienteNombre || '',
-        codigoColegio: selectedPedido.codigoColegio || '',
-        monto: monto,
-        metodoPago: 'No especificado',
-        referencia: '',
-        notas: notasAbono.trim(),
-        totalPedido: selectedPedido.total || 0,
-        saldoPendiente: nuevoSaldo,
-        createdAt: serverTimestamp(),
-        createdBy: user?.displayName || user?.email || 'Administrador'
-      });
-
-      // 3. Crear notificación para el cliente
-      const notificacionRef = doc(collection(db, 'notificaciones_portal'));
-      batch.set(notificacionRef, {
-        clienteId: selectedPedido.clienteId,
-        tipo: 'abono_registrado',
-        titulo: 'Pago Registrado',
-        mensaje: `Se ha registrado un pago de ${formatCurrency(monto)} en tu pedido #${String(selectedPedido.numeroPedido || 0).padStart(4, '0')}. Saldo pendiente: ${formatCurrency(nuevoSaldo)}`,
-        leida: false,
-        pedidoId: selectedPedido.id,
-        createdAt: serverTimestamp()
-      });
-
-      // Ejecutar todas las operaciones atómicamente
-      await batch.commit();
-
-      alert('Abono registrado exitosamente');
-      setShowAbonoModal(false);
-      setMontoAbono('');
-      setNotasAbono('');
-      fetchPedidos();
-    } catch (error) {
-      console.error('Error al registrar abono:', error);
-      alert('Error al registrar abono: ' + error.message);
-    } finally {
-      setRegistrandoAbono(false);
-    }
-  };
-
   const handleAlistarProducto = async () => {
     const cantidad = parseInt(cantidadAlistar);
-    const cantidadPendiente = productoAlistar.cantidad - (productoAlistar.cantidadAlistada || 0);
+    const cantidadPendiente = Math.max(0, productoAlistar.cantidad - (productoAlistar.cantidadAlistada || 0));
 
     if (!cantidad || cantidad <= 0) {
       alert('Ingresa una cantidad válida');
@@ -547,13 +476,67 @@ const PedidosB2B = () => {
       );
 
       alert(`Productos enviados exitosamente (${tipoEnvio})`);
-      setShowDetalleModal(false);
+      cerrarModalDetalle();
       fetchPedidos();
     } catch (error) {
       console.error('Error al enviar productos:', error);
       alert('Error al enviar productos: ' + error.message);
     } finally {
       setEnviandoProductos(false);
+    }
+  };
+
+  // Corregir cantidad recibida (cuando el cliente reportó mal)
+  // Marcar pedido como completado manualmente (para cuando sabes que faltan prendas pero quieres cerrar el pedido)
+  const handleCompletarPedidoManualmente = async () => {
+    if (!selectedPedido) return;
+
+    const productosConDiscrepancia = selectedPedido.productos.filter(p => {
+      const enviadas = p.cantidadEnviada || 0;
+      const recibidas = p.cantidadRecibida || 0;
+      return recibidas > 0 && recibidas < enviadas;
+    });
+
+    let mensajeConfirmacion = '¿Estás seguro de marcar este pedido como COMPLETADO?\n\n';
+
+    if (productosConDiscrepancia.length > 0) {
+      mensajeConfirmacion += '⚠️ ATENCIÓN: Hay productos con discrepancias:\n\n';
+      productosConDiscrepancia.forEach(p => {
+        mensajeConfirmacion += `• ${p.descripcion} (${p.talla}): Enviadas ${p.cantidadEnviada}, Recibidas ${p.cantidadRecibida}\n`;
+      });
+      mensajeConfirmacion += '\nEsto cerrará el pedido aunque no se hayan recibido todas las unidades enviadas.';
+    } else {
+      mensajeConfirmacion += 'El pedido se marcará como finalizado.';
+    }
+
+    if (!window.confirm(mensajeConfirmacion)) {
+      return;
+    }
+
+    try {
+      const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
+
+      await updateDoc(pedidoRef, {
+        estado: 'Completado',
+        fechaCompletado: serverTimestamp(),
+        completadoPor: user?.displayName || user?.email || 'Admin',
+        updatedAt: serverTimestamp()
+      });
+
+      // Crear notificación para el cliente
+      await crearNotificacion(
+        selectedPedido,
+        'pedido_completado',
+        'Pedido Completado',
+        `Tu pedido #${String(selectedPedido.numeroPedido || 0).padStart(4, '0')} ha sido marcado como completado.`
+      );
+
+      alert('✅ Pedido marcado como completado exitosamente');
+      cerrarModalDetalle();
+      fetchPedidos();
+    } catch (error) {
+      console.error('Error al completar pedido:', error);
+      alert('Error al completar pedido: ' + error.message);
     }
   };
 
@@ -1054,7 +1037,7 @@ const PedidosB2B = () => {
 
         {/* Filtros */}
         <div className="mt-4 pt-4 border-t border-gray-200">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
             {/* Búsqueda */}
             <div className="md:col-span-2">
               <div className="relative">
@@ -1063,7 +1046,7 @@ const PedidosB2B = () => {
                   type="text"
                   value={busquedaPedido}
                   onChange={(e) => setBusquedaPedido(e.target.value)}
-                  placeholder="Buscar por # pedido, cliente o colegio..."
+                  placeholder="Buscar por # pedido, cliente, colegio, producto, código o talla..."
                   className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
                 />
               </div>
@@ -1085,29 +1068,29 @@ const PedidosB2B = () => {
               </select>
             </div>
 
-            {/* Filtro por Estado de Pago */}
-            <div>
+            {/* Filtro Especial */}
+            <div className="md:col-span-2">
               <select
-                value={filtroEstadoPago}
-                onChange={(e) => setFiltroEstadoPago(e.target.value)}
+                value={filtroEspecial}
+                onChange={(e) => setFiltroEspecial(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
               >
-                <option value="todos">Todos los pagos</option>
-                <option value="Sin Pagar">Sin Pagar</option>
-                <option value="Pago Parcial">Pago Parcial</option>
-                <option value="Pagado">Pagado</option>
+                <option value="todos">Mostrar todos</option>
+                <option value="pendientes">Solo con pendientes</option>
+                <option value="discrepancias">Solo con discrepancias</option>
               </select>
             </div>
+
           </div>
 
           {/* Botón limpiar filtros */}
-          {(busquedaPedido || filtroEstado !== 'todos' || filtroEstadoPago !== 'todos') && (
+          {(busquedaPedido || filtroEstado !== 'todos' || filtroEspecial !== 'todos') && (
             <div className="mt-3 flex justify-end">
               <button
                 onClick={() => {
                   setBusquedaPedido('');
                   setFiltroEstado('todos');
-                  setFiltroEstadoPago('todos');
+                  setFiltroEspecial('todos');
                 }}
                 className="text-sm text-gray-500 hover:text-gray-700 underline"
               >
@@ -1133,7 +1116,6 @@ const PedidosB2B = () => {
               onClick={() => {
                 setBusquedaPedido('');
                 setFiltroEstado('todos');
-                setFiltroEstadoPago('todos');
               }}
               className="mt-3 text-sm text-pink-600 hover:text-pink-800 underline"
             >
@@ -1159,19 +1141,10 @@ const PedidosB2B = () => {
                       Fecha
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Total
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Abonado
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Saldo
+                      Productos
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Estado Pedido
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Estado Pago
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Acciones
@@ -1180,9 +1153,7 @@ const PedidosB2B = () => {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {pedidosPaginados.map((pedido) => {
-                    const totalAbonado = calcularTotalAbonado(pedido.abonos);
-                    const saldoPendiente = calcularSaldoPendiente(pedido.total, pedido.abonos);
-                    const estadoPago = calcularEstadoPago(pedido.total, pedido.abonos);
+                    const totalProductos = pedido.productos?.reduce((sum, p) => sum + (p.cantidad || 0), 0) || 0;
 
                     return (
                       <tr key={pedido.id} className="hover:bg-gray-50">
@@ -1199,29 +1170,16 @@ const PedidosB2B = () => {
                           {formatDateShort(pedido.createdAt)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm font-semibold text-gray-900">
-                            {formatCurrency(pedido.total)}
+                          <div className="text-sm text-gray-900">
+                            {totalProductos} unidades
                           </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm font-semibold text-green-600">
-                            {formatCurrency(totalAbonado)}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className={`text-sm font-semibold ${saldoPendiente > 0 ? 'text-orange-600' : 'text-green-600'}`}>
-                            {formatCurrency(saldoPendiente)}
+                          <div className="text-xs text-gray-500">
+                            {pedido.productos?.length || 0} productos
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full border ${getEstadoBadgeColor(pedido.estado)}`}>
                             {pedido.estado}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full border ${getEstadoPagoBadgeColor(estadoPago)}`}>
-                            <CreditCard size={12} className="mr-1" />
-                            {estadoPago}
                           </span>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
@@ -1242,16 +1200,6 @@ const PedidosB2B = () => {
                               title="Imprimir PDF"
                             >
                               <Printer size={18} />
-                            </button>
-                            <button
-                              onClick={() => {
-                                setSelectedPedido(pedido);
-                                setShowAbonoModal(true);
-                              }}
-                              className="text-green-600 hover:text-green-900"
-                              title="Registrar abono"
-                            >
-                              <Plus size={18} />
                             </button>
                             {pedido.estado === 'Pendiente' && !pedido.aprobado && (
                               <button
@@ -1280,9 +1228,7 @@ const PedidosB2B = () => {
           {/* Vista Mobile/Tablet - Cards */}
           <div className="lg:hidden space-y-4">
             {pedidosPaginados.map((pedido) => {
-              const totalAbonado = calcularTotalAbonado(pedido.abonos);
-              const saldoPendiente = calcularSaldoPendiente(pedido.total, pedido.abonos);
-              const estadoPago = calcularEstadoPago(pedido.total, pedido.abonos);
+              const totalProductos = pedido.productos?.reduce((sum, p) => sum + (p.cantidad || 0), 0) || 0;
 
               return (
                 <div
@@ -1306,47 +1252,24 @@ const PedidosB2B = () => {
                           <span>{pedido.codigoColegio}</span>
                         </div>
                       </div>
-                      <div className="flex flex-col gap-2 items-end">
-                        <span className={`px-2 py-1 text-xs font-semibold rounded-full border ${getEstadoBadgeColor(pedido.estado)}`}>
-                          {pedido.estado}
-                        </span>
-                        <span className={`px-2 py-1 text-xs font-semibold rounded-full border flex items-center gap-1 ${getEstadoPagoBadgeColor(estadoPago)}`}>
-                          <CreditCard size={10} />
-                          {estadoPago}
-                        </span>
-                      </div>
+                      <span className={`px-2 py-1 text-xs font-semibold rounded-full border ${getEstadoBadgeColor(pedido.estado)}`}>
+                        {pedido.estado}
+                      </span>
                     </div>
-                    <div className="flex items-center gap-1 text-xs text-gray-500 mt-2">
-                      <Calendar size={12} />
-                      <span>{formatDateShort(pedido.createdAt)}</span>
+                    <div className="flex items-center justify-between mt-2">
+                      <div className="flex items-center gap-1 text-xs text-gray-500">
+                        <Calendar size={12} />
+                        <span>{formatDateShort(pedido.createdAt)}</span>
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        <span className="font-medium">{totalProductos}</span> unidades • <span className="font-medium">{pedido.productos?.length || 0}</span> productos
+                      </div>
                     </div>
                   </div>
 
-                  {/* Información Financiera */}
+                  {/* Botones de Acción */}
                   <div className="p-4 space-y-3">
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div className="bg-blue-50 rounded-lg p-2">
-                        <p className="text-xs text-gray-600 mb-1">Total</p>
-                        <p className="text-sm font-bold text-gray-800">
-                          {formatCurrency(pedido.total)}
-                        </p>
-                      </div>
-                      <div className="bg-green-50 rounded-lg p-2">
-                        <p className="text-xs text-gray-600 mb-1">Abonado</p>
-                        <p className="text-sm font-bold text-green-600">
-                          {formatCurrency(totalAbonado)}
-                        </p>
-                      </div>
-                      <div className="bg-orange-50 rounded-lg p-2">
-                        <p className="text-xs text-gray-600 mb-1">Saldo</p>
-                        <p className="text-sm font-bold text-orange-600">
-                          {formatCurrency(saldoPendiente)}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Botones de Acción */}
-                    <div className="flex gap-2 pt-2">
+                    <div className="flex gap-2">
                       <button
                         onClick={() => {
                           setSelectedPedido(pedido);
@@ -1358,14 +1281,11 @@ const PedidosB2B = () => {
                         Ver Detalle
                       </button>
                       <button
-                        onClick={() => {
-                          setSelectedPedido(pedido);
-                          setShowAbonoModal(true);
-                        }}
-                        className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                        onClick={() => generarPDFPedido(pedido)}
+                        className="flex items-center justify-center gap-2 px-3 py-2 text-sm text-white rounded-lg hover:opacity-90 transition-colors"
+                        style={{ backgroundColor: '#D50565' }}
                       >
-                        <Plus size={16} />
-                        Registrar Abono
+                        <Printer size={16} />
                       </button>
                     </div>
 
@@ -1443,7 +1363,7 @@ const PedidosB2B = () => {
                 Detalle Pedido #{String(selectedPedido.numeroPedido || 0).padStart(4, '0')}
               </h2>
               <button
-                onClick={() => setShowDetalleModal(false)}
+                onClick={() => cerrarModalDetalle()}
                 className="text-gray-500 hover:text-gray-700 text-2xl"
               >
                 ✕
@@ -1470,37 +1390,143 @@ const PedidosB2B = () => {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <h3 className="font-semibold text-gray-800">Productos</h3>
-                  {/* Botón Enviar Productos Alistados */}
-                  {selectedPedido.productos?.some(p => (p.cantidadAlistada || 0) > (p.cantidadEnviada || 0)) && (() => {
-                    // Calcular si todos los productos están completamente alistados
-                    const todosAlistados = selectedPedido.productos.every(p =>
-                      (p.cantidadAlistada || 0) >= p.cantidad
-                    );
-                    const textoBoton = todosAlistados ? 'Enviar Pedido Completo' : 'Enviar Productos Alistados (Parcial)';
+                  <div className="flex gap-2">
+                    {/* Botón Enviar Productos Alistados */}
+                    {selectedPedido.productos?.some(p => (p.cantidadAlistada || 0) > (p.cantidadEnviada || 0)) && (() => {
+                      // Calcular si todos los productos están completamente alistados
+                      const todosAlistados = selectedPedido.productos.every(p =>
+                        (p.cantidadAlistada || 0) >= p.cantidad
+                      );
+                      const textoBoton = todosAlistados ? 'Enviar Pedido Completo' : 'Enviar Productos Alistados (Parcial)';
 
-                    return (
+                      return (
+                        <button
+                          onClick={handleEnviarProductosAlistados}
+                          disabled={enviandoProductos}
+                          className="flex items-center gap-2 px-4 py-2 text-sm text-white rounded-lg hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          style={{ backgroundColor: '#D50565' }}
+                        >
+                          {enviandoProductos ? (
+                            <Loader2 size={16} className="animate-spin" />
+                          ) : (
+                            <Truck size={16} />
+                          )}
+                          {enviandoProductos ? 'Enviando...' : textoBoton}
+                        </button>
+                      );
+                    })()}
+
+                    {/* Botón Marcar como Completado - solo si está enviado */}
+                    {(selectedPedido.estado === 'Enviado' || selectedPedido.estado === 'Enviado Parcial') && (
                       <button
-                        onClick={handleEnviarProductosAlistados}
-                        disabled={enviandoProductos}
-                        className="flex items-center gap-2 px-4 py-2 text-sm text-white rounded-lg hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        style={{ backgroundColor: '#D50565' }}
+                        onClick={handleCompletarPedidoManualmente}
+                        className="flex items-center gap-2 px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                        title="Marcar pedido como completado manualmente"
                       >
-                        {enviandoProductos ? (
-                          <Loader2 size={16} className="animate-spin" />
-                        ) : (
-                          <Truck size={16} />
-                        )}
-                        {enviandoProductos ? 'Enviando...' : textoBoton}
+                        <CheckCircle size={16} />
+                        Completar Pedido
                       </button>
-                    );
-                  })()}
+                    )}
+                  </div>
                 </div>
+
+                {/* Filtro de productos en el modal */}
+                <div className="mb-4 space-y-3">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
+                    <input
+                      type="text"
+                      value={filtroProductosModal}
+                      onChange={(e) => setFiltroProductosModal(e.target.value)}
+                      placeholder="Buscar producto por descripción, código o talla..."
+                      className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                    />
+                  </div>
+
+                  {/* Checkbox para mostrar solo productos con pendientes */}
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={soloConPendientesModal}
+                      onChange={(e) => setSoloConPendientesModal(e.target.checked)}
+                      className="w-4 h-4 text-pink-600 border-gray-300 rounded focus:ring-pink-500"
+                    />
+                    <span className="text-sm text-gray-700 font-medium">Solo productos con pendientes</span>
+                  </label>
+
+                  {(filtroProductosModal || soloConPendientesModal) && (
+                    <p className="text-xs text-gray-500">
+                      Mostrando {selectedPedido.productos?.filter(p => {
+                        // Filtro por búsqueda de texto
+                        if (filtroProductosModal.trim()) {
+                          const busqueda = filtroProductosModal.toLowerCase().trim();
+                          const descripcion = (p.descripcion || '').toLowerCase();
+                          const codigo = (p.codigo || '').toLowerCase();
+                          const talla = (p.talla || '').toLowerCase();
+                          const coincideBusqueda = descripcion.includes(busqueda) || codigo.includes(busqueda) || talla.includes(busqueda);
+                          if (!coincideBusqueda) return false;
+                        }
+
+                        // Filtro por pendientes
+                        if (soloConPendientesModal) {
+                          const cantidadPedida = p.cantidad || 0;
+                          const cantidadAlistada = p.cantidadAlistada || 0;
+                          const cantidadEnviada = p.cantidadEnviada || 0;
+                          const cantidadRecibida = p.cantidadRecibida || 0;
+                          const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+
+                          const pendientesOriginal = Math.max(0, cantidadPedida - cantidadAlistada);
+                          const pendientesPorDiscrepancia = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+                          const totalPendientes = pendientesOriginal + pendientesPorDiscrepancia;
+
+                          if (totalPendientes === 0) return false;
+                        }
+
+                        return true;
+                      }).length || 0} de {selectedPedido.productos?.length || 0} productos
+                    </p>
+                  )}
+                </div>
+
                 <div className="space-y-3">
-                  {selectedPedido.productos?.map((producto, index) => {
+                  {selectedPedido.productos?.filter(producto => {
+                    // Filtro por búsqueda de texto
+                    if (filtroProductosModal.trim()) {
+                      const busqueda = filtroProductosModal.toLowerCase().trim();
+                      const descripcion = (producto.descripcion || '').toLowerCase();
+                      const codigo = (producto.codigo || '').toLowerCase();
+                      const talla = (producto.talla || '').toLowerCase();
+                      const coincideBusqueda = descripcion.includes(busqueda) || codigo.includes(busqueda) || talla.includes(busqueda);
+                      if (!coincideBusqueda) return false;
+                    }
+
+                    // Filtro por pendientes
+                    if (soloConPendientesModal) {
+                      const cantidadPedida = producto.cantidad || 0;
+                      const cantidadAlistada = producto.cantidadAlistada || 0;
+                      const cantidadEnviada = producto.cantidadEnviada || 0;
+                      const cantidadRecibida = producto.cantidadRecibida || 0;
+                      const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+
+                      const pendientesOriginal = Math.max(0, cantidadPedida - cantidadAlistada);
+                      const pendientesPorDiscrepancia = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+                      const totalPendientes = pendientesOriginal + pendientesPorDiscrepancia;
+
+                      if (totalPendientes === 0) return false;
+                    }
+
+                    return true;
+                  }).map((producto, index) => {
                     const cantidadPedida = producto.cantidad || 0;
                     const cantidadAlistada = producto.cantidadAlistada || 0;
                     const cantidadEnviada = producto.cantidadEnviada || 0;
-                    const cantidadPendienteAlistar = cantidadPedida - cantidadAlistada;
+                    const cantidadRecibida = producto.cantidadRecibida || 0;
+                    const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+
+                    // Calcular pendientes: incluye tanto lo que falta del pedido original como lo que falta por discrepancia
+                    const pendientesOriginal = Math.max(0, cantidadPedida - cantidadAlistada);
+                    const pendientesPorDiscrepancia = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+                    const cantidadPendienteAlistar = pendientesOriginal + pendientesPorDiscrepancia;
 
                     return (
                       <div key={index} className="bg-gray-50 border border-gray-200 p-4 rounded-lg">
@@ -1525,7 +1551,7 @@ const PedidosB2B = () => {
                         </div>
 
                         {/* Estado y Cantidades */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
                           <div className="bg-white rounded-lg p-2 text-center border">
                             <p className="text-xs text-gray-500">Pedidas</p>
                             <p className="text-lg font-bold text-gray-800">{cantidadPedida}</p>
@@ -1538,11 +1564,46 @@ const PedidosB2B = () => {
                             <p className="text-xs text-purple-600">Enviadas</p>
                             <p className="text-lg font-bold text-purple-700">{cantidadEnviada}</p>
                           </div>
+                          <div className={`rounded-lg p-2 text-center border ${
+                            cantidadRecibida > 0
+                              ? 'bg-green-50 border-green-200'
+                              : 'bg-gray-50 border-gray-200'
+                          }`}>
+                            <p className={`text-xs ${cantidadRecibida > 0 ? 'text-green-600' : 'text-gray-500'}`}>
+                              Recibidas
+                            </p>
+                            <p className={`text-lg font-bold ${cantidadRecibida > 0 ? 'text-green-700' : 'text-gray-600'}`}>
+                              {cantidadRecibida}
+                            </p>
+                          </div>
                           <div className="bg-orange-50 rounded-lg p-2 text-center border border-orange-200">
                             <p className="text-xs text-orange-600">Pendientes</p>
                             <p className="text-lg font-bold text-orange-700">{cantidadPendienteAlistar}</p>
                           </div>
                         </div>
+
+                        {/* Alerta de discrepancia o observaciones del cliente */}
+                        {producto.observacionesRecepcion && (
+                          <div className={`mb-3 p-3 rounded-lg border flex items-start gap-2 ${
+                            hayDiscrepancia
+                              ? 'bg-yellow-50 border-yellow-200'
+                              : 'bg-blue-50 border-blue-200'
+                          }`}>
+                            <div className="text-xs flex-1">
+                              <p className="font-semibold mb-1" style={{ color: hayDiscrepancia ? '#B45309' : '#1E40AF' }}>
+                                {hayDiscrepancia ? '⚠️ Discrepancia en Recepción' : 'ℹ️ Observaciones del Cliente'}
+                              </p>
+                              <p className={hayDiscrepancia ? 'text-yellow-800' : 'text-blue-800'}>
+                                {producto.observacionesRecepcion}
+                              </p>
+                              {hayDiscrepancia && (
+                                <p className="text-yellow-700 mt-1 font-medium">
+                                  Recibidas: {cantidadRecibida} de {cantidadEnviada} enviadas
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        )}
 
                         {/* Botón Alistar */}
                         {cantidadPendienteAlistar > 0 && (
@@ -1559,70 +1620,40 @@ const PedidosB2B = () => {
                           </button>
                         )}
 
+                        {/* Botón Alistar Faltantes por Discrepancia */}
+                        {hayDiscrepancia && cantidadPendienteAlistar === 0 && (
+                          <button
+                            onClick={() => {
+                              const cantidadFaltante = cantidadEnviada - cantidadRecibida;
+                              setProductoAlistar({ ...producto, index });
+                              setCantidadAlistar(cantidadFaltante.toString());
+                              setShowAlistarModal(true);
+                            }}
+                            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors"
+                          >
+                            <ClipboardCheck size={16} />
+                            Alistar Faltantes ({cantidadEnviada - cantidadRecibida} unidades)
+                          </button>
+                        )}
+
                         {/* Badge de estado completo */}
-                        {cantidadAlistada >= cantidadPedida && (
+                        {cantidadAlistada >= cantidadPedida && !hayDiscrepancia && (
                           <div className="mt-2 flex items-center justify-center gap-2 text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg py-1">
                             <CheckCircle size={14} />
                             Producto completamente alistado
                           </div>
                         )}
+
+                        {/* Badge de producto completamente recibido */}
+                        {cantidadRecibida >= cantidadEnviada && cantidadRecibida > 0 && (
+                          <div className="mt-2 flex items-center justify-center gap-2 text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg py-1">
+                            <CheckCircle size={14} />
+                            Cliente confirmó recepción completa
+                          </div>
+                        )}
                       </div>
                     );
                   })}
-                </div>
-              </div>
-
-              {/* Historial de Abonos */}
-              <div>
-                <h3 className="font-semibold text-gray-800 mb-3">Historial de Abonos</h3>
-                {!selectedPedido.abonos || selectedPedido.abonos.length === 0 ? (
-                  <p className="text-gray-500 text-sm">No hay abonos registrados</p>
-                ) : (
-                  <div className="space-y-2">
-                    {selectedPedido.abonos.map((abono, index) => (
-                      <div key={index} className="bg-green-50 border border-green-200 p-3 rounded">
-                        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2">
-                          <div>
-                            <p className="font-semibold text-green-800">
-                              {formatCurrency(abono.monto)}
-                            </p>
-                            <p className="text-xs text-gray-600 mt-1">
-                              <Calendar size={12} className="inline mr-1" />
-                              {formatDate(abono.fecha)}
-                            </p>
-                            <p className="text-xs text-gray-600">
-                              Registrado por: {abono.registradoPor}
-                            </p>
-                          </div>
-                          <div className="text-left sm:text-right">
-                            <p className="text-xs text-gray-600">{abono.notas}</p>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Resumen Financiero */}
-              <div className="border-t pt-4">
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Total del Pedido:</span>
-                    <span className="font-semibold">{formatCurrency(selectedPedido.total)}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Total Abonado:</span>
-                    <span className="font-semibold text-green-600">
-                      {formatCurrency(calcularTotalAbonado(selectedPedido.abonos))}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-base md:text-lg font-bold border-t pt-2">
-                    <span>Saldo Pendiente:</span>
-                    <span style={{ color: '#D50565' }}>
-                      {formatCurrency(calcularSaldoPendiente(selectedPedido.total, selectedPedido.abonos))}
-                    </span>
-                  </div>
                 </div>
               </div>
 
@@ -1638,94 +1669,6 @@ const PedidosB2B = () => {
         </div>
       )}
 
-      {/* Modal Registrar Abono */}
-      {showAbonoModal && selectedPedido && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="bg-white border-b px-4 md:px-6 py-4 flex justify-between items-center rounded-t-lg">
-              <h2 className="text-lg md:text-xl font-bold text-gray-800">Registrar Abono</h2>
-              <button
-                onClick={() => {
-                  setShowAbonoModal(false);
-                  setMontoAbono('');
-                  setNotasAbono('');
-                }}
-                className="text-gray-500 hover:text-gray-700 text-2xl"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="p-4 md:p-6 space-y-4">
-              {/* Info del Pedido */}
-              <div className="bg-gray-50 p-3 rounded">
-                <p className="text-sm text-gray-600">
-                  Pedido: <span className="font-semibold">#{String(selectedPedido.numeroPedido || 0).padStart(4, '0')}</span>
-                </p>
-                <p className="text-sm text-gray-600">
-                  Cliente: <span className="font-semibold">{selectedPedido.clienteNombre}</span>
-                </p>
-                <p className="text-sm text-gray-600">
-                  Saldo Pendiente: <span className="font-semibold" style={{ color: '#D50565' }}>
-                    {formatCurrency(calcularSaldoPendiente(selectedPedido.total, selectedPedido.abonos))}
-                  </span>
-                </p>
-              </div>
-
-              {/* Monto */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Monto del Abono *
-                </label>
-                <input
-                  type="number"
-                  value={montoAbono}
-                  onChange={(e) => setMontoAbono(e.target.value)}
-                  placeholder="0"
-                  className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
-                />
-              </div>
-
-              {/* Notas */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Notas del Abono *
-                </label>
-                <textarea
-                  value={notasAbono}
-                  onChange={(e) => setNotasAbono(e.target.value)}
-                  placeholder="Ej: Transferencia Bancolombia #12345, Efectivo, etc."
-                  rows={3}
-                  className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 resize-none"
-                />
-              </div>
-
-              {/* Botones */}
-              <div className="flex flex-col sm:flex-row gap-3 pt-4">
-                <button
-                  onClick={() => {
-                    setShowAbonoModal(false);
-                    setMontoAbono('');
-                    setNotasAbono('');
-                  }}
-                  className="w-full sm:flex-1 px-4 py-2 text-sm md:text-base bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-                >
-                  Cancelar
-                </button>
-                <button
-                  onClick={handleRegistrarAbono}
-                  disabled={registrandoAbono}
-                  className="w-full sm:flex-1 px-4 py-2 text-sm md:text-base text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                  style={{ backgroundColor: '#D50565' }}
-                >
-                  {registrandoAbono && <Loader2 size={18} className="animate-spin" />}
-                  {registrandoAbono ? 'Registrando...' : 'Registrar Abono'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Modal Alistar Producto */}
       {showAlistarModal && productoAlistar && (
@@ -1829,6 +1772,7 @@ const PedidosB2B = () => {
         </div>
       )}
 
+      {/* Modal Corregir Recepción */}
       {/* Modal Crear Pedido desde Tienda */}
       {showCrearPedidoModal && (
         <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>

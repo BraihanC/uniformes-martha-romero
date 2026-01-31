@@ -160,6 +160,10 @@ const PortalLayout = () => {
                               onClick={() => {
                                 if (!notif.leida) marcarComoLeida(notif.id);
                                 setNotificacionesOpen(false);
+                                // Navegar a Mis Pedidos si la notificación es sobre productos
+                                if (notif.tipo === 'productos_enviados' || notif.tipo === 'pedido_estado') {
+                                  navigate('/portal/mis-pedidos');
+                                }
                               }}
                               className={`p-4 hover:bg-gray-50 cursor-pointer transition-colors ${
                                 !notif.leida ? 'bg-blue-50' : ''

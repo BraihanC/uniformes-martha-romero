@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { usePortalAuth } from '../context/PortalAuthContext';
 import { db } from '../../services/firebase';
 import { collection, query, where, getDocs, orderBy, doc, updateDoc, serverTimestamp, addDoc } from 'firebase/firestore';
-import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard, Filter, Download, X, Search, FileSpreadsheet, CheckCircle, AlertTriangle, ShoppingBag, Printer } from 'lucide-react';
+import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard, Filter, Download, X, Search, FileSpreadsheet, CheckCircle, AlertTriangle, ShoppingBag, Printer, Loader2 } from 'lucide-react';
 import jsPDF from 'jspdf';
 
 const MisPedidos = () => {
@@ -27,6 +27,11 @@ const MisPedidos = () => {
   const [productoConfirmar, setProductoConfirmar] = useState(null);
   const [cantidadRecibida, setCantidadRecibida] = useState('');
   const [observaciones, setObservaciones] = useState('');
+  const [confirmandoRecepcion, setConfirmandoRecepcion] = useState(false);
+
+  // Estados para filtros dentro del pedido expandido
+  const [filtroProductosPedido, setFiltroProductosPedido] = useState('');
+  const [soloConPendientesPedido, setSoloConPendientesPedido] = useState(false);
 
   useEffect(() => {
     if (clienteCorporativo) {
@@ -135,7 +140,14 @@ const MisPedidos = () => {
   };
 
   const togglePedido = (pedidoId) => {
-    setExpandedPedido(expandedPedido === pedidoId ? null : pedidoId);
+    // Si se está colapsando el pedido, limpiar filtros
+    if (expandedPedido === pedidoId) {
+      setFiltroProductosPedido('');
+      setSoloConPendientesPedido(false);
+      setExpandedPedido(null);
+    } else {
+      setExpandedPedido(pedidoId);
+    }
   };
 
   const limpiarFiltros = () => {
@@ -150,18 +162,48 @@ const MisPedidos = () => {
   };
 
   const handleConfirmarRecepcion = async () => {
+    // Prevenir doble clic
+    if (confirmandoRecepcion) {
+      return;
+    }
+
     const cantidad = parseInt(cantidadRecibida);
     const cantidadEnviada = productoConfirmar.cantidadEnviada || 0;
+    const cantidadYaRecibida = productoConfirmar.cantidadRecibida || 0;
+    const cantidadPendiente = cantidadEnviada - cantidadYaRecibida;
 
     if (!cantidad || cantidad <= 0) {
-      alert('Ingresa una cantidad válida');
+      alert('⚠️ Por favor ingresa la cantidad de unidades que REALMENTE recibiste');
       return;
     }
 
-    if (cantidad > cantidadEnviada) {
-      alert(`No puedes confirmar más de ${cantidadEnviada} unidades enviadas`);
+    if (cantidad > cantidadPendiente) {
+      alert(`❌ No puedes confirmar más de ${cantidadPendiente} unidades.\n\nEnviadas: ${cantidadEnviada}\nYa recibidas: ${cantidadYaRecibida}\nPendientes: ${cantidadPendiente}`);
       return;
     }
+
+    // Mostrar resumen de confirmación para evitar errores
+    const resumen = `
+📦 CONFIRMAR RECEPCIÓN
+━━━━━━━━━━━━━━━━━━━━━
+Producto: ${productoConfirmar.descripcion}
+Talla: ${productoConfirmar.talla}
+
+📊 CANTIDADES:
+• Enviadas: ${cantidadEnviada}
+• Ya recibidas: ${cantidadYaRecibida}
+• Recibes ahora: ${cantidad}
+• Total recibido: ${cantidadYaRecibida + cantidad} de ${cantidadEnviada}
+
+${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''}${cantidad < cantidadPendiente ? '⚠️ ATENCIÓN: Estás reportando MENOS unidades de las enviadas.\n' : ''}
+¿Confirmas que recibiste ${cantidad} unidad${cantidad !== 1 ? 'es' : ''}?`;
+
+    if (!window.confirm(resumen)) {
+      return;
+    }
+
+    // Activar estado de carga para prevenir doble clic
+    setConfirmandoRecepcion(true);
 
     try {
       const pedidoRef = doc(db, 'pedidos_b2b', productoConfirmar.pedidoId);
@@ -171,10 +213,11 @@ const MisPedidos = () => {
       const productosActualizados = pedido.productos.map((p, idx) => {
         if (idx === productoConfirmar.index) {
           const nuevaCantidadRecibida = (p.cantidadRecibida || 0) + cantidad;
+          const cantidadEnviadaProducto = p.cantidadEnviada || 0;
           return {
             ...p,
             cantidadRecibida: nuevaCantidadRecibida,
-            estadoProduccion: nuevaCantidadRecibida >= p.cantidad ? 'recibido' : p.estadoProduccion,
+            estadoProduccion: nuevaCantidadRecibida >= cantidadEnviadaProducto ? 'recibido' : p.estadoProduccion,
             fechaRecepcion: new Date(),
             observacionesRecepcion: observaciones.trim() || null
           };
@@ -183,8 +226,9 @@ const MisPedidos = () => {
       });
 
       // Verificar si todos los productos fueron recibidos completamente
+      // Compara con cantidadEnviada, no con cantidad pedida
       const todosRecibidos = productosActualizados.every(p =>
-        (p.cantidadRecibida || 0) >= p.cantidad
+        (p.cantidadRecibida || 0) >= (p.cantidadEnviada || 0)
       );
 
       await updateDoc(pedidoRef, {
@@ -203,6 +247,14 @@ const MisPedidos = () => {
           leida: false,
           pedidoId: productoConfirmar.pedidoId,
           clienteId: clienteCorporativo.id,
+          // Datos estructurados para facilitar correcciones
+          productoDescripcion: productoConfirmar.descripcion,
+          productoTalla: productoConfirmar.talla,
+          productoCodigo: productoConfirmar.codigo,
+          productoIndex: productoConfirmar.index,
+          cantidadRecibidaReportada: cantidad,
+          cantidadEnviada: cantidadEnviada,
+          observaciones: observaciones.trim(),
           createdAt: serverTimestamp()
         });
       }
@@ -216,6 +268,9 @@ const MisPedidos = () => {
     } catch (error) {
       console.error('Error al confirmar recepción:', error);
       alert('Error al confirmar recepción: ' + error.message);
+    } finally {
+      // Resetear estado de carga para permitir nuevas confirmaciones
+      setConfirmandoRecepcion(false);
     }
   };
 
@@ -950,19 +1005,143 @@ const MisPedidos = () => {
               {/* Detalles del Pedido (Expandible) */}
               {expandedPedido === pedido.id && (
                 <div className="border-t border-gray-200 bg-gray-50 p-6">
+                  {/* Banner de productos con pendientes */}
+                  {(() => {
+                    const productosConPendientes = pedido.productos?.filter(p => {
+                      const cantidadPedida = p.cantidad || 0;
+                      const cantidadRecibida = p.cantidadRecibida || 0;
+                      const cantidadFaltante = Math.max(0, cantidadPedida - cantidadRecibida);
+                      // Producto tiene pendientes si falta recibir unidades del pedido original
+                      return cantidadFaltante > 0;
+                    }) || [];
+
+                    const totalUnidadesPendientes = productosConPendientes.reduce((sum, p) => {
+                      const cantidadPedida = p.cantidad || 0;
+                      const cantidadRecibida = p.cantidadRecibida || 0;
+                      const cantidadFaltante = Math.max(0, cantidadPedida - cantidadRecibida);
+                      return sum + cantidadFaltante;
+                    }, 0);
+
+                    if (productosConPendientes.length > 0) {
+                      return (
+                        <div className="mb-4 p-4 rounded-lg bg-orange-50 border-2 border-orange-200">
+                          <div className="flex items-start gap-3">
+                            <AlertTriangle size={20} className="text-orange-600 flex-shrink-0 mt-0.5" />
+                            <div className="flex-1">
+                              <p className="font-bold text-orange-900 mb-1">
+                                📦 Tienes {productosConPendientes.length} producto{productosConPendientes.length !== 1 ? 's' : ''} con unidades pendientes
+                              </p>
+                              <p className="text-sm text-orange-800">
+                                Te {totalUnidadesPendientes !== 1 ? 'faltan' : 'falta'} recibir <span className="font-semibold">{totalUnidadesPendientes} unidad{totalUnidadesPendientes !== 1 ? 'es' : ''}</span> para completar tu pedido.
+                                {productosConPendientes.some(p => {
+                                  const cantidadEnviada = p.cantidadEnviada || 0;
+                                  const cantidadRecibida = p.cantidadRecibida || 0;
+                                  return cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+                                }) && ' Estamos preparando las prendas faltantes para enviártelas a la brevedad.'}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+
                   {/* Productos con Estado de Envío */}
                   <div className="mb-6">
                     <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
                       <Package size={18} />
                       Productos
                     </h4>
+
+                    {/* Filtros de productos */}
+                    <div className="mb-4 space-y-3">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
+                        <input
+                          type="text"
+                          value={filtroProductosPedido}
+                          onChange={(e) => setFiltroProductosPedido(e.target.value)}
+                          placeholder="Buscar producto por descripción, código o talla..."
+                          className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                        />
+                      </div>
+
+                      {/* Checkbox para mostrar solo productos con pendientes */}
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={soloConPendientesPedido}
+                          onChange={(e) => setSoloConPendientesPedido(e.target.checked)}
+                          className="w-4 h-4 text-pink-600 border-gray-300 rounded focus:ring-pink-500"
+                        />
+                        <span className="text-sm text-gray-700 font-medium">Solo productos con pendientes</span>
+                      </label>
+
+                      {(filtroProductosPedido || soloConPendientesPedido) && (
+                        <p className="text-xs text-gray-500">
+                          Mostrando {pedido.productos?.filter(p => {
+                            // Filtro por búsqueda de texto
+                            if (filtroProductosPedido.trim()) {
+                              const busqueda = filtroProductosPedido.toLowerCase().trim();
+                              const descripcion = (p.descripcion || '').toLowerCase();
+                              const codigo = (p.codigo || '').toLowerCase();
+                              const talla = (p.talla || '').toLowerCase();
+                              const coincideBusqueda = descripcion.includes(busqueda) || codigo.includes(busqueda) || talla.includes(busqueda);
+                              if (!coincideBusqueda) return false;
+                            }
+
+                            // Filtro por pendientes
+                            if (soloConPendientesPedido) {
+                              const cantidadPedida = p.cantidad || 0;
+                              const cantidadRecibida = p.cantidadRecibida || 0;
+                              const cantidadFaltante = Math.max(0, cantidadPedida - cantidadRecibida);
+                              if (cantidadFaltante === 0) return false;
+                            }
+
+                            return true;
+                          }).length || 0} de {pedido.productos?.length || 0} productos
+                        </p>
+                      )}
+                    </div>
+
                     <div className="space-y-3">
-                      {pedido.productos?.map((producto, index) => {
+                      {pedido.productos?.filter(producto => {
+                        // Filtro por búsqueda de texto
+                        if (filtroProductosPedido.trim()) {
+                          const busqueda = filtroProductosPedido.toLowerCase().trim();
+                          const descripcion = (producto.descripcion || '').toLowerCase();
+                          const codigo = (producto.codigo || '').toLowerCase();
+                          const talla = (producto.talla || '').toLowerCase();
+                          const coincideBusqueda = descripcion.includes(busqueda) || codigo.includes(busqueda) || talla.includes(busqueda);
+                          if (!coincideBusqueda) return false;
+                        }
+
+                        // Filtro por pendientes
+                        if (soloConPendientesPedido) {
+                          const cantidadPedida = producto.cantidad || 0;
+                          const cantidadRecibida = producto.cantidadRecibida || 0;
+                          const cantidadFaltante = Math.max(0, cantidadPedida - cantidadRecibida);
+                          if (cantidadFaltante === 0) return false;
+                        }
+
+                        return true;
+                      }).map((producto, index) => {
                         const cantidadPedida = producto.cantidad || 0;
                         const cantidadEnviada = producto.cantidadEnviada || 0;
                         const cantidadRecibida = producto.cantidadRecibida || 0;
+
+                        // Pendientes de recepción: lo que falta confirmar de lo enviado
                         const cantidadPendienteRecibir = cantidadEnviada - cantidadRecibida;
+
+                        // Pendientes del pedido original: lo que falta para completar lo que pidió
+                        const cantidadFaltantePedido = Math.max(0, cantidadPedida - cantidadRecibida);
+
+                        // Hay discrepancia si recibió algo pero no todo lo enviado
                         const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+
+                        // El pedido está completo cuando recibió todo lo que pidió originalmente
+                        const pedidoCompleto = cantidadRecibida >= cantidadPedida;
 
                         return (
                           <div
@@ -991,7 +1170,7 @@ const MisPedidos = () => {
 
                             {/* Cantidades - Solo mostrar si hay productos enviados */}
                             {cantidadEnviada > 0 && (
-                              <div className="grid grid-cols-3 gap-2 mb-3">
+                              <div className="grid grid-cols-4 gap-2 mb-3">
                                 <div className="bg-gray-50 rounded-lg p-2 text-center border">
                                   <p className="text-xs text-gray-500">Pedidas</p>
                                   <p className="text-base font-bold text-gray-800">{cantidadPedida}</p>
@@ -1000,26 +1179,100 @@ const MisPedidos = () => {
                                   <p className="text-xs text-purple-600">Enviadas</p>
                                   <p className="text-base font-bold text-purple-700">{cantidadEnviada}</p>
                                 </div>
-                                <div className="bg-green-50 rounded-lg p-2 text-center border border-green-200">
-                                  <p className="text-xs text-green-600">Recibidas</p>
-                                  <p className="text-base font-bold text-green-700">{cantidadRecibida}</p>
+                                <div className={`rounded-lg p-2 text-center border ${
+                                  cantidadRecibida > 0
+                                    ? 'bg-green-50 border-green-200'
+                                    : 'bg-gray-50 border-gray-200'
+                                }`}>
+                                  <p className={`text-xs ${cantidadRecibida > 0 ? 'text-green-600' : 'text-gray-500'}`}>
+                                    Recibidas
+                                  </p>
+                                  <p className={`text-base font-bold ${cantidadRecibida > 0 ? 'text-green-700' : 'text-gray-600'}`}>
+                                    {cantidadRecibida}
+                                  </p>
+                                </div>
+                                <div className={`rounded-lg p-2 text-center border ${
+                                  cantidadFaltantePedido > 0
+                                    ? 'bg-orange-50 border-orange-200'
+                                    : pedidoCompleto
+                                    ? 'bg-green-50 border-green-200'
+                                    : 'bg-gray-50 border-gray-200'
+                                }`}>
+                                  <p className={`text-xs ${
+                                    cantidadFaltantePedido > 0
+                                      ? 'text-orange-600'
+                                      : pedidoCompleto
+                                      ? 'text-green-600'
+                                      : 'text-gray-500'
+                                  }`}>
+                                    Pendientes
+                                  </p>
+                                  <p className={`text-base font-bold ${
+                                    cantidadFaltantePedido > 0
+                                      ? 'text-orange-700'
+                                      : pedidoCompleto
+                                      ? 'text-green-700'
+                                      : 'text-gray-600'
+                                  }`}>
+                                    {cantidadFaltantePedido}
+                                  </p>
                                 </div>
                               </div>
                             )}
 
-                            {/* Alerta de discrepancia */}
-                            {hayDiscrepancia && producto.observacionesRecepcion && (
-                              <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2">
-                                <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0 mt-0.5" />
-                                <div className="text-xs text-yellow-800">
-                                  <p className="font-semibold">Observaciones:</p>
+                            {/* Observaciones de recepción - Siempre visible si existen */}
+                            {producto.observacionesRecepcion && (
+                              <div className={`mb-3 p-3 rounded-lg border flex items-start gap-2 ${
+                                hayDiscrepancia
+                                  ? 'bg-yellow-50 border-yellow-200'
+                                  : 'bg-blue-50 border-blue-200'
+                              }`}>
+                                {hayDiscrepancia ? (
+                                  <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0 mt-0.5" />
+                                ) : (
+                                  <CheckCircle size={16} className="text-blue-600 flex-shrink-0 mt-0.5" />
+                                )}
+                                <div className={`text-xs flex-1 ${hayDiscrepancia ? 'text-yellow-800' : 'text-blue-800'}`}>
+                                  <p className="font-semibold mb-1">
+                                    {hayDiscrepancia ? '⚠️ Observaciones de Recepción' : 'Observaciones de Recepción'}
+                                  </p>
                                   <p>{producto.observacionesRecepcion}</p>
+                                  {hayDiscrepancia && (
+                                    <p className="mt-2 font-medium text-yellow-700">
+                                      Recibidas: {cantidadRecibida} de {cantidadEnviada} unidades enviadas
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Mensaje informativo sobre productos pendientes por discrepancia */}
+                            {!pedidoCompleto && cantidadFaltantePedido > 0 && hayDiscrepancia && (
+                              <div className="mb-3 p-3 rounded-lg bg-blue-50 border border-blue-200 flex items-start gap-2">
+                                <ShoppingBag size={16} className="text-blue-600 flex-shrink-0 mt-0.5" />
+                                <div className="text-xs text-blue-800 flex-1">
+                                  <p className="font-semibold mb-1">📦 Productos Pendientes en Preparación</p>
+                                  <p>
+                                    Estamos alistando <span className="font-bold">{cantidadFaltantePedido} unidad{cantidadFaltantePedido !== 1 ? 'es' : ''}</span> adicional{cantidadFaltantePedido !== 1 ? 'es' : ''} para completar tu pedido.
+                                    Te notificaremos cuando {cantidadFaltantePedido !== 1 ? 'estén' : 'esté'} {cantidadFaltantePedido !== 1 ? 'listas' : 'lista'} para envío.
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Mensaje de pedido completo */}
+                            {pedidoCompleto && cantidadRecibida > 0 && (
+                              <div className="mb-3 p-3 rounded-lg bg-green-50 border border-green-200 flex items-start gap-2">
+                                <CheckCircle size={16} className="text-green-600 flex-shrink-0 mt-0.5" />
+                                <div className="text-xs text-green-800 flex-1">
+                                  <p className="font-semibold">✅ Pedido Completo</p>
+                                  <p>Has recibido todas las {cantidadPedida} unidades que pediste de este producto.</p>
                                 </div>
                               </div>
                             )}
 
                             {/* Botón Confirmar Recepción */}
-                            {cantidadPendienteRecibir > 0 && (
+                            {cantidadPendienteRecibir > 0 && !hayDiscrepancia && (
                               <button
                                 onClick={() => {
                                   setProductoConfirmar({
@@ -1027,7 +1280,8 @@ const MisPedidos = () => {
                                     index,
                                     pedidoId: pedido.id
                                   });
-                                  setCantidadRecibida(cantidadPendienteRecibir.toString());
+                                  setCantidadRecibida(''); // IMPORTANTE: No pre-llenar, el cliente debe escribir manualmente
+                                  setObservaciones('');
                                   setShowConfirmarRecepcionModal(true);
                                 }}
                                 className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm text-white rounded-lg hover:opacity-90 transition-colors"
@@ -1039,7 +1293,7 @@ const MisPedidos = () => {
                             )}
 
                             {/* Badge de producto completamente recibido */}
-                            {cantidadRecibida >= cantidadPedida && cantidadRecibida > 0 && (
+                            {cantidadRecibida >= cantidadEnviada && cantidadRecibida > 0 && (
                               <div className="flex items-center justify-center gap-2 text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg py-2">
                                 <CheckCircle size={14} />
                                 Producto completamente recibido
@@ -1198,22 +1452,42 @@ const MisPedidos = () => {
                 </div>
               </div>
 
+              {/* Instrucciones claras */}
+              <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded">
+                <p className="text-sm text-blue-800 font-medium">
+                  ⚠️ IMPORTANTE: Ingresa SOLO la cantidad que recibiste en esta entrega.
+                </p>
+                <p className="text-xs text-blue-700 mt-1">
+                  Si recibiste menos de lo enviado, escribe el número exacto que llegó.
+                </p>
+              </div>
+
               {/* Cantidad Recibida */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Cantidad Recibida *
+                  ¿Cuántas unidades recibiste? *
                 </label>
-                <input
-                  type="number"
-                  value={cantidadRecibida}
-                  onChange={(e) => setCantidadRecibida(e.target.value)}
-                  min="1"
-                  max={(productoConfirmar.cantidadEnviada || 0) - (productoConfirmar.cantidadRecibida || 0)}
-                  placeholder="0"
-                  className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Máximo: {(productoConfirmar.cantidadEnviada || 0) - (productoConfirmar.cantidadRecibida || 0)} unidades
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    value={cantidadRecibida}
+                    onChange={(e) => setCantidadRecibida(e.target.value)}
+                    min="1"
+                    max={(productoConfirmar.cantidadEnviada || 0) - (productoConfirmar.cantidadRecibida || 0)}
+                    placeholder="Escribe la cantidad aquí"
+                    className="flex-1 px-3 md:px-4 py-2 text-sm md:text-base border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCantidadRecibida(((productoConfirmar.cantidadEnviada || 0) - (productoConfirmar.cantidadRecibida || 0)).toString())}
+                    className="px-3 py-2 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 whitespace-nowrap"
+                  >
+                    Todas ({(productoConfirmar.cantidadEnviada || 0) - (productoConfirmar.cantidadRecibida || 0)})
+                  </button>
+                </div>
+                <p className="text-xs text-gray-600 mt-1 font-medium">
+                  Pendientes por recibir: {(productoConfirmar.cantidadEnviada || 0) - (productoConfirmar.cantidadRecibida || 0)} unidades
                 </p>
               </div>
 
@@ -1237,11 +1511,19 @@ const MisPedidos = () => {
               {/* Advertencia de discrepancia */}
               {parseInt(cantidadRecibida) > 0 &&
                parseInt(cantidadRecibida) < ((productoConfirmar.cantidadEnviada || 0) - (productoConfirmar.cantidadRecibida || 0)) && (
-                <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2">
-                  <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0 mt-0.5" />
-                  <div className="text-xs text-yellow-800">
-                    <p className="font-semibold">Discrepancia detectada</p>
-                    <p>Estás reportando menos unidades de las enviadas. El administrador será notificado.</p>
+                <div className="p-4 bg-yellow-50 border-2 border-yellow-400 rounded-lg">
+                  <div className="flex items-start gap-3 mb-2">
+                    <AlertTriangle size={24} className="text-yellow-600 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="font-bold text-yellow-900 text-sm">⚠️ DISCREPANCIA DETECTADA</p>
+                      <p className="text-xs text-yellow-800 mt-1">
+                        Estás reportando que recibiste <span className="font-bold">{parseInt(cantidadRecibida)}</span> unidad{parseInt(cantidadRecibida) !== 1 ? 'es' : ''},
+                        pero se enviaron <span className="font-bold">{(productoConfirmar.cantidadEnviada || 0) - (productoConfirmar.cantidadRecibida || 0)}</span>.
+                      </p>
+                      <p className="text-xs text-yellow-700 mt-2 font-medium bg-yellow-100 p-2 rounded">
+                        👉 Por favor explica en OBSERVACIONES por qué faltaron unidades (ej: "Solo llegaron 2 de 4 enviadas")
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1261,10 +1543,18 @@ const MisPedidos = () => {
                 </button>
                 <button
                   onClick={handleConfirmarRecepcion}
-                  className="w-full sm:flex-1 px-4 py-2 text-sm md:text-base text-white rounded-lg hover:opacity-90"
+                  disabled={confirmandoRecepcion}
+                  className="w-full sm:flex-1 px-4 py-2 text-sm md:text-base text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   style={{ backgroundColor: '#D50565' }}
                 >
-                  Confirmar Recepción
+                  {confirmandoRecepcion ? (
+                    <>
+                      <Loader2 size={18} className="animate-spin" />
+                      <span>Procesando...</span>
+                    </>
+                  ) : (
+                    'Confirmar Recepción'
+                  )}
                 </button>
               </div>
             </div>
