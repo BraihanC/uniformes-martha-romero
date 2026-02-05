@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider } from './context/AuthContext';
 import PrivateRoute from './components/auth/PrivateRoute';
 import MainLayout from './components/layout/MainLayout';
+import ConnectionStatus from './components/layout/ConnectionStatus';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import POS from './pages/POS';
@@ -22,6 +23,7 @@ import CierreCaja from './components/reportes/CierreCaja';
 import BuscadorFacturas from './components/reportes/BuscadorFacturas';
 import ReporteCorte from './components/reportes/ReporteCorte';
 import CuentasPorPagar from './components/reportes/CuentasPorPagar';
+import DiagnosticoPedidosB2B from './components/reportes/DiagnosticoPedidosB2B';
 import ReportesAnalisis from './components/reportes/ReportesAnalisis';
 import Config from './pages/Config';
 import Perfil from './pages/Perfil';
@@ -43,6 +45,7 @@ import CambiarContrasena from './portal/pages/CambiarContrasena';
 function App() {
   return (
     <Router>
+      <ConnectionStatus />
       <Routes>
         {/* ==================== PORTAL B2B ROUTES ==================== */}
         <Route path="/portal/*" element={
@@ -144,6 +147,14 @@ function App() {
                     element={
                       <PrivateRoute requireAdmin>
                         <CuentasPorPagar />
+                      </PrivateRoute>
+                    }
+                  />
+                  <Route
+                    path="diagnostico-b2b"
+                    element={
+                      <PrivateRoute requireAdmin>
+                        <DiagnosticoPedidosB2B />
                       </PrivateRoute>
                     }
                   />

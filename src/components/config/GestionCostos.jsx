@@ -1,90 +1,178 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { db } from '../../services/firebase';
-import { collection, getDocs, doc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { collection, getDocs, doc, writeBatch, serverTimestamp, updateDoc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
-import { FileDown, Upload } from 'lucide-react';
+import { FileDown, Upload, Search, Edit2, Check, X, ChevronDown, ChevronUp, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const GestionCostos = () => {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [productos, setProductos] = useState([]);
+  const [filteredProductos, setFilteredProductos] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editValues, setEditValues] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [showExcelSection, setShowExcelSection] = useState(false);
+  const [filterSinCosto, setFilterSinCosto] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
   const fileInputRef = useRef(null);
+
+  // Cargar productos al montar
+  useEffect(() => {
+    fetchProductos();
+  }, []);
+
+  // Filtrar productos cuando cambia el término de búsqueda o el filtro
+  useEffect(() => {
+    let filtered = productos;
+
+    // Filtrar por búsqueda
+    if (searchTerm.trim()) {
+      const search = searchTerm.toLowerCase();
+      filtered = filtered.filter(p =>
+        p.referencia?.toLowerCase().includes(search) ||
+        p.nombre?.toLowerCase().includes(search) ||
+        p.colegio?.toLowerCase().includes(search)
+      );
+    }
+
+    // Filtrar productos sin costo de satélite
+    if (filterSinCosto) {
+      filtered = filtered.filter(p => !p.costoSatelite || p.costoSatelite === 0);
+    }
+
+    setFilteredProductos(filtered);
+    setCurrentPage(1); // Resetear a página 1 cuando cambia el filtro
+  }, [searchTerm, productos, filterSinCosto]);
+
+  // Calcular paginación
+  const totalPages = Math.ceil(filteredProductos.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const currentProducts = filteredProductos.slice(startIndex, endIndex);
+
+  const fetchProductos = async () => {
+    setLoading(true);
+    try {
+      const snapshot = await getDocs(collection(db, 'products'));
+      const data = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      // Ordenar por referencia
+      data.sort((a, b) => {
+        const refA = String(a.referencia || '');
+        const refB = String(b.referencia || '');
+        return refA.localeCompare(refB);
+      });
+
+      setProductos(data);
+      setFilteredProductos(data);
+    } catch (error) {
+      console.error('Error al cargar productos:', error);
+      alert('Error al cargar los productos');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Iniciar edición de un producto
+  const handleStartEdit = (producto) => {
+    setEditingId(producto.id);
+    setEditValues({
+      costoCompra: producto.costoCompra || 0,
+      costoSatelite: producto.costoSatelite || 0
+    });
+  };
+
+  // Cancelar edición
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setEditValues({});
+  };
+
+  // Guardar cambios de un producto
+  const handleSaveEdit = async (productoId) => {
+    setSaving(true);
+    try {
+      const productRef = doc(db, 'products', productoId);
+      await updateDoc(productRef, {
+        costoCompra: Number(editValues.costoCompra) || 0,
+        costoSatelite: Number(editValues.costoSatelite) || 0,
+        updatedAt: serverTimestamp()
+      });
+
+      // Actualizar estado local
+      setProductos(prev => prev.map(p =>
+        p.id === productoId
+          ? {
+              ...p,
+              costoCompra: Number(editValues.costoCompra) || 0,
+              costoSatelite: Number(editValues.costoSatelite) || 0
+            }
+          : p
+      ));
+
+      setEditingId(null);
+      setEditValues({});
+    } catch (error) {
+      console.error('Error al guardar:', error);
+      alert('Error al guardar los cambios');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Formatear moneda
+  const formatCurrency = (value) => {
+    return new Intl.NumberFormat('es-CO', {
+      style: 'currency',
+      currency: 'COP',
+      minimumFractionDigits: 0
+    }).format(value || 0);
+  };
 
   // Función para exportar productos actuales a Excel
   const handleExportProductos = async () => {
     setExporting(true);
     try {
-      // Obtener todos los productos
-      const productsSnapshot = await getDocs(collection(db, 'products'));
+      const productosParaExcel = productos.map(p => ({
+        REFERENCIA: p.referencia || '',
+        NOMBRE: p.nombre || '',
+        TALLA: p.talla || 'Única',
+        COLEGIO: p.colegio || '',
+        COSTO_COMPRA: p.costoCompra || 0,
+        COSTO_SATELITE: p.costoSatelite || 0
+      }));
 
-      if (productsSnapshot.empty) {
-        alert('No hay productos en el inventario para exportar.');
-        setExporting(false);
-        return;
-      }
-
-      // Preparar datos para Excel
-      const productosParaExcel = [];
-      productsSnapshot.docs.forEach(doc => {
-        const data = doc.data();
-        productosParaExcel.push({
-          REFERENCIA: data.referencia || '',
-          NOMBRE: data.nombre || '',
-          TALLA: data.talla || 'Única',
-          COLEGIO: data.colegio || '',
-          COSTO_COMPRA: data.costoCompra || 0,
-          COSTO_SATELITE: data.costoSatelite || 0,
-          PRECIO_VENTA: data.precio || 0
-        });
-      });
-
-      // Ordenar por referencia
-      productosParaExcel.sort((a, b) => {
-        const refA = String(a.REFERENCIA);
-        const refB = String(b.REFERENCIA);
-        return refA.localeCompare(refB);
-      });
-
-      // Crear el libro de Excel
       const worksheet = XLSX.utils.json_to_sheet(productosParaExcel);
-
-      // Ajustar anchos de columnas
-      const columnWidths = [
-        { wch: 15 }, // REFERENCIA
-        { wch: 50 }, // NOMBRE
-        { wch: 10 }, // TALLA
-        { wch: 12 }, // COLEGIO
-        { wch: 15 }, // COSTO_COMPRA
-        { wch: 15 }, // COSTO_SATELITE
-        { wch: 15 }  // PRECIO_VENTA
+      worksheet['!cols'] = [
+        { wch: 15 }, { wch: 50 }, { wch: 10 }, { wch: 12 },
+        { wch: 15 }, { wch: 15 }
       ];
-      worksheet['!cols'] = columnWidths;
 
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Productos');
 
-      // Generar nombre de archivo con fecha
       const fecha = new Date().toISOString().split('T')[0];
-      const fileName = `Productos_Costos_${fecha}.xlsx`;
+      XLSX.writeFile(workbook, `Productos_Costos_${fecha}.xlsx`);
 
-      // Descargar archivo
-      XLSX.writeFile(workbook, fileName);
-
-      alert(`✅ Archivo exportado exitosamente:\n${fileName}\n\nTotal de productos: ${productosParaExcel.length}\n\n💡 Edita los costos en este archivo y luego reimportalo.`);
-
+      alert(`✅ Archivo exportado: ${productos.length} productos`);
     } catch (error) {
-      console.error('Error al exportar productos:', error);
-      alert('❌ Error al exportar productos: ' + error.message);
+      console.error('Error al exportar:', error);
+      alert('Error al exportar: ' + error.message);
     } finally {
       setExporting(false);
     }
   };
 
-  // Activar el input de archivo
   const handleImportClick = () => {
     fileInputRef.current?.click();
   };
 
-  // Lógica principal de importación de costos
   const handleCostImport = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -97,7 +185,6 @@ const GestionCostos = () => {
 
     setLoading(true);
     try {
-      // --- 1. Leer el archivo Excel ---
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: 'array' });
       const sheetName = workbook.SheetNames[0];
@@ -110,254 +197,348 @@ const GestionCostos = () => {
         return;
       }
 
-      // --- 2. Obtener TODOS los productos de Firestore ---
-      const productsSnapshot = await getDocs(collection(db, 'products'));
-
-      // Crear un "mapa" para buscar IDs de producto por REFERENCIA
       const productRefMap = new Map();
-      productsSnapshot.docs.forEach(doc => {
-        const data = doc.data();
-        if (data.referencia) {
-          productRefMap.set(String(data.referencia).trim(), doc.id);
+      productos.forEach(p => {
+        if (p.referencia) {
+          productRefMap.set(String(p.referencia).trim(), p.id);
         }
       });
 
-      if (productRefMap.size === 0) {
-        alert("No hay productos en la base de datos para actualizar.");
-        setLoading(false);
-        return;
-      }
-
-      // --- 3. Preparar el Batch de Actualización ---
       const batch = writeBatch(db);
       let actualizados = 0;
-      let sinReferencia = 0;
-      let referenciaNoEncontrada = 0;
-      let datosInvalidos = 0;
-      const referenciasNoEncontradas = [];
 
       jsonData.forEach((row) => {
         const referencia = String(row.REFERENCIA || '').trim();
+        if (!referencia) return;
 
-        // Validar que tenga referencia
-        if (!referencia) {
-          sinReferencia++;
-          return;
-        }
-
-        // Convertir a número y validar
         const costoCompra = Number(row.COSTO_COMPRA || 0);
         const costoSatelite = Number(row.COSTO_SATELITE || 0);
-        const precioVenta = Number(row.PRECIO_VENTA || 0);
 
-        // Validar que sean números válidos y no negativos
-        if (isNaN(costoCompra) || isNaN(costoSatelite) || isNaN(precioVenta) ||
-            costoCompra < 0 || costoSatelite < 0 || precioVenta < 0) {
-          datosInvalidos++;
-          return;
-        }
+        if (isNaN(costoCompra) || isNaN(costoSatelite)) return;
 
-        // Buscar el ID del producto usando la referencia del Excel
         const productId = productRefMap.get(referencia);
-
         if (productId) {
-          // Si encontramos el producto, preparamos la actualización
           const productRef = doc(db, 'products', productId);
           batch.update(productRef, {
-            costoCompra: costoCompra,
-            costoSatelite: costoSatelite,
-            precio: precioVenta,
+            costoCompra,
+            costoSatelite,
             updatedAt: serverTimestamp()
           });
           actualizados++;
-        } else {
-          // Si no encontramos la referencia en nuestra base de datos
-          referenciaNoEncontrada++;
-          referenciasNoEncontradas.push(referencia);
         }
       });
 
-      // --- 4. Ejecutar el Batch ---
       if (actualizados > 0) {
         await batch.commit();
+        await fetchProductos(); // Recargar datos
       }
 
-      // --- 5. Mostrar Reporte Detallado ---
-      let reporteMensaje = `Actualización de costos y precios completada:\n\n`;
-      reporteMensaje += `✅ ${actualizados} productos actualizados correctamente.\n`;
-      reporteMensaje += `   • Costos de compra\n`;
-      reporteMensaje += `   • Costos de satélite\n`;
-      reporteMensaje += `   • Precios de venta\n\n`;
-
-      if (sinReferencia > 0) {
-        reporteMensaje += `⚠️  ${sinReferencia} filas sin referencia (omitidas).\n`;
-      }
-      if (referenciaNoEncontrada > 0) {
-        reporteMensaje += `⚠️  ${referenciaNoEncontrada} referencias no encontradas en inventario.\n`;
-      }
-      if (datosInvalidos > 0) {
-        reporteMensaje += `❌ ${datosInvalidos} filas con datos inválidos (valores negativos o no numéricos).\n`;
-      }
-
-      if (referenciasNoEncontradas.length > 0) {
-        console.warn('Referencias no encontradas:', referenciasNoEncontradas);
-        alert(reporteMensaje + `\n💡 Revisa la consola (F12) para ver las referencias que no se encontraron.`);
-      } else {
-        alert(reporteMensaje);
-      }
+      alert(`✅ ${actualizados} productos actualizados`);
 
     } catch (error) {
-      console.error('Error al actualizar costos:', error);
-      alert('Error al actualizar costos: ' + error.message);
+      console.error('Error al importar:', error);
+      alert('Error al importar: ' + error.message);
     } finally {
       setLoading(false);
-      // Limpiar el input file
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
+  // Contar productos sin costo de satélite
+  const productosSinCostoSatelite = productos.filter(p => !p.costoSatelite || p.costoSatelite === 0).length;
+
   return (
     <div className="bg-white rounded-lg shadow-md p-6">
-      <h2 className="text-xl font-semibold text-gray-800 mb-4">Gestión de Costos y Precios</h2>
-      <p className="text-sm text-gray-600 mb-6">
-        Exporta todos los productos actuales del sistema, edita los costos/precios y vuelve a importar el archivo actualizado.
-      </p>
-
-      {/* Sección de Exportación */}
-      <div className="bg-gradient-to-r from-green-50 to-green-100 border-l-4 border-green-500 rounded-lg p-4 mb-6">
-        <h3 className="text-lg font-semibold text-gray-800 mb-2 flex items-center gap-2">
-          <FileDown className="text-green-600" size={20} />
-          Paso 1: Exportar Productos Actuales
-        </h3>
-        <p className="text-sm text-gray-700 mb-3">
-          Genera un archivo Excel con TODOS los productos actuales del sistema incluyendo: referencia, nombre, talla, colegio, y costos actuales.
-        </p>
-        <button
-          onClick={handleExportProductos}
-          disabled={exporting}
-          className="px-6 py-3 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-        >
-          <FileDown size={18} />
-          {exporting ? 'Exportando...' : 'Exportar Productos a Excel'}
-        </button>
-      </div>
-
-      {/* Sección de Importación */}
-      <div className="bg-gradient-to-r from-blue-50 to-blue-100 border-l-4 border-blue-500 rounded-lg p-4 mb-6">
-        <h3 className="text-lg font-semibold text-gray-800 mb-2 flex items-center gap-2">
-          <Upload className="text-blue-600" size={20} />
-          Paso 2: Editar y Re-importar
-        </h3>
-        <p className="text-sm text-gray-700 mb-3">
-          Después de exportar, edita los costos/precios en el archivo Excel y súbelo aquí para actualizar masivamente.
-        </p>
-
-        {/* Input file oculto */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".xlsx,.csv"
-          onChange={handleCostImport}
-          style={{ display: 'none' }}
-        />
-
-        <button
-          onClick={handleImportClick}
-          disabled={loading}
-          className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-        >
-          <Upload size={18} />
-          {loading ? 'Procesando...' : 'Importar Archivo Actualizado'}
-        </button>
-
-        {loading && (
-          <p className="text-sm text-gray-600 mt-3">
-            Procesando... Esto puede tardar varios minutos si el archivo es grande.
+      <div className="flex justify-between items-start mb-6">
+        <div>
+          <h2 className="text-xl font-semibold text-gray-800">Gestión de Costos</h2>
+          <p className="text-sm text-gray-600 mt-1">
+            Configura los costos de compra y satélite de los productos.
           </p>
-        )}
-      </div>
-
-      <hr className="my-6" />
-
-      <h3 className="text-lg font-semibold text-gray-800 mb-3">Información del Archivo</h3>
-      <p className="text-sm text-gray-600 mb-4">
-        El archivo exportado incluye las siguientes columnas:
-      </p>
-
-      {/* Nota importante */}
-      <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4">
-        <div className="flex">
-          <div className="flex-shrink-0">
-            <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-            </svg>
-          </div>
-          <div className="ml-3">
-            <p className="text-sm text-blue-700">
-              <strong>Importante:</strong> Cada producto tiene solo un tipo de costo:
-            </p>
-            <ul className="list-disc list-inside text-xs text-blue-600 mt-2 space-y-1">
-              <li><strong>Productos comprados</strong> (medias, corbatas, etc.) → Solo llenan COSTO_COMPRA</li>
-              <li><strong>Productos fabricados</strong> (chaquetas, pantalones, etc.) → Solo llenan COSTO_SATELITE</li>
-              <li>El campo que no se use debe ir en 0 o vacío</li>
-            </ul>
-          </div>
         </div>
+        <button
+          onClick={() => setShowExcelSection(!showExcelSection)}
+          className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+        >
+          {showExcelSection ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          {showExcelSection ? 'Ocultar' : 'Importar/Exportar Excel'}
+        </button>
       </div>
 
-      {/* Ejemplo visual del formato */}
-      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6">
-        <p className="text-sm font-medium text-gray-700 mb-2">Estructura del archivo exportado:</p>
-        <div className="overflow-x-auto">
-          <table className="text-xs font-mono border-collapse">
-            <thead className="bg-gray-100">
+      {/* Sección de Excel (colapsable) */}
+      {showExcelSection && (
+        <div className="mb-6 p-4 bg-gray-50 rounded-lg border">
+          <div className="flex gap-4">
+            <button
+              onClick={handleExportProductos}
+              disabled={exporting}
+              className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              <FileDown size={16} />
+              {exporting ? 'Exportando...' : 'Exportar a Excel'}
+            </button>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.csv"
+              onChange={handleCostImport}
+              className="hidden"
+            />
+
+            <button
+              onClick={handleImportClick}
+              disabled={loading}
+              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+            >
+              <Upload size={16} />
+              {loading ? 'Importando...' : 'Importar desde Excel'}
+            </button>
+          </div>
+          <p className="text-xs text-gray-500 mt-2">
+            Exporta, edita en Excel las columnas COSTO_COMPRA y COSTO_SATELITE, y reimporta.
+          </p>
+        </div>
+      )}
+
+      {/* Barra de búsqueda y filtros */}
+      <div className="mb-4 flex flex-wrap gap-4 items-center">
+        <div className="relative flex-1 min-w-[250px]">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+          <input
+            type="text"
+            placeholder="Buscar por referencia, nombre o colegio..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+          />
+        </div>
+
+        {productosSinCostoSatelite > 0 && (
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={filterSinCosto}
+              onChange={(e) => setFilterSinCosto(e.target.checked)}
+              className="w-4 h-4 text-pink-600 rounded"
+            />
+            <span className="text-amber-600 font-medium">
+              Sin costo satélite ({productosSinCostoSatelite})
+            </span>
+          </label>
+        )}
+
+        <span className="text-sm text-gray-500">
+          {filteredProductos.length} de {productos.length} productos
+        </span>
+      </div>
+
+      {/* Tabla de productos */}
+      {loading && productos.length === 0 ? (
+        <div className="text-center py-8 text-gray-500">Cargando productos...</div>
+      ) : (
+        <div className="overflow-x-auto border rounded-lg">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
               <tr>
-                <th className="px-2 py-2 border border-gray-300 text-left">REFERENCIA</th>
-                <th className="px-2 py-2 border border-gray-300 text-left">NOMBRE</th>
-                <th className="px-2 py-2 border border-gray-300 text-left">TALLA</th>
-                <th className="px-2 py-2 border border-gray-300 text-left">COLEGIO</th>
-                <th className="px-2 py-2 border border-gray-300 text-left bg-yellow-50">COSTO_COMPRA</th>
-                <th className="px-2 py-2 border border-gray-300 text-left bg-yellow-50">COSTO_SATELITE</th>
-                <th className="px-2 py-2 border border-gray-300 text-left bg-yellow-50">PRECIO_VENTA</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Referencia</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Talla</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Costo Compra</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Costo Satélite</th>
+                <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Acciones</th>
               </tr>
             </thead>
-            <tbody className="bg-white">
-              <tr>
-                <td className="px-2 py-2 border border-gray-300">MA001CH</td>
-                <td className="px-2 py-2 border border-gray-300">CHAQUETA MA</td>
-                <td className="px-2 py-2 border border-gray-300">12</td>
-                <td className="px-2 py-2 border border-gray-300">MA</td>
-                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">0</td>
-                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">45000</td>
-                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">120000</td>
-              </tr>
-              <tr>
-                <td className="px-2 py-2 border border-gray-300">GEN001ME</td>
-                <td className="px-2 py-2 border border-gray-300">MEDIAS BLANCAS</td>
-                <td className="px-2 py-2 border border-gray-300">Única</td>
-                <td className="px-2 py-2 border border-gray-300">OT</td>
-                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">8000</td>
-                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">0</td>
-                <td className="px-2 py-2 border border-gray-300 bg-yellow-50">15000</td>
-              </tr>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {currentProducts.map((producto) => (
+                <tr
+                  key={producto.id}
+                  className={`hover:bg-gray-50 ${
+                    (!producto.costoSatelite || producto.costoSatelite === 0) &&
+                    (!producto.costoCompra || producto.costoCompra === 0)
+                      ? 'bg-amber-50'
+                      : ''
+                  }`}
+                >
+                  <td className="px-4 py-3 text-sm font-mono text-gray-900">{producto.referencia}</td>
+                  <td className="px-4 py-3 text-sm text-gray-700 max-w-[200px] truncate" title={producto.nombre}>
+                    {producto.nombre}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-600">{producto.talla || 'Única'}</td>
+
+                  {editingId === producto.id ? (
+                    // Modo edición
+                    <>
+                      <td className="px-4 py-2">
+                        <input
+                          type="number"
+                          value={editValues.costoCompra}
+                          onChange={(e) => setEditValues({ ...editValues, costoCompra: e.target.value })}
+                          className="w-28 px-2 py-1 text-right border rounded text-sm"
+                          min="0"
+                        />
+                      </td>
+                      <td className="px-4 py-2">
+                        <input
+                          type="number"
+                          value={editValues.costoSatelite}
+                          onChange={(e) => setEditValues({ ...editValues, costoSatelite: e.target.value })}
+                          className="w-28 px-2 py-1 text-right border rounded text-sm"
+                          min="0"
+                        />
+                      </td>
+                      <td className="px-4 py-2 text-center">
+                        <div className="flex justify-center gap-1">
+                          <button
+                            onClick={() => handleSaveEdit(producto.id)}
+                            disabled={saving}
+                            className="p-1 text-green-600 hover:bg-green-100 rounded"
+                            title="Guardar"
+                          >
+                            <Check size={18} />
+                          </button>
+                          <button
+                            onClick={handleCancelEdit}
+                            disabled={saving}
+                            className="p-1 text-red-600 hover:bg-red-100 rounded"
+                            title="Cancelar"
+                          >
+                            <X size={18} />
+                          </button>
+                        </div>
+                      </td>
+                    </>
+                  ) : (
+                    // Modo visualización
+                    <>
+                      <td className={`px-4 py-3 text-sm text-right ${producto.costoCompra ? 'text-gray-900' : 'text-gray-400'}`}>
+                        {formatCurrency(producto.costoCompra)}
+                      </td>
+                      <td className={`px-4 py-3 text-sm text-right ${producto.costoSatelite ? 'text-gray-900 font-medium' : 'text-red-400'}`}>
+                        {producto.costoSatelite ? formatCurrency(producto.costoSatelite) : '$0'}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          onClick={() => handleStartEdit(producto)}
+                          className="p-1 text-blue-600 hover:bg-blue-100 rounded"
+                          title="Editar costos"
+                        >
+                          <Edit2 size={16} />
+                        </button>
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ))}
             </tbody>
           </table>
+
+          {filteredProductos.length === 0 && (
+            <div className="p-8 text-center text-gray-500">
+              No se encontraron productos con esos criterios.
+            </div>
+          )}
         </div>
-        <div className="mt-3 space-y-2 text-xs text-gray-600">
-          <p><strong>📌 Columnas de solo lectura:</strong> REFERENCIA, NOMBRE, TALLA, COLEGIO (no editar)</p>
-          <p className="bg-yellow-50 p-2 rounded border border-yellow-200">
-            <strong>✏️ Columnas editables (resaltadas):</strong>
-          </p>
-          <ul className="list-disc list-inside ml-4 space-y-1">
-            <li><strong>COSTO_COMPRA:</strong> Para productos comprados (medias, corbatas, moños, etc.)</li>
-            <li><strong>COSTO_SATELITE:</strong> Para productos fabricados (labor de confección)</li>
-            <li><strong>PRECIO_VENTA:</strong> Precio al público</li>
-          </ul>
-          <p className="text-orange-600 font-semibold mt-2">⚠️ NO borres ni modifiques la columna REFERENCIA - es necesaria para identificar cada producto</p>
-          <p className="text-green-600 font-semibold mt-2">✅ El INVENTARIO (stock) NO se modifica al importar - solo se actualizan costos y precios</p>
+      )}
+
+      {/* Controles de paginación */}
+      {filteredProductos.length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
+          {/* Info y selector de items por página */}
+          <div className="flex items-center gap-4 text-sm text-gray-600">
+            <span>
+              Mostrando {startIndex + 1}-{Math.min(endIndex, filteredProductos.length)} de {filteredProductos.length}
+            </span>
+            <select
+              value={itemsPerPage}
+              onChange={(e) => {
+                setItemsPerPage(Number(e.target.value));
+                setCurrentPage(1);
+              }}
+              className="px-2 py-1 border rounded text-sm"
+            >
+              <option value={25}>25 por página</option>
+              <option value={50}>50 por página</option>
+              <option value={100}>100 por página</option>
+            </select>
+          </div>
+
+          {/* Botones de navegación */}
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                className="px-2 py-1 text-sm border rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Primera
+              </button>
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                disabled={currentPage === 1}
+                className="p-1 border rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft size={18} />
+              </button>
+
+              {/* Números de página */}
+              <div className="flex items-center gap-1 mx-2">
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  let pageNum;
+                  if (totalPages <= 5) {
+                    pageNum = i + 1;
+                  } else if (currentPage <= 3) {
+                    pageNum = i + 1;
+                  } else if (currentPage >= totalPages - 2) {
+                    pageNum = totalPages - 4 + i;
+                  } else {
+                    pageNum = currentPage - 2 + i;
+                  }
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => setCurrentPage(pageNum)}
+                      className={`px-3 py-1 text-sm rounded ${
+                        currentPage === pageNum
+                          ? 'bg-pink-600 text-white'
+                          : 'border hover:bg-gray-100'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                className="p-1 border rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ChevronRight size={18} />
+              </button>
+              <button
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+                className="px-2 py-1 text-sm border rounded hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Última
+              </button>
+            </div>
+          )}
         </div>
+      )}
+
+      {/* Leyenda */}
+      <div className="mt-4 flex gap-4 text-xs text-gray-500">
+        <span className="flex items-center gap-1">
+          <span className="w-3 h-3 bg-amber-50 border border-amber-200 rounded"></span>
+          Sin costos configurados
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="text-red-400">$0</span>
+          = Sin costo de satélite
+        </span>
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { db } from '../../services/firebase';
 import { collection, getDocs, query, where, writeBatch, doc, serverTimestamp, getDoc, increment } from 'firebase/firestore';
-import { ChevronDown, ChevronUp, CheckCircle, XCircle, History, Clock } from 'lucide-react';
+import { ChevronDown, ChevronUp, CheckCircle, XCircle, History, Clock, RefreshCw } from 'lucide-react';
 
 const CuentasPorPagar = () => {
   const [satelites, setSatelites] = useState([]);
@@ -12,6 +12,8 @@ const CuentasPorPagar = () => {
   const [expandedHistorial, setExpandedHistorial] = useState(null);
   const [processingPayment, setProcessingPayment] = useState(false);
   const [processingAnulacion, setProcessingAnulacion] = useState(false);
+  const [processingCostos, setProcessingCostos] = useState(false);
+  const [entradasSinCosto, setEntradasSinCosto] = useState(0);
   const [activeTab, setActiveTab] = useState('pendientes'); // 'pendientes' o 'historial'
 
   useEffect(() => {
@@ -134,11 +136,179 @@ const CuentasPorPagar = () => {
 
       setHistorialPorSatelite(historialArray);
 
+      // Contar entradas sin costo (para mostrar botón de actualización)
+      const sinCosto = todasEntradas.filter(e => !e.costoTotal || e.costoTotal === 0).length;
+      setEntradasSinCosto(sinCosto);
+
     } catch (error) {
       console.error('Error al cargar cuentas por pagar:', error);
       alert('Error al cargar las cuentas por pagar.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Función para actualizar costos de entradas que no tienen valor
+  const handleActualizarCostos = async () => {
+    const confirmarInicio = window.confirm(
+      '⚠️ ACTUALIZAR COSTOS DE ENTRADAS\n\n' +
+      'Este proceso buscará las entradas de satélite que tienen costo $0 ' +
+      'y les asignará el costo actual del producto.\n\n' +
+      '¿Deseas continuar?'
+    );
+
+    if (!confirmarInicio) return;
+
+    setProcessingCostos(true);
+    try {
+      // 1. Obtener todas las entradas de satélite
+      const qEntradas = query(
+        collection(db, 'stockEntries'),
+        where('tipoEntrada', '==', 'satelite')
+      );
+      const entradasSnapshot = await getDocs(qEntradas);
+
+      // 2. Filtrar las que no tienen costo
+      const entradasSinCostoList = entradasSnapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .filter(e => !e.anulada && (!e.costoTotal || e.costoTotal === 0));
+
+      if (entradasSinCostoList.length === 0) {
+        alert('✅ ¡No hay entradas que necesiten actualización!');
+        return;
+      }
+
+      // 3. Obtener todos los productos
+      const productosSnapshot = await getDocs(collection(db, 'products'));
+      const productosMap = new Map();
+      productosSnapshot.docs.forEach(docSnap => {
+        const data = docSnap.data();
+        productosMap.set(docSnap.id, data);
+        // También indexar por referencia+talla
+        if (data.referencia) {
+          productosMap.set(`ref_${data.referencia}_${data.talla || ''}`, { ...data, id: docSnap.id });
+        }
+      });
+
+      // 4. Preparar actualizaciones
+      const actualizaciones = [];
+      const sinCostoSatelite = [];
+
+      for (const entrada of entradasSinCostoList) {
+        let producto = productosMap.get(entrada.productId);
+
+        // Buscar por referencia si no se encontró por ID
+        if (!producto && entrada.referencia) {
+          producto = productosMap.get(`ref_${entrada.referencia}_${entrada.talla || ''}`);
+        }
+
+        if (!producto) continue;
+
+        const costoSatelite = producto.costoSatelite || 0;
+        if (costoSatelite === 0) {
+          sinCostoSatelite.push(entrada);
+          continue;
+        }
+
+        const cantidad = entrada.cantidad || 0;
+        const nuevoCostoTotal = costoSatelite * cantidad;
+
+        actualizaciones.push({
+          entrada,
+          costoUnitario: costoSatelite,
+          costoTotal: nuevoCostoTotal
+        });
+      }
+
+      // Mostrar productos sin costoSatelite configurado
+      if (sinCostoSatelite.length > 0) {
+        const productosUnicos = [...new Set(sinCostoSatelite.map(e => `${e.referencia} - ${e.nombre}`))];
+        console.log('⚠️ Productos sin costoSatelite:', productosUnicos);
+
+        let mensajeProductos = '⚠️ PRODUCTOS SIN COSTO CONFIGURADO:\n\n';
+        productosUnicos.slice(0, 10).forEach(p => {
+          mensajeProductos += `• ${p}\n`;
+        });
+        if (productosUnicos.length > 10) {
+          mensajeProductos += `... y ${productosUnicos.length - 10} más\n`;
+        }
+        mensajeProductos += '\n👉 Configura estos costos en:\nConfiguración > Gestión de Costos';
+
+        if (actualizaciones.length === 0) {
+          alert(mensajeProductos);
+          return;
+        } else {
+          // Hay algunos que sí se pueden actualizar, mostrar aviso
+          alert(mensajeProductos + '\n\n✅ Se actualizarán los demás productos.');
+        }
+      }
+
+      if (actualizaciones.length === 0) {
+        alert('⚠️ No se encontraron entradas que se puedan actualizar.');
+        return;
+      }
+
+      // 5. Mostrar resumen y confirmar
+      const totalAPagar = actualizaciones.reduce((sum, a) => sum + a.costoTotal, 0);
+      const confirmarAplicar = window.confirm(
+        `📊 RESUMEN DE ACTUALIZACIÓN\n\n` +
+        `• Entradas a actualizar: ${actualizaciones.length}\n` +
+        `• Total a registrar: $${totalAPagar.toLocaleString('es-CO')}\n\n` +
+        `¿Aplicar estos cambios?`
+      );
+
+      if (!confirmarAplicar) return;
+
+      // 6. Aplicar en batches
+      const batchSize = 400;
+      for (let i = 0; i < actualizaciones.length; i += batchSize) {
+        const batch = writeBatch(db);
+        const chunk = actualizaciones.slice(i, i + batchSize);
+
+        for (const { entrada, costoUnitario, costoTotal } of chunk) {
+          const entradaRef = doc(db, 'stockEntries', entrada.id);
+          batch.update(entradaRef, { costoUnitario, costoTotal });
+        }
+
+        await batch.commit();
+      }
+
+      // 7. Actualizar transacciones asociadas
+      for (const { entrada, costoUnitario, costoTotal } of actualizaciones) {
+        const transQuery = query(
+          collection(db, 'transactions'),
+          where('entradaId', '==', entrada.id),
+          where('tipo', '==', 'entrada_satelite')
+        );
+        const transSnapshot = await getDocs(transQuery);
+
+        if (!transSnapshot.empty) {
+          const batch = writeBatch(db);
+          transSnapshot.docs.forEach(transDoc => {
+            const transRef = doc(db, 'transactions', transDoc.id);
+            batch.update(transRef, {
+              monto: -costoTotal,
+              costoUnitario
+            });
+          });
+          await batch.commit();
+        }
+      }
+
+      alert(
+        `✅ ACTUALIZACIÓN COMPLETADA\n\n` +
+        `• Entradas actualizadas: ${actualizaciones.length}\n` +
+        `• Total registrado: $${totalAPagar.toLocaleString('es-CO')}`
+      );
+
+      // Recargar datos
+      await fetchCuentasPorPagar();
+
+    } catch (error) {
+      console.error('Error al actualizar costos:', error);
+      alert('❌ Error al actualizar los costos: ' + error.message);
+    } finally {
+      setProcessingCostos(false);
     }
   };
 
@@ -422,9 +592,22 @@ ${entrada.asignaciones.map(asig =>
 
   return (
     <div>
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">Cuentas por Pagar a Satélites</h2>
-        <p className="text-gray-600 mt-1">Gestiona los pagos pendientes a talleres satélite.</p>
+      <div className="mb-6 flex justify-between items-start">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Cuentas por Pagar a Satélites</h2>
+          <p className="text-gray-600 mt-1">Gestiona los pagos pendientes a talleres satélite.</p>
+        </div>
+        {/* Botón para actualizar costos si hay entradas sin valor */}
+        {entradasSinCosto > 0 && (
+          <button
+            onClick={handleActualizarCostos}
+            disabled={processingCostos}
+            className="px-4 py-2 bg-amber-500 text-white font-medium rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            <RefreshCw size={18} className={processingCostos ? 'animate-spin' : ''} />
+            {processingCostos ? 'Actualizando...' : `Actualizar Costos (${entradasSinCosto})`}
+          </button>
+        )}
       </div>
 
       {/* Pestañas */}

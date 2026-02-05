@@ -510,18 +510,27 @@ const Pedidos = () => {
 
     setLoading(true);
     try {
-      // Obtener el número de pedido usando contador atómico
+      // PRIMERO: Verificar si necesitamos inicializar el contador (FUERA de la transacción)
+      let initialCounterValue = null;
+      const counterRefCheck = doc(db, 'counters', 'pedidos');
+      const counterCheckSnap = await getDoc(counterRefCheck);
+
+      if (!counterCheckSnap.exists()) {
+        // Si no existe el contador, buscar el último pedido para inicializarlo
+        const q = query(collection(db, 'pedidos'), orderBy('numeroPedido', 'desc'), limit(1));
+        const snapshot = await getDocs(q);
+        initialCounterValue = snapshot.empty ? 0 : (snapshot.docs[0].data().numeroPedido || 0);
+      }
+
+      // LUEGO: Obtener el número de pedido usando contador atómico
       const counterRef = doc(db, 'counters', 'pedidos');
       const nextNumero = await runTransaction(db, async (transaction) => {
         const counterDoc = await transaction.get(counterRef);
         let newNumber;
 
         if (!counterDoc.exists()) {
-          // Si no existe el contador, buscar el último pedido para inicializarlo
-          const q = query(collection(db, 'pedidos'), orderBy('numeroPedido', 'desc'), limit(1));
-          const snapshot = await getDocs(q);
-          const lastNumber = snapshot.empty ? 0 : (snapshot.docs[0].data().numeroPedido || 0);
-          newNumber = lastNumber + 1;
+          // Usar el valor inicial obtenido ANTES de la transacción
+          newNumber = (initialCounterValue || 0) + 1;
           transaction.set(counterRef, { lastNumber: newNumber });
         } else {
           // Incrementar el contador existente
@@ -1080,19 +1089,46 @@ const Pedidos = () => {
       // 5. Si todos los items están entregados, generar factura automáticamente
       let numeroFactura = null;
       if (todosEntregados) {
+        // ⚠️ VALIDACIÓN CRÍTICA: No facturar si hay saldo pendiente
+        // El cliente DEBE pagar el total del pedido antes de poder facturar
+        if (nuevoSaldoPendiente > 0) {
+          alert(
+            `⚠️ NO SE PUEDE FACTURAR CON SALDO PENDIENTE\n\n` +
+            `Total del pedido: $${selectedPedido.total.toLocaleString('es-CO')}\n` +
+            `Total abonado: $${nuevoTotalAbonado.toLocaleString('es-CO')}\n` +
+            `Saldo pendiente: $${nuevoSaldoPendiente.toLocaleString('es-CO')}\n\n` +
+            `El cliente debe pagar el TOTAL antes de facturar.\n\n` +
+            `Opciones:\n` +
+            `1. Si el cliente va a pagar ahora, cancela esta operación y registra primero el abono.\n` +
+            `2. Si el cliente pagará después, usa "Registrar Abono Adicional" cuando pague y luego entrega los productos.`
+          );
+          setLoading(false);
+          setRegistrandoEntrega(false);
+          return;
+        }
+
         try {
-          // Obtener número de factura consecutivo usando transacción atómica
+          // PRIMERO: Verificar si necesitamos inicializar el contador (FUERA de la transacción)
+          let initialCounterValue = null;
+          const counterRefCheck = doc(db, 'counters', 'facturas');
+          const counterCheckSnap = await getDoc(counterRefCheck);
+
+          if (!counterCheckSnap.exists()) {
+            // Si no existe el contador, buscar la última factura para inicializarlo
+            const q = query(collection(db, 'sales'), orderBy('numeroFactura', 'desc'), limit(1));
+            const snapshot = await getDocs(q);
+            initialCounterValue = snapshot.empty ? 0 : (snapshot.docs[0].data().numeroFactura || 0);
+          }
+
+          // LUEGO: Obtener número de factura consecutivo usando transacción atómica
           const counterRef = doc(db, 'counters', 'facturas');
           numeroFactura = await runTransaction(db, async (transaction) => {
             const counterDoc = await transaction.get(counterRef);
             let newNumber;
 
             if (!counterDoc.exists()) {
-              // Si no existe el contador, buscar la última factura para inicializarlo
-              const q = query(collection(db, 'sales'), orderBy('numeroFactura', 'desc'), limit(1));
-              const snapshot = await getDocs(q);
-              const lastNumber = snapshot.empty ? 0 : (snapshot.docs[0].data().numeroFactura || 0);
-              newNumber = lastNumber + 1;
+              // Usar el valor inicial obtenido ANTES de la transacción
+              newNumber = (initialCounterValue || 0) + 1;
               transaction.set(counterRef, { lastNumber: newNumber });
             } else {
               // Incrementar el contador existente
@@ -1439,7 +1475,7 @@ const Pedidos = () => {
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
           tipo: 'egreso',
-          monto: diferenciaExceso,
+          monto: -diferenciaExceso, // Negativo para que se reste en el cierre de caja
           metodoPago: 'Ajuste',
           pedidoId: selectedPedido.id,
           numeroPedido: selectedPedido.numeroPedido,
@@ -1609,7 +1645,7 @@ const Pedidos = () => {
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
           tipo: 'egreso',
-          monto: diferenciaExceso,
+          monto: -diferenciaExceso, // Negativo para que se reste en el cierre de caja
           metodoPago: 'Ajuste',
           pedidoId: selectedPedido.id,
           numeroPedido: selectedPedido.numeroPedido,
@@ -2316,9 +2352,9 @@ const Pedidos = () => {
         // Calcular estadoItem basado en las cantidades
         estadoItem:
           cantidadEntregada === cantidadTotal ? 'Entregado' :
-          nuevaCantidadLista + cantidadEntregada === cantidadTotal ? 'Listo para Entrega' :
-          nuevaCantidadLista > 0 ? 'Parcialmente Listo' :
-          'En Producción',
+            nuevaCantidadLista + cantidadEntregada === cantidadTotal ? 'Listo para Entrega' :
+              nuevaCantidadLista > 0 ? 'Parcialmente Listo' :
+                'En Producción',
         historialCambiosEstado: [
           ...(item.historialCambiosEstado || []),
           {
@@ -2708,7 +2744,7 @@ const Pedidos = () => {
 
   // Función helper para obtener color del badge de estado
   const getEstadoBadgeColor = (estado) => {
-    switch(estado) {
+    switch (estado) {
       case 'En Proceso':
         return 'bg-blue-100 text-blue-800';
       case 'Pedido Completo - Listo para Recoger':
@@ -2782,42 +2818,37 @@ const Pedidos = () => {
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setFilterEstado('')}
-            className={`px-3 sm:px-4 py-2 text-sm sm:text-base rounded-lg font-medium transition-colors ${
-              filterEstado === '' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-3 sm:px-4 py-2 text-sm sm:text-base rounded-lg font-medium transition-colors ${filterEstado === '' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             Todos
           </button>
           <button
             onClick={() => setFilterEstado('En Proceso')}
-            className={`px-3 sm:px-4 py-2 text-sm sm:text-base rounded-lg font-medium transition-colors ${
-              filterEstado === 'En Proceso' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-3 sm:px-4 py-2 text-sm sm:text-base rounded-lg font-medium transition-colors ${filterEstado === 'En Proceso' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             En Proceso
           </button>
           <button
             onClick={() => setFilterEstado('Pedido Completo - Listo para Recoger')}
-            className={`px-3 sm:px-4 py-2 text-sm sm:text-base rounded-lg font-medium transition-colors ${
-              filterEstado === 'Pedido Completo - Listo para Recoger' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-3 sm:px-4 py-2 text-sm sm:text-base rounded-lg font-medium transition-colors ${filterEstado === 'Pedido Completo - Listo para Recoger' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             <span className="hidden sm:inline">Pedido Completo</span>
             <span className="sm:hidden">Completo</span>
           </button>
           <button
             onClick={() => setFilterEstado('Entregado')}
-            className={`px-3 sm:px-4 py-2 text-sm sm:text-base rounded-lg font-medium transition-colors ${
-              filterEstado === 'Entregado' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
+            className={`px-3 sm:px-4 py-2 text-sm sm:text-base rounded-lg font-medium transition-colors ${filterEstado === 'Entregado' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
           >
             Entregado
           </button>
           <button
             onClick={() => setFilterEstado('Anulado')}
-            className={`px-3 sm:px-4 py-2 text-sm sm:text-base rounded-lg font-medium transition-colors ${
-              filterEstado === 'Anulado' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-700 hover:bg-red-100'
-            }`}
+            className={`px-3 sm:px-4 py-2 text-sm sm:text-base rounded-lg font-medium transition-colors ${filterEstado === 'Anulado' ? 'bg-red-600 text-white' : 'bg-red-50 text-red-700 hover:bg-red-100'
+              }`}
           >
             Anulados
           </button>
@@ -3010,11 +3041,10 @@ const Pedidos = () => {
                       <button
                         key={numero}
                         onClick={() => setPaginaActual(numero)}
-                        className={`px-3 py-1 text-sm border rounded-lg transition-colors ${
-                          paginaActual === numero
+                        className={`px-3 py-1 text-sm border rounded-lg transition-colors ${paginaActual === numero
                             ? 'bg-primary text-white border-primary'
                             : 'border-gray-300 hover:bg-gray-50'
-                        }`}
+                          }`}
                       >
                         {numero}
                       </button>
@@ -3439,15 +3469,14 @@ const Pedidos = () => {
                             {!item.anulado && (
                               <div className="space-y-1">
                                 {/* Estado principal */}
-                                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                                  item.estadoItem === 'En Producción'
+                                <span className={`px-3 py-1 rounded-full text-xs font-medium ${item.estadoItem === 'En Producción'
                                     ? 'bg-blue-100 text-blue-800'
                                     : item.estadoItem === 'Listo para Entrega'
-                                    ? 'bg-yellow-100 text-yellow-800'
-                                    : item.estadoItem === 'Parcialmente Listo'
-                                    ? 'bg-orange-100 text-orange-800'
-                                    : 'bg-green-100 text-green-800'
-                                }`}>
+                                      ? 'bg-yellow-100 text-yellow-800'
+                                      : item.estadoItem === 'Parcialmente Listo'
+                                        ? 'bg-orange-100 text-orange-800'
+                                        : 'bg-green-100 text-green-800'
+                                  }`}>
                                   {item.estadoItem}
                                 </span>
                                 {/* Detalle de cantidades */}
@@ -3500,14 +3529,14 @@ const Pedidos = () => {
                                     item.estadoItem === 'Parcialmente Listo' ||
                                     (item.estadoItem === 'Entregado' && selectedPedido.estadoGeneral !== 'Entregado')
                                   ) && (
-                                    <button
-                                      onClick={() => handleAbrirCambiarTalla(index)}
-                                      className="px-3 py-1 bg-purple-500 text-white text-xs rounded hover:bg-purple-600 transition-colors"
-                                      title="Cambiar talla (cliente vuelve porque no le quedó)"
-                                    >
-                                      🔄 Talla
-                                    </button>
-                                  )}
+                                      <button
+                                        onClick={() => handleAbrirCambiarTalla(index)}
+                                        className="px-3 py-1 bg-purple-500 text-white text-xs rounded hover:bg-purple-600 transition-colors"
+                                        title="Cambiar talla (cliente vuelve porque no le quedó)"
+                                      >
+                                        🔄 Talla
+                                      </button>
+                                    )}
                                   <button
                                     onClick={() => handleOpenAnularProducto(index)}
                                     className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition-colors"
@@ -3884,93 +3913,93 @@ const Pedidos = () => {
             <div className="flex-1 overflow-y-auto px-6 py-4">
               <div className="flex justify-center">
                 <div id="receipt-print" className="bg-white" style={{ maxWidth: '300px', padding: '8px' }}>
-              {/* Company Info */}
-              <div className="text-center mb-4">
-                <h3 className="font-bold text-lg">{companyConfig?.nombre || 'MARTHA ROMERO UNIFORMES'}</h3>
-                {companyConfig?.nit && <p className="text-xs">NIT: {companyConfig.nit}</p>}
-                {companyConfig?.direccion && <p className="text-xs">{companyConfig.direccion}</p>}
-                {companyConfig?.telefono && <p className="text-xs">Tel: {companyConfig.telefono}</p>}
-                <p className="font-bold text-sm mt-2" style={{ letterSpacing: '1px' }}>PEDIDO</p>
-              </div>
-
-              {/* Order Info */}
-              <div className="border-t border-b border-dashed py-2 mb-2">
-                <div className="flex justify-between text-sm">
-                  <span className="font-medium">Pedido N°:</span>
-                  <span>{String(reciboDatos.numeroPedido).padStart(4, '0')}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="font-medium">Fecha:</span>
-                  <span>{reciboDatos.fecha}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="font-medium">Cliente:</span>
-                  <span>{reciboDatos.clienteNombre}</span>
-                </div>
-                {reciboDatos.colegioNombre && (
-                  <div className="flex justify-between text-sm">
-                    <span className="font-medium">Colegio:</span>
-                    <span>{reciboDatos.colegioNombre}</span>
+                  {/* Company Info */}
+                  <div className="text-center mb-4">
+                    <h3 className="font-bold text-lg">{companyConfig?.nombre || 'MARTHA ROMERO UNIFORMES'}</h3>
+                    {companyConfig?.nit && <p className="text-xs">NIT: {companyConfig.nit}</p>}
+                    {companyConfig?.direccion && <p className="text-xs">{companyConfig.direccion}</p>}
+                    {companyConfig?.telefono && <p className="text-xs">Tel: {companyConfig.telefono}</p>}
+                    <p className="font-bold text-sm mt-2" style={{ letterSpacing: '1px' }}>PEDIDO</p>
                   </div>
-                )}
-              </div>
 
-              {/* Items */}
-              <div className="border-t border-b border-dashed py-2 mb-2">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left py-1">Producto</th>
-                      <th className="text-center">Cant</th>
-                      <th className="text-right">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reciboDatos.items.map((item, index) => (
-                      <tr key={index}>
-                        <td className="py-1">
-                          <div className="font-medium">{item.nombre}</div>
-                          <div className="text-gray-600 text-[10px]">
-                            Ref: {item.referencia} | Talla: {item.talla}
-                          </div>
-                        </td>
-                        <td className="text-center">{item.cantidad}</td>
-                        <td className="text-right">${item.subtotal.toLocaleString('es-CO')}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  {/* Order Info */}
+                  <div className="border-t border-b border-dashed py-2 mb-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="font-medium">Pedido N°:</span>
+                      <span>{String(reciboDatos.numeroPedido).padStart(4, '0')}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="font-medium">Fecha:</span>
+                      <span>{reciboDatos.fecha}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="font-medium">Cliente:</span>
+                      <span>{reciboDatos.clienteNombre}</span>
+                    </div>
+                    {reciboDatos.colegioNombre && (
+                      <div className="flex justify-between text-sm">
+                        <span className="font-medium">Colegio:</span>
+                        <span>{reciboDatos.colegioNombre}</span>
+                      </div>
+                    )}
+                  </div>
 
-              {/* Totals */}
-              <div className="space-y-1 text-sm mb-2">
-                <div className="flex justify-between font-bold">
-                  <span>TOTAL:</span>
-                  <span>${reciboDatos.total.toLocaleString('es-CO')}</span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span>Abono:</span>
-                  <span>${reciboDatos.abono.toLocaleString('es-CO')}</span>
-                </div>
-                <div className="flex justify-between font-bold text-base border-t pt-1">
-                  <span>SALDO:</span>
-                  <span>${reciboDatos.saldo.toLocaleString('es-CO')}</span>
-                </div>
-              </div>
+                  {/* Items */}
+                  <div className="border-t border-b border-dashed py-2 mb-2">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="text-left py-1">Producto</th>
+                          <th className="text-center">Cant</th>
+                          <th className="text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reciboDatos.items.map((item, index) => (
+                          <tr key={index}>
+                            <td className="py-1">
+                              <div className="font-medium">{item.nombre}</div>
+                              <div className="text-gray-600 text-[10px]">
+                                Ref: {item.referencia} | Talla: {item.talla}
+                              </div>
+                            </td>
+                            <td className="text-center">{item.cantidad}</td>
+                            <td className="text-right">${item.subtotal.toLocaleString('es-CO')}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
 
-              {/* Observaciones */}
-              {reciboDatos.observaciones && reciboDatos.observaciones.trim() && (
-                <div className="border-t border-dashed pt-2 mb-2 text-xs">
-                  <p className="font-bold mb-1">Observaciones:</p>
-                  <p>{reciboDatos.observaciones}</p>
-                </div>
-              )}
+                  {/* Totals */}
+                  <div className="space-y-1 text-sm mb-2">
+                    <div className="flex justify-between font-bold">
+                      <span>TOTAL:</span>
+                      <span>${reciboDatos.total.toLocaleString('es-CO')}</span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span>Abono:</span>
+                      <span>${reciboDatos.abono.toLocaleString('es-CO')}</span>
+                    </div>
+                    <div className="flex justify-between font-bold text-base border-t pt-1">
+                      <span>SALDO:</span>
+                      <span>${reciboDatos.saldo.toLocaleString('es-CO')}</span>
+                    </div>
+                  </div>
 
-              {/* Footer */}
-              <div className="text-center mt-4 text-xs border-t pt-2">
-                <p>¡Gracias por su pedido!</p>
-                <p>Este es un comprobante de pedido</p>
-              </div>
+                  {/* Observaciones */}
+                  {reciboDatos.observaciones && reciboDatos.observaciones.trim() && (
+                    <div className="border-t border-dashed pt-2 mb-2 text-xs">
+                      <p className="font-bold mb-1">Observaciones:</p>
+                      <p>{reciboDatos.observaciones}</p>
+                    </div>
+                  )}
+
+                  {/* Footer */}
+                  <div className="text-center mt-4 text-xs border-t pt-2">
+                    <p>¡Gracias por su pedido!</p>
+                    <p>Este es un comprobante de pedido</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -3978,22 +4007,22 @@ const Pedidos = () => {
             {/* Action Buttons - Fijos abajo */}
             <div className="flex-shrink-0 px-6 py-4 border-t border-gray-200 bg-gray-50">
               <div className="flex flex-col gap-2">
-              <div className="flex gap-2">
-                <button
-                  onClick={handlePrint}
-                  className="flex-1 px-4 py-2 text-white rounded-md hover:opacity-90 transition-opacity"
-                  style={{ backgroundColor: '#EA5C2E' }}
-                >
-                  🖨️ Imprimir
-                </button>
-                <button
-                  onClick={handleOpenEmailModal}
-                  className="flex-1 px-4 py-2 text-white rounded-md hover:opacity-90 transition-opacity"
-                  style={{ backgroundColor: '#D50565' }}
-                >
-                  📧 Enviar por Correo
-                </button>
-              </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handlePrint}
+                    className="flex-1 px-4 py-2 text-white rounded-md hover:opacity-90 transition-opacity"
+                    style={{ backgroundColor: '#EA5C2E' }}
+                  >
+                    🖨️ Imprimir
+                  </button>
+                  <button
+                    onClick={handleOpenEmailModal}
+                    className="flex-1 px-4 py-2 text-white rounded-md hover:opacity-90 transition-opacity"
+                    style={{ backgroundColor: '#D50565' }}
+                  >
+                    📧 Enviar por Correo
+                  </button>
+                </div>
                 <button
                   onClick={() => setReciboDatos(null)}
                   className="w-full px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
@@ -4401,9 +4430,8 @@ const Pedidos = () => {
                   <div
                     key={cliente.id}
                     onClick={() => setNuevoClienteSeleccionado(cliente)}
-                    className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${
-                      nuevoClienteSeleccionado?.id === cliente.id ? 'bg-blue-50' : ''
-                    }`}
+                    className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${nuevoClienteSeleccionado?.id === cliente.id ? 'bg-blue-50' : ''
+                      }`}
                   >
                     <p className="font-medium text-gray-800">{cliente.nombreCompleto}</p>
                     <p className="text-sm text-gray-600">
@@ -4526,9 +4554,8 @@ const Pedidos = () => {
                   <div
                     key={producto.id}
                     onClick={() => setProductoNuevoSeleccionado(producto)}
-                    className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${
-                      productoNuevoSeleccionado?.id === producto.id ? 'bg-blue-50' : ''
-                    }`}
+                    className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${productoNuevoSeleccionado?.id === producto.id ? 'bg-blue-50' : ''
+                      }`}
                   >
                     <p className="font-medium text-gray-800">{producto.nombre}</p>
                     <p className="text-sm text-gray-600">
@@ -4751,8 +4778,8 @@ const Pedidos = () => {
                     const searchLower = searchNuevaTalla.toLowerCase();
                     return (
                       (p.nombre?.toLowerCase().includes(searchLower) ||
-                      p.referencia?.toLowerCase().includes(searchLower) ||
-                      p.talla?.toLowerCase().includes(searchLower)) &&
+                        p.referencia?.toLowerCase().includes(searchLower) ||
+                        p.talla?.toLowerCase().includes(searchLower)) &&
                       p.id !== selectedPedido.items[itemIndexToCambiarTalla].productoId
                     );
                   })
@@ -4761,9 +4788,8 @@ const Pedidos = () => {
                     <div
                       key={producto.id}
                       onClick={() => setProductoNuevaTalla(producto)}
-                      className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${
-                        productoNuevaTalla?.id === producto.id ? 'bg-green-50 border-green-200' : ''
-                      }`}
+                      className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${productoNuevaTalla?.id === producto.id ? 'bg-green-50 border-green-200' : ''
+                        }`}
                     >
                       <p className="font-medium text-gray-800">{producto.nombre}</p>
                       <p className="text-sm text-gray-600">

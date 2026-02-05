@@ -699,22 +699,33 @@ const POS = () => {
 
     setLoading(true); // Activar loading
     try {
-      // Usar runTransaction para garantizar atomicidad y verificación de stock
-      const result = await runTransaction(db, async (transaction) => {
-        // 1. Get next invoice number
+      // PRIMERO: Obtener la última factura SI es necesario (FUERA de la transacción)
+      let initialCounterValue = null;
+      const counterRefCheck = doc(db, 'counters', 'facturas');
+      const counterCheckSnap = await getDoc(counterRefCheck);
+
+      if (!counterCheckSnap.exists()) {
+        // Si no existe el contador, buscar la última factura para inicializarlo
         const salesQuery = query(
           collection(db, 'sales'),
           orderBy('numeroFactura', 'desc'),
           limit(1)
         );
         const salesSnap = await getDocs(salesQuery);
-        let nextNumero = 1;
-        if (!salesSnap.empty) {
-          const lastSale = salesSnap.docs[0].data();
-          nextNumero = (lastSale.numeroFactura || 0) + 1;
-        }
+        initialCounterValue = salesSnap.empty ? 0 : (salesSnap.docs[0].data().numeroFactura || 0);
+      }
 
-        // 2. Verificar stock de TODOS los productos ANTES de proceder
+      // LUEGO: Usar runTransaction para garantizar atomicidad y verificación de stock
+      const result = await runTransaction(db, async (transaction) => {
+        // ============================================
+        // FASE 1: TODAS LAS LECTURAS PRIMERO
+        // ============================================
+
+        // 1.1 Leer contador de facturas
+        const counterRef = doc(db, 'counters', 'facturas');
+        const counterDoc = await transaction.get(counterRef);
+
+        // 1.2 Leer stock de TODOS los productos
         const stockChecks = [];
         for (const item of cartItems) {
           const productRef = doc(db, 'products', item.product.id);
@@ -749,14 +760,30 @@ const POS = () => {
           stockChecks.push({
             ref: productRef,
             product: productSnap.data(),
-            currentStockTotal: stockTotal, // Guardar el stock actual para cálculo manual
+            currentStockTotal: stockTotal,
             requestedQty: item.cantidad,
             availableStock: currentStock
           });
         }
 
-        // 3. Si llegamos aquí, hay stock suficiente para todos los productos
-        // Prepare Sale Data
+        // ============================================
+        // FASE 2: TODAS LAS ESCRITURAS DESPUÉS
+        // ============================================
+
+        // 2.1 Calcular y escribir el número de factura
+        let nextNumero;
+        if (!counterDoc.exists()) {
+          // Usar el valor inicial obtenido ANTES de la transacción
+          nextNumero = (initialCounterValue || 0) + 1;
+          transaction.set(counterRef, { lastNumber: nextNumero });
+        } else {
+          // Incrementar el contador existente
+          const currentNumber = counterDoc.data().lastNumber || 0;
+          nextNumero = currentNumber + 1;
+          transaction.update(counterRef, { lastNumber: nextNumero });
+        }
+
+        // 2.2 Preparar datos de la venta
         const totalVenta = calculateTotal();
         const saleData = {
           numeroFactura: nextNumero,

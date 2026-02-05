@@ -163,8 +163,10 @@ const EntradaProveedor = () => {
       for (const pedidoDoc of pedidosSnapshot.docs) {
         const pedidoData = pedidoDoc.data();
 
-        // Saltar pedidos anulados o cancelados
-        if (pedidoData.estadoGeneral === 'Anulado' || pedidoData.estadoGeneral === 'Cancelado') {
+        // Saltar pedidos anulados o cancelados (verificar ambos campos)
+        if (pedidoData.anulado === true ||
+            pedidoData.estadoGeneral === 'Anulado' ||
+            pedidoData.estadoGeneral === 'Cancelado') {
           continue;
         }
 
@@ -209,8 +211,10 @@ const EntradaProveedor = () => {
       for (const pedidoDoc of pedidosB2BSnapshot.docs) {
         const pedidoData = pedidoDoc.data();
 
-        // Saltar pedidos anulados o cancelados
-        if (pedidoData.estadoGeneral === 'Anulado' || pedidoData.estadoGeneral === 'Cancelado') {
+        // Saltar pedidos anulados o cancelados (verificar ambos campos)
+        if (pedidoData.anulado === true ||
+            pedidoData.estadoGeneral === 'Anulado' ||
+            pedidoData.estadoGeneral === 'Cancelado') {
           continue;
         }
 

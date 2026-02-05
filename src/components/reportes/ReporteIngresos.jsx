@@ -99,6 +99,16 @@ const ReporteIngresos = () => {
 
       const transSnap = await getDocs(transQuery);
 
+      // También consultar transacciones B2B (colección separada)
+      const transB2BQuery = query(
+        collection(db, 'transactions_b2b'),
+        where('fecha', '>=', startTimestamp),
+        where('fecha', '<=', endTimestamp),
+        orderBy('fecha', 'desc')
+      );
+
+      const transB2BSnap = await getDocs(transB2BQuery);
+
       let todosLosIngresos = [];
 
       transSnap.forEach(doc => {
@@ -154,6 +164,35 @@ const ReporteIngresos = () => {
           metodoPago: trans.metodoPago || 'Efectivo',
           descripcion: trans.descripcion || '',
           numeroDocumento: trans.numeroFactura || trans.numeroPedido || trans.numeroApartado || 0,
+          clienteNombre: trans.clienteNombre || 'N/A'
+        });
+      });
+
+      // Procesar transacciones B2B (de la colección separada)
+      transB2BSnap.forEach(doc => {
+        const trans = doc.data();
+
+        // Excluir anuladas
+        if (trans.anulada === true) return;
+
+        // Solo considerar transacciones de ingreso (monto positivo)
+        if (trans.monto <= 0) return;
+
+        // Aplicar filtro de fuente
+        if (fuenteIngreso !== 'todas' && fuenteIngreso !== 'pedidosB2B') return;
+
+        // Aplicar filtro de método de pago
+        if (metodoPago !== 'todos' && trans.metodoPago !== metodoPago) return;
+
+        todosLosIngresos.push({
+          id: doc.id,
+          fecha: trans.fecha.toDate(),
+          fuente: 'Pedido B2B',
+          tipo: trans.tipo,
+          monto: trans.monto,
+          metodoPago: trans.metodoPago || 'No especificado',
+          descripcion: trans.notas || `Abono pedido #${trans.numeroPedido || 0}`,
+          numeroDocumento: trans.numeroPedido || 0,
           clienteNombre: trans.clienteNombre || 'N/A'
         });
       });

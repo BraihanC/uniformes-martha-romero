@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { db } from '../../services/firebase';
-import { collection, getDocs, query, orderBy, doc, updateDoc, arrayUnion, serverTimestamp, addDoc } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, doc, updateDoc, arrayUnion, serverTimestamp, addDoc, Timestamp } from 'firebase/firestore';
 import { useAuth } from '../../context/AuthContext';
-import { DollarSign, TrendingUp, Package, User, Calendar, CreditCard, Plus, Eye, X } from 'lucide-react';
+import { DollarSign, TrendingUp, Package, User, CreditCard, Plus, Eye, X } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 const AnalisisB2B = () => {
@@ -75,6 +75,19 @@ const AnalisisB2B = () => {
     return (total || 0) - calcularTotalAbonado(abonos);
   };
 
+  // Obtener el total real del pedido (usa total guardado o calcula desde productos)
+  const obtenerTotalPedido = (pedido) => {
+    if (pedido.total && pedido.total > 0) {
+      return pedido.total;
+    }
+    // Calcular desde productos si no hay total guardado
+    return (pedido.productos || []).reduce((sum, prod) => {
+      const cantidad = prod.cantidad || 0;
+      const precio = prod.precioVenta || prod.precioUnitario || 0;
+      return sum + (cantidad * precio);
+    }, 0);
+  };
+
   const calcularEstadoPago = (total, abonos) => {
     const totalAbonado = calcularTotalAbonado(abonos);
     if (totalAbonado === 0) return 'Sin pagar';
@@ -89,12 +102,18 @@ const AnalisisB2B = () => {
 
     (pedido.productos || []).forEach(producto => {
       const cantidad = producto.cantidad || 0;
-      const precioVenta = producto.precioVenta || 0;
+      // Usar precioVenta o precioUnitario como fallback
+      const precioVenta = producto.precioVenta || producto.precioUnitario || 0;
       const costoUnitario = producto.costoUnitario || 0;
 
       totalVenta += cantidad * precioVenta;
       totalCosto += cantidad * costoUnitario;
     });
+
+    // Si no hay totalVenta calculado, usar el total del pedido
+    if (totalVenta === 0 && pedido.total) {
+      totalVenta = pedido.total;
+    }
 
     const utilidadBruta = totalVenta - totalCosto;
     const margenPorcentaje = totalVenta > 0 ? ((utilidadBruta / totalVenta) * 100) : 0;
@@ -115,7 +134,8 @@ const AnalisisB2B = () => {
     }
 
     const monto = parseFloat(montoAbono);
-    const saldoActual = calcularSaldoPendiente(selectedPedido.total, selectedPedido.abonos);
+    const totalPedido = obtenerTotalPedido(selectedPedido);
+    const saldoActual = calcularSaldoPendiente(totalPedido, selectedPedido.abonos);
 
     if (monto > saldoActual) {
       alert(`El monto del abono no puede ser mayor al saldo pendiente (${formatCurrency(saldoActual)})`);
@@ -129,7 +149,7 @@ const AnalisisB2B = () => {
 
       const nuevoAbono = {
         monto: monto,
-        fecha: serverTimestamp(),
+        fecha: Timestamp.now(),
         registradoPor: user?.displayName || user?.email || 'Administrador',
         notas: notasAbono.trim()
       };
@@ -139,9 +159,9 @@ const AnalisisB2B = () => {
         updatedAt: serverTimestamp()
       });
 
-      // Registrar en transacciones
+      // Registrar en transacciones B2B (colección separada para no afectar cierre de caja)
       const nuevoSaldo = saldoActual - monto;
-      await addDoc(collection(db, 'transactions'), {
+      await addDoc(collection(db, 'transactions_b2b'), {
         tipo: 'abono_pedido_b2b',
         monto: monto,
         fecha: serverTimestamp(),
@@ -152,7 +172,7 @@ const AnalisisB2B = () => {
         metodoPago: 'No especificado',
         referencia: '',
         notas: notasAbono.trim(),
-        totalPedido: selectedPedido.total || 0,
+        totalPedido: totalPedido,
         saldoPendiente: nuevoSaldo,
         createdAt: serverTimestamp(),
         createdBy: user?.displayName || user?.email || 'Administrador'
@@ -219,7 +239,7 @@ const AnalisisB2B = () => {
       totalVentas += finanzas.totalVenta;
       totalCostos += finanzas.totalCosto;
       totalAbonado += calcularTotalAbonado(pedido.abonos);
-      totalPendiente += calcularSaldoPendiente(pedido.total, pedido.abonos);
+      totalPendiente += calcularSaldoPendiente(obtenerTotalPedido(pedido), pedido.abonos);
     });
 
     const utilidadBruta = totalVentas - totalCostos;
@@ -241,7 +261,8 @@ const AnalisisB2B = () => {
     const datos = pedidosFiltrados.map(pedido => {
       const finanzas = calcularFinanzasPedido(pedido);
       const totalAbonado = calcularTotalAbonado(pedido.abonos);
-      const saldoPendiente = calcularSaldoPendiente(pedido.total, pedido.abonos);
+      const totalPedidoReal = obtenerTotalPedido(pedido);
+      const saldoPendiente = calcularSaldoPendiente(totalPedidoReal, pedido.abonos);
 
       return {
         'Pedido #': String(pedido.numeroPedido || 0).padStart(4, '0'),
@@ -255,7 +276,7 @@ const AnalisisB2B = () => {
         'Margen %': finanzas.margenPorcentaje.toFixed(2),
         'Total Abonado': totalAbonado,
         'Saldo Pendiente': saldoPendiente,
-        'Estado Pago': calcularEstadoPago(pedido.total, pedido.abonos)
+        'Estado Pago': calcularEstadoPago(totalPedidoReal, pedido.abonos)
       };
     });
 
@@ -449,7 +470,8 @@ const AnalisisB2B = () => {
                 pedidosFiltrados.map(pedido => {
                   const finanzas = calcularFinanzasPedido(pedido);
                   const totalAbonado = calcularTotalAbonado(pedido.abonos);
-                  const saldoPendiente = calcularSaldoPendiente(pedido.total, pedido.abonos);
+                  const totalPedidoReal = obtenerTotalPedido(pedido);
+                  const saldoPendiente = calcularSaldoPendiente(totalPedidoReal, pedido.abonos);
 
                   return (
                     <tr key={pedido.id} className="hover:bg-gray-50">
@@ -532,7 +554,7 @@ const AnalisisB2B = () => {
 
       {/* Modal Detalle */}
       {showDetalleModal && selectedPedido && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 bg-black bg-opacity-50">
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>
           <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
               <h2 className="text-xl font-bold text-gray-800">
@@ -639,7 +661,8 @@ const AnalisisB2B = () => {
                 {(() => {
                   const finanzas = calcularFinanzasPedido(selectedPedido);
                   const totalAbonado = calcularTotalAbonado(selectedPedido.abonos);
-                  const saldoPendiente = calcularSaldoPendiente(selectedPedido.total, selectedPedido.abonos);
+                  const totalPedidoReal = obtenerTotalPedido(selectedPedido);
+                  const saldoPendiente = calcularSaldoPendiente(totalPedidoReal, selectedPedido.abonos);
 
                   return (
                     <div className="space-y-2">
@@ -705,7 +728,7 @@ const AnalisisB2B = () => {
 
       {/* Modal Registrar Abono */}
       {showAbonoModal && selectedPedido && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4 bg-black bg-opacity-50">
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
             <div className="border-b px-6 py-4">
               <h3 className="text-lg font-semibold text-gray-800">Registrar Abono</h3>
@@ -715,7 +738,7 @@ const AnalisisB2B = () => {
                 <p className="text-gray-600">Cliente: <span className="font-semibold">{selectedPedido.clienteNombre}</span></p>
                 <p className="text-gray-600">Pedido: <span className="font-semibold">#{String(selectedPedido.numeroPedido || 0).padStart(4, '0')}</span></p>
                 <p className="text-gray-600">Saldo Pendiente: <span className="font-semibold text-orange-600">
-                  {formatCurrency(calcularSaldoPendiente(selectedPedido.total, selectedPedido.abonos))}
+                  {formatCurrency(calcularSaldoPendiente(obtenerTotalPedido(selectedPedido), selectedPedido.abonos))}
                 </span></p>
               </div>
 

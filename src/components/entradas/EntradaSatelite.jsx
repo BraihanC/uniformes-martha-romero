@@ -161,8 +161,10 @@ const EntradaSatelite = () => {
       for (const pedidoDoc of pedidosSnapshot.docs) {
         const pedidoData = pedidoDoc.data();
 
-        // Saltar pedidos anulados o cancelados
-        if (pedidoData.estadoGeneral === 'Anulado' || pedidoData.estadoGeneral === 'Cancelado') {
+        // Saltar pedidos anulados o cancelados (verificar ambos campos)
+        if (pedidoData.anulado === true ||
+            pedidoData.estadoGeneral === 'Anulado' ||
+            pedidoData.estadoGeneral === 'Cancelado') {
           continue;
         }
 
@@ -217,8 +219,10 @@ const EntradaSatelite = () => {
       for (const pedidoDoc of pedidosB2BSnapshot.docs) {
         const pedidoData = pedidoDoc.data();
 
-        // Saltar pedidos anulados o cancelados
-        if (pedidoData.estadoGeneral === 'Anulado' || pedidoData.estadoGeneral === 'Cancelado') {
+        // Saltar pedidos anulados o cancelados (verificar ambos campos)
+        if (pedidoData.anulado === true ||
+            pedidoData.estadoGeneral === 'Anulado' ||
+            pedidoData.estadoGeneral === 'Cancelado') {
           continue;
         }
 
@@ -264,11 +268,20 @@ const EntradaSatelite = () => {
         for (const itemPendiente of pedido.itemsPendientes) {
           if (cantidadRestante <= 0) break;
 
-          // Calcular cantidad pendiente real (no la cantidad total)
+          // Calcular cantidad pendiente real según el tipo de pedido
           const cantidadTotal = itemPendiente.cantidad;
-          const cantidadLista = itemPendiente.cantidadLista || 0;
-          const cantidadEntregada = itemPendiente.cantidadEntregada || 0;
-          const cantidadPendiente = cantidadTotal - cantidadLista - cantidadEntregada;
+          let cantidadPendiente;
+
+          if (pedido.tipo === 'pedido_b2b') {
+            // Para pedidos B2B usar cantidadAlistada (NO cantidadLista)
+            const cantidadAlistada = itemPendiente.cantidadAlistada || 0;
+            cantidadPendiente = cantidadTotal - cantidadAlistada;
+          } else {
+            // Para pedidos POS usar cantidadLista + cantidadEntregada
+            const cantidadLista = itemPendiente.cantidadLista || 0;
+            const cantidadEntregada = itemPendiente.cantidadEntregada || 0;
+            cantidadPendiente = cantidadTotal - cantidadLista - cantidadEntregada;
+          }
 
           // Asignar basándose en lo que REALMENTE falta
           const cantidadAAsignar = Math.min(cantidadPendiente, cantidadRestante);

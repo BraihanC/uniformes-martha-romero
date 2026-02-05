@@ -39,6 +39,8 @@ const Devoluciones = () => {
   // Estados de búsqueda
   const [numeroFactura, setNumeroFactura] = useState('');
   const [facturaEncontrada, setFacturaEncontrada] = useState(null);
+  const [facturasEncontradas, setFacturasEncontradas] = useState([]); // Para manejar duplicados
+  const [showSeleccionFactura, setShowSeleccionFactura] = useState(false);
   const [buscando, setBuscando] = useState(false);
 
   // Estados de selección
@@ -155,12 +157,24 @@ const Devoluciones = () => {
       if (snapshot.empty) {
         alert('No se encontró una factura con ese número');
         setFacturaEncontrada(null);
+        setFacturasEncontradas([]);
+      } else if (snapshot.size > 1) {
+        // DUPLICADOS ENCONTRADOS - Mostrar modal de selección
+        const facturas = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setFacturasEncontradas(facturas);
+        setShowSeleccionFactura(true);
+        setFacturaEncontrada(null);
       } else {
+        // Solo una factura - seleccionarla directamente
         const factura = {
           id: snapshot.docs[0].id,
           ...snapshot.docs[0].data()
         };
         setFacturaEncontrada(factura);
+        setFacturasEncontradas([]);
         setItemsSeleccionados([]);
         setRazones({});
         setCantidadesDevueltas({});
@@ -171,6 +185,16 @@ const Devoluciones = () => {
     } finally {
       setBuscando(false);
     }
+  };
+
+  // Seleccionar factura específica cuando hay duplicados
+  const handleSeleccionarFactura = (factura) => {
+    setFacturaEncontrada(factura);
+    setShowSeleccionFactura(false);
+    setFacturasEncontradas([]);
+    setItemsSeleccionados([]);
+    setRazones({});
+    setCantidadesDevueltas({});
   };
 
   // Manejar selección de items
@@ -1132,6 +1156,128 @@ const Devoluciones = () => {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DE SELECCIÓN DE FACTURA (cuando hay duplicados) */}
+        {showSeleccionFactura && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-gray-200">
+                <h2 className="text-2xl font-bold text-red-600 flex items-center gap-2">
+                  <AlertTriangle size={28} />
+                  Facturas Duplicadas Encontradas
+                </h2>
+                <p className="text-gray-600 mt-2">
+                  Se encontraron {facturasEncontradas.length} facturas con el número #{numeroFactura}.
+                  Selecciona la factura correcta que deseas procesar.
+                </p>
+              </div>
+
+              <div className="p-6 space-y-4">
+                {facturasEncontradas.map((factura, index) => {
+                  const tipo = factura.tipo === 'pedido' ? 'PEDIDO' : 'POS';
+                  const tipoColor = factura.tipo === 'pedido' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800';
+                  const fecha = factura.createdAt?.toDate ?
+                    factura.createdAt.toDate().toLocaleDateString('es-CO', {
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    }) : 'Fecha no disponible';
+
+                  return (
+                    <div
+                      key={factura.id}
+                      onClick={() => handleSeleccionarFactura(factura)}
+                      className="border-2 border-gray-200 rounded-lg p-4 hover:border-pink-500 hover:bg-pink-50 cursor-pointer transition-all"
+                    >
+                      <div className="flex justify-between items-start mb-3">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${tipoColor}`}>
+                              {tipo}
+                            </span>
+                            <span className="text-lg font-bold text-gray-900">
+                              Factura #{String(factura.numeroFactura).padStart(4, '0')}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                            <div>
+                              <span className="text-gray-600">Cliente:</span>{' '}
+                              <span className="font-medium text-gray-900">{factura.clienteNombre}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Documento:</span>{' '}
+                              <span className="font-medium text-gray-900">{factura.clienteDocumento || 'N/A'}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Fecha:</span>{' '}
+                              <span className="font-medium text-gray-900">{fecha}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Total:</span>{' '}
+                              <span className="font-bold text-green-600">
+                                ${factura.totalPagado?.toLocaleString('es-CO') || '0'}
+                              </span>
+                            </div>
+                            {factura.tipo === 'pedido' && factura.numeroPedido && (
+                              <div>
+                                <span className="text-gray-600">Pedido:</span>{' '}
+                                <span className="font-medium text-gray-900">
+                                  #{String(factura.numeroPedido).padStart(4, '0')}
+                                </span>
+                              </div>
+                            )}
+                            <div>
+                              <span className="text-gray-600">Productos:</span>{' '}
+                              <span className="font-medium text-gray-900">
+                                {factura.items?.length || 0} items
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <button className="ml-4 px-4 py-2 bg-pink-600 text-white rounded-lg hover:bg-pink-700 transition-colors">
+                          Seleccionar
+                        </button>
+                      </div>
+
+                      {/* Mostrar productos para ayudar a identificar */}
+                      <div className="mt-3 pt-3 border-t border-gray-200">
+                        <p className="text-xs text-gray-600 mb-2">Productos en esta factura:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {factura.items?.slice(0, 5).map((item, idx) => (
+                            <span key={idx} className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded">
+                              {item.nombre} ({item.cantidad})
+                            </span>
+                          ))}
+                          {factura.items?.length > 5 && (
+                            <span className="text-xs text-gray-500">
+                              +{factura.items.length - 5} más
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="p-6 border-t border-gray-200 bg-gray-50">
+                <button
+                  onClick={() => {
+                    setShowSeleccionFactura(false);
+                    setFacturasEncontradas([]);
+                  }}
+                  className="w-full px-4 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-medium"
+                >
+                  Cancelar
+                </button>
+              </div>
             </div>
           </div>
         )}

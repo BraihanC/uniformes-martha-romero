@@ -1117,7 +1117,7 @@ const Apartados = () => {
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
           tipo: 'egreso',
-          monto: diferenciaExceso,
+          monto: -diferenciaExceso, // Negativo para que se reste en el cierre de caja
           metodoPago: 'Ajuste',
           apartadoId: selectedApartado.id,
           numeroApartado: selectedApartado.numeroApartado,
@@ -1281,7 +1281,7 @@ const Apartados = () => {
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
           tipo: 'egreso',
-          monto: diferenciaExceso,
+          monto: -diferenciaExceso, // Negativo para que se reste en el cierre de caja
           metodoPago: 'Ajuste',
           apartadoId: selectedApartado.id,
           numeroApartado: selectedApartado.numeroApartado,
@@ -1677,11 +1677,12 @@ const Apartados = () => {
       }
 
       // 5. (NUEVO) Registrar Transacción del Pago Final
-      if (montoPagadoHoy > 0) {
+      // IMPORTANTE: Registrar solo el saldo pendiente, no el monto total pagado (para evitar descuadres por cambio)
+      if (saldoPendiente > 0) {
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
           tipo: 'abono_apartado', // Se registra como abono
-          monto: montoPagadoHoy,
+          monto: saldoPendiente, // Solo el saldo pendiente, no el monto pagado (evita descuadres por cambio)
           metodoPago: metodoPagoFactura,
           apartadoId: selectedApartado.id,
           ventaId: ventaRef.id, // Referencia a la factura que genera

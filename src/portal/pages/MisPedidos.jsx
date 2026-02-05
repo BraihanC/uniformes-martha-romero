@@ -214,12 +214,31 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
         if (idx === productoConfirmar.index) {
           const nuevaCantidadRecibida = (p.cantidadRecibida || 0) + cantidad;
           const cantidadEnviadaProducto = p.cantidadEnviada || 0;
+          const discrepanciaActual = cantidad < (cantidadEnviadaProducto - (p.cantidadRecibida || 0));
+
+          // Crear registro de historial para esta recepción
+          const registroRecepcion = {
+            fecha: new Date().toISOString(),
+            cantidadReportada: cantidad,
+            cantidadAcumulada: nuevaCantidadRecibida,
+            cantidadEnviadaAlMomento: cantidadEnviadaProducto,
+            observaciones: observaciones.trim() || null,
+            discrepancia: discrepanciaActual,
+            clienteNombre: clienteCorporativo.nombre,
+            clienteId: clienteCorporativo.id
+          };
+
+          // Agregar al historial existente o crear nuevo
+          const historialExistente = p.historialRecepciones || [];
+
           return {
             ...p,
             cantidadRecibida: nuevaCantidadRecibida,
             estadoProduccion: nuevaCantidadRecibida >= cantidadEnviadaProducto ? 'recibido' : p.estadoProduccion,
             fechaRecepcion: new Date(),
-            observacionesRecepcion: observaciones.trim() || null
+            observacionesRecepcion: observaciones.trim() || null,
+            // Nuevo campo: historial completo de recepciones
+            historialRecepciones: [...historialExistente, registroRecepcion]
           };
         }
         return p;
@@ -237,24 +256,53 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
         updatedAt: serverTimestamp()
       });
 
-      // Crear notificación para admin si hay discrepancia
-      const discrepancia = cantidad < cantidadEnviada;
+      // Crear notificación para admin si hay discrepancia o hay observaciones
+      const discrepancia = cantidad < cantidadPendiente;
+      const fechaHoraActual = new Date();
+      const fechaFormateada = fechaHoraActual.toLocaleDateString('es-CO', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+      const horaFormateada = fechaHoraActual.toLocaleTimeString('es-CO', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+
       if (discrepancia || observaciones.trim()) {
+        const cantidadYaRecibidaAntes = productoConfirmar.cantidadRecibida || 0;
+        const nuevaCantidadTotal = cantidadYaRecibidaAntes + cantidad;
+
         await addDoc(collection(db, 'notificaciones_admin'), {
           tipo: 'recepcion_producto',
-          titulo: discrepancia ? 'Discrepancia en Recepción' : 'Producto Recibido con Observaciones',
-          mensaje: `${clienteCorporativo.nombre} reporta recepción de ${productoConfirmar.descripcion}: ${cantidad}/${cantidadEnviada} unidades. ${observaciones.trim() ? 'Observaciones: ' + observaciones : ''}`,
+          titulo: discrepancia ? '⚠️ Discrepancia en Recepción' : '📝 Producto Recibido con Observaciones',
+          mensaje: `${clienteCorporativo.nombre} reporta recepción de ${productoConfirmar.descripcion} (Talla: ${productoConfirmar.talla}): ${cantidad}/${cantidadEnviada - cantidadYaRecibidaAntes} unidades pendientes. Total recibido: ${nuevaCantidadTotal}/${cantidadEnviada}. ${observaciones.trim() ? '\n\nObservaciones: ' + observaciones.trim() : ''}`,
           leida: false,
           pedidoId: productoConfirmar.pedidoId,
+          numeroPedido: pedido.numeroPedido,
           clienteId: clienteCorporativo.id,
-          // Datos estructurados para facilitar correcciones
+          clienteNombre: clienteCorporativo.nombre,
+          // Datos estructurados completos del producto
           productoDescripcion: productoConfirmar.descripcion,
           productoTalla: productoConfirmar.talla,
           productoCodigo: productoConfirmar.codigo,
           productoIndex: productoConfirmar.index,
-          cantidadRecibidaReportada: cantidad,
+          // Cantidades detalladas
+          cantidadReportadaAhora: cantidad,
+          cantidadRecibidaAnterior: cantidadYaRecibidaAntes,
+          cantidadRecibidaTotal: nuevaCantidadTotal,
           cantidadEnviada: cantidadEnviada,
-          observaciones: observaciones.trim(),
+          cantidadPedidaOriginal: productoConfirmar.cantidad,
+          // Observaciones y discrepancia
+          observaciones: observaciones.trim() || null,
+          hayDiscrepancia: discrepancia,
+          unidadesFaltantes: discrepancia ? (cantidadEnviada - cantidadYaRecibidaAntes) - cantidad : 0,
+          // Fecha y hora detalladas
+          fechaRecepcion: fechaFormateada,
+          horaRecepcion: horaFormateada,
+          fechaRecepcionISO: fechaHoraActual.toISOString(),
           createdAt: serverTimestamp()
         });
       }
@@ -1220,8 +1268,50 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                               </div>
                             )}
 
-                            {/* Observaciones de recepción - Siempre visible si existen */}
-                            {producto.observacionesRecepcion && (
+                            {/* Historial completo de recepciones */}
+                            {producto.historialRecepciones && producto.historialRecepciones.length > 0 && (
+                              <div className="mb-3 p-3 rounded-lg border bg-gray-50 border-gray-200">
+                                <p className="font-semibold mb-2 text-gray-700 text-xs flex items-center gap-1">
+                                  📋 Mi Historial de Recepciones ({producto.historialRecepciones.length})
+                                </p>
+                                <div className="space-y-2 max-h-40 overflow-y-auto">
+                                  {producto.historialRecepciones.map((registro, idx) => {
+                                    const fechaRegistro = new Date(registro.fecha);
+                                    return (
+                                      <div
+                                        key={idx}
+                                        className={`p-2 rounded border text-xs ${
+                                          registro.discrepancia
+                                            ? 'bg-yellow-50 border-yellow-200'
+                                            : 'bg-green-50 border-green-200'
+                                        }`}
+                                      >
+                                        <div className="flex justify-between items-start mb-1">
+                                          <span className="font-medium">
+                                            {registro.discrepancia ? '⚠️' : '✅'} Recepción #{idx + 1}
+                                          </span>
+                                          <span className="text-gray-500">
+                                            {fechaRegistro.toLocaleDateString('es-CO')} {fechaRegistro.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+                                          </span>
+                                        </div>
+                                        <p className="text-gray-700">
+                                          <strong>Recibí:</strong> {registro.cantidadReportada} unidades
+                                          <span className="text-gray-500 ml-1">(Total: {registro.cantidadAcumulada}/{registro.cantidadEnviadaAlMomento})</span>
+                                        </p>
+                                        {registro.observaciones && (
+                                          <p className={`mt-1 p-1 rounded ${registro.discrepancia ? 'bg-yellow-100' : 'bg-blue-100'}`}>
+                                            <strong>Mis observaciones:</strong> {registro.observaciones}
+                                          </p>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Observaciones de recepción (compatibilidad con datos anteriores sin historial) */}
+                            {!producto.historialRecepciones && producto.observacionesRecepcion && (
                               <div className={`mb-3 p-3 rounded-lg border flex items-start gap-2 ${
                                 hayDiscrepancia
                                   ? 'bg-yellow-50 border-yellow-200'
@@ -1240,6 +1330,11 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                                   {hayDiscrepancia && (
                                     <p className="mt-2 font-medium text-yellow-700">
                                       Recibidas: {cantidadRecibida} de {cantidadEnviada} unidades enviadas
+                                    </p>
+                                  )}
+                                  {producto.fechaRecepcion && (
+                                    <p className="text-gray-500 mt-1">
+                                      Fecha: {(producto.fechaRecepcion.toDate ? producto.fechaRecepcion.toDate() : new Date(producto.fechaRecepcion)).toLocaleString('es-CO')}
                                     </p>
                                   )}
                                 </div>
