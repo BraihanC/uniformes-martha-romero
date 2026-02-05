@@ -427,12 +427,20 @@ const EntradaSatelite = () => {
           const producto = updatedProductos[asig.itemIndex];
 
           // Actualizar cantidad alistada y estado de producción
-          updatedProductos[asig.itemIndex] = {
+          const productoActualizado = {
             ...producto,
             cantidadAlistada: (producto.cantidadAlistada || 0) + asig.cantidadAsignada,
-            estadoProduccion: asig.esCompleto ? 'alistado' : 'en_produccion',
-            fechaAlistado: asig.esCompleto ? new Date() : producto.fechaAlistado
+            estadoProduccion: asig.esCompleto ? 'alistado' : 'en_produccion'
           };
+
+          // Solo agregar fechaAlistado si está completo o ya tenía una fecha
+          if (asig.esCompleto) {
+            productoActualizado.fechaAlistado = new Date();
+          } else if (producto.fechaAlistado) {
+            productoActualizado.fechaAlistado = producto.fechaAlistado;
+          }
+
+          updatedProductos[asig.itemIndex] = productoActualizado;
 
           batch.update(pedidoRef, {
             productos: updatedProductos,
