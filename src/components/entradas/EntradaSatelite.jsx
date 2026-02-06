@@ -483,36 +483,37 @@ const EntradaSatelite = () => {
       }
 
       // 4.4. Crear registro de auditoría en stockEntries
+      // IMPORTANTE: Firestore no acepta valores undefined, usar fallbacks en todos los campos
       const entryRef = doc(collection(db, 'stockEntries'));
       batch.set(entryRef, {
         tipoEntrada: 'satelite',
-        productId: selectedProduct.id,
-        referencia: selectedProduct.referencia,
-        nombre: selectedProduct.nombre,
+        productId: selectedProduct.id || '',
+        referencia: selectedProduct.referencia || '',
+        nombre: selectedProduct.nombre || '',
         talla: selectedProduct.talla || 'Única',
-        cantidad: numCantidad,
-        cantidadAsignada: cantidadAsignada,
-        cantidadDisponible: cantidadDisponible,
+        cantidad: numCantidad || 0,
+        cantidadAsignada: cantidadAsignada || 0,
+        cantidadDisponible: cantidadDisponible || 0,
         asignaciones: asignaciones.map(a => ({
-          pedidoId: a.pedidoId,
-          numeroPedido: a.numeroPedido,
-          clienteNombre: a.clienteNombre,
-          cantidad: a.cantidadAsignada,
-          tipo: a.tipo, // 'pedido' o 'pedido_b2b'
-          esCompleto: a.esCompleto
+          pedidoId: a.pedidoId || '',
+          numeroPedido: a.numeroPedido || 0,
+          clienteNombre: a.clienteNombre || '',
+          cantidad: a.cantidadAsignada || 0,
+          tipo: a.tipo || 'pedido',
+          esCompleto: a.esCompleto || false
         })),
-        costoUnitario: costoSatelite,
-        costoTotal: costoSatelite * numCantidad,
-        sateliteId: sateliteId,
-        userId: currentUser.uid,
+        costoUnitario: costoSatelite || 0,
+        costoTotal: (costoSatelite || 0) * (numCantidad || 0),
+        sateliteId: sateliteId || '',
+        userId: currentUser.uid || '',
         notas: notas.trim() || '',
         pagado: false,
-        fechaEntrada: serverTimestamp(), // Fecha de entrada
+        fechaEntrada: serverTimestamp(),
         createdAt: serverTimestamp()
       });
 
       // 4.4. Registrar transacción de egreso (costo de entrada)
-      const costoTotal = costoSatelite * numCantidad;
+      const costoTotal = (costoSatelite || 0) * (numCantidad || 0);
       if (costoTotal > 0) {
         const sateliteSeleccionado = satelites.find(s => s.id === sateliteId);
         const transactionRef = doc(collection(db, 'transactions'));
@@ -520,15 +521,15 @@ const EntradaSatelite = () => {
           tipo: 'entrada_satelite',
           monto: -costoTotal,
           metodoPago: 'Pendiente',
-          entradaId: entryRef.id,
-          descripcion: `Entrada de satélite: ${selectedProduct.nombre} (${numCantidad} uds) - ${sateliteSeleccionado?.nombre || 'Satélite'}`,
-          productId: selectedProduct.id,
-          productoNombre: selectedProduct.nombre,
-          sateliteId: sateliteId,
+          entradaId: entryRef.id || '',
+          descripcion: `Entrada de satélite: ${selectedProduct.nombre || ''} (${numCantidad} uds) - ${sateliteSeleccionado?.nombre || 'Satélite'}`,
+          productId: selectedProduct.id || '',
+          productoNombre: selectedProduct.nombre || '',
+          sateliteId: sateliteId || '',
           sateliteNombre: sateliteSeleccionado?.nombre || '',
-          cantidad: numCantidad,
-          costoUnitario: costoSatelite,
-          userId: currentUser.uid,
+          cantidad: numCantidad || 0,
+          costoUnitario: costoSatelite || 0,
+          userId: currentUser.uid || '',
           fecha: serverTimestamp(),
           createdAt: serverTimestamp()
         });
@@ -539,17 +540,17 @@ const EntradaSatelite = () => {
         const sateliteSeleccionado = satelites.find(s => s.id === sateliteId);
         const reparacionRef = doc(collection(db, 'productosReparacion'));
         batch.set(reparacionRef, {
-          productId: selectedProduct.id,
-          referencia: selectedProduct.referencia,
-          nombre: selectedProduct.nombre,
+          productId: selectedProduct.id || '',
+          referencia: selectedProduct.referencia || '',
+          nombre: selectedProduct.nombre || '',
           talla: selectedProduct.talla || 'Única',
           cantidad: numCantidadDefectuosa,
-          origen: 'satelite', // Para distinguir de devoluciones de clientes
-          sateliteId: sateliteId,
+          origen: 'satelite',
+          sateliteId: sateliteId || '',
           sateliteNombre: sateliteSeleccionado?.nombre || '',
           estado: 'Pendiente',
           fechaIngreso: serverTimestamp(),
-          userId: currentUser.uid,
+          userId: currentUser.uid || '',
           notas: notas.trim() ? `Defectos de fábrica - ${notas.trim()}` : 'Defectos de fábrica reportados en entrada',
           createdAt: serverTimestamp()
         });

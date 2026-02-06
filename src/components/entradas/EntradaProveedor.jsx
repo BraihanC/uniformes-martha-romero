@@ -282,7 +282,10 @@ const EntradaProveedor = () => {
             tipo: pedido.tipo, // 'pedido' o 'pedido_b2b'
             numeroPedido: pedido.numeroPedido,
             clienteNombre: pedido.clienteNombre,
-            itemIndex: itemPendiente.index,
+            // Identificadores únicos para buscar el item (más seguro que índice)
+            referencia: itemPendiente.referencia || itemPendiente.codigo,
+            talla: itemPendiente.talla,
+            productoId: itemPendiente.productoId, // Para B2B
             cantidadAsignada: cantidadAAsignar,
             cantidadNecesaria: cantidadPendiente,
             esCompleto: cantidadAAsignar === cantidadPendiente
@@ -361,6 +364,8 @@ const EntradaProveedor = () => {
       batch.update(productRef, productUpdate);
 
       // 4.3. Actualizar pedidos con items asignados
+      // NOTA: Usamos identificadores únicos (referencia+talla) en lugar de índices
+      // para evitar race conditions si el pedido fue modificado entre la lectura inicial y ahora
       for (const asig of asignaciones) {
         if (asig.tipo === 'pedido') {
           // PEDIDO POS
@@ -369,7 +374,21 @@ const EntradaProveedor = () => {
           const pedidoData = pedidoSnap.data();
 
           const updatedItems = [...pedidoData.items];
-          const item = updatedItems[asig.itemIndex];
+
+          // Buscar item por identificadores únicos (más seguro que por índice)
+          const itemIndex = updatedItems.findIndex(i =>
+            !i.anulado &&
+            i.referencia === asig.referencia &&
+            i.talla === asig.talla &&
+            (i.estadoItem === 'En Producción' || i.estadoItem === 'Parcialmente Listo')
+          );
+
+          if (itemIndex === -1) {
+            console.warn(`Item no encontrado en pedido ${asig.numeroPedido}: ${asig.referencia} ${asig.talla}`);
+            continue; // Saltar si el item ya no existe o fue modificado
+          }
+
+          const item = updatedItems[itemIndex];
 
           // Calcular nueva cantidad lista y estado
           const cantidadTotal = item.cantidad;
@@ -389,7 +408,7 @@ const EntradaProveedor = () => {
             nuevoEstado = 'En Producción';
           }
 
-          updatedItems[asig.itemIndex] = {
+          updatedItems[itemIndex] = {
             ...item,
             cantidadLista: nuevaCantidadLista,
             estadoItem: nuevoEstado
@@ -407,15 +426,37 @@ const EntradaProveedor = () => {
           const pedidoData = pedidoSnap.data();
 
           const updatedProductos = [...pedidoData.productos];
-          const producto = updatedProductos[asig.itemIndex];
+
+          // Buscar producto por identificadores únicos (más seguro que por índice)
+          const productoIndex = updatedProductos.findIndex(p =>
+            !p.anulado &&
+            (p.productoId === asig.productoId || p.codigo === asig.referencia) &&
+            p.talla === asig.talla &&
+            (p.estadoProduccion === 'pendiente' || p.estadoProduccion === 'en_produccion')
+          );
+
+          if (productoIndex === -1) {
+            console.warn(`Producto no encontrado en pedido B2B ${asig.numeroPedido}: ${asig.referencia} ${asig.talla}`);
+            continue; // Saltar si el producto ya no existe o fue modificado
+          }
+
+          const producto = updatedProductos[productoIndex];
 
           // Actualizar cantidad alistada y estado de producción
-          updatedProductos[asig.itemIndex] = {
+          const productoActualizado = {
             ...producto,
             cantidadAlistada: (producto.cantidadAlistada || 0) + asig.cantidadAsignada,
-            estadoProduccion: asig.esCompleto ? 'alistado' : 'en_produccion',
-            fechaAlistado: asig.esCompleto ? new Date() : producto.fechaAlistado
+            estadoProduccion: asig.esCompleto ? 'alistado' : 'en_produccion'
           };
+
+          // Solo agregar fechaAlistado si está completo o ya tenía una fecha
+          if (asig.esCompleto) {
+            productoActualizado.fechaAlistado = new Date();
+          } else if (producto.fechaAlistado) {
+            productoActualizado.fechaAlistado = producto.fechaAlistado;
+          }
+
+          updatedProductos[productoIndex] = productoActualizado;
 
           batch.update(pedidoRef, {
             productos: updatedProductos,
