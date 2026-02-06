@@ -291,7 +291,10 @@ const EntradaSatelite = () => {
             tipo: pedido.tipo, // 'pedido' o 'pedido_b2b'
             numeroPedido: pedido.numeroPedido,
             clienteNombre: pedido.clienteNombre,
-            itemIndex: itemPendiente.index,
+            // Identificadores únicos para buscar el item (más seguro que índice)
+            referencia: itemPendiente.referencia || itemPendiente.codigo,
+            talla: itemPendiente.talla,
+            productoId: itemPendiente.productoId, // Para B2B
             cantidadAsignada: cantidadAAsignar,
             cantidadNecesaria: cantidadPendiente, // La cantidad que falta, no la total
             esCompleto: cantidadAAsignar === cantidadPendiente // Completo si cubrimos lo pendiente
@@ -375,6 +378,8 @@ const EntradaSatelite = () => {
       batch.update(productRef, productUpdate);
 
       // 4.3. Actualizar pedidos con items asignados
+      // NOTA: Usamos identificadores únicos (referencia+talla) en lugar de índices
+      // para evitar race conditions si el pedido fue modificado entre la lectura inicial y ahora
       for (const asig of asignaciones) {
         if (asig.tipo === 'pedido') {
           // PEDIDO REGULAR (POS)
@@ -383,10 +388,24 @@ const EntradaSatelite = () => {
           const pedidoData = pedidoSnap.data();
 
           const updatedItems = [...pedidoData.items];
-          const item = updatedItems[asig.itemIndex];
+
+          // Buscar item por identificadores únicos (más seguro que por índice)
+          const itemIndex = updatedItems.findIndex(i =>
+            !i.anulado &&
+            i.referencia === asig.referencia &&
+            i.talla === asig.talla &&
+            (i.estadoItem === 'En Producción' || i.estadoItem === 'Parcialmente Listo')
+          );
+
+          if (itemIndex === -1) {
+            console.warn(`Item no encontrado en pedido ${asig.numeroPedido}: ${asig.referencia} ${asig.talla}`);
+            continue; // Saltar si el item ya no existe o fue modificado
+          }
+
+          const item = updatedItems[itemIndex];
 
           // Actualizar estado del item según la cantidad asignada
-          const cantidadAsignada = asig.cantidadAsignada;  // CORREGIDO: era asig.cantidad (undefined)
+          const cantidadAsignada = asig.cantidadAsignada;
           const cantidadTotal = item.cantidad;
           const cantidadListaActual = item.cantidadLista || 0;
           const cantidadEntregada = item.cantidadEntregada || 0;
@@ -406,7 +425,7 @@ const EntradaSatelite = () => {
             nuevoEstado = 'En Producción'; // Aún no hay nada listo
           }
 
-          updatedItems[asig.itemIndex] = {
+          updatedItems[itemIndex] = {
             ...item,
             cantidadLista: nuevaCantidadLista,
             estadoItem: nuevoEstado
@@ -424,7 +443,21 @@ const EntradaSatelite = () => {
           const pedidoData = pedidoSnap.data();
 
           const updatedProductos = [...pedidoData.productos];
-          const producto = updatedProductos[asig.itemIndex];
+
+          // Buscar producto por identificadores únicos (más seguro que por índice)
+          const productoIndex = updatedProductos.findIndex(p =>
+            !p.anulado &&
+            (p.productoId === asig.productoId || p.codigo === asig.referencia) &&
+            p.talla === asig.talla &&
+            (p.estadoProduccion === 'pendiente' || p.estadoProduccion === 'en_produccion')
+          );
+
+          if (productoIndex === -1) {
+            console.warn(`Producto no encontrado en pedido B2B ${asig.numeroPedido}: ${asig.referencia} ${asig.talla}`);
+            continue; // Saltar si el producto ya no existe o fue modificado
+          }
+
+          const producto = updatedProductos[productoIndex];
 
           // Actualizar cantidad alistada y estado de producción
           const productoActualizado = {
@@ -440,7 +473,7 @@ const EntradaSatelite = () => {
             productoActualizado.fechaAlistado = producto.fechaAlistado;
           }
 
-          updatedProductos[asig.itemIndex] = productoActualizado;
+          updatedProductos[productoIndex] = productoActualizado;
 
           batch.update(pedidoRef, {
             productos: updatedProductos,
@@ -466,7 +499,6 @@ const EntradaSatelite = () => {
           clienteNombre: a.clienteNombre,
           cantidad: a.cantidadAsignada,
           tipo: a.tipo, // 'pedido' o 'pedido_b2b'
-          itemIndex: a.itemIndex,
           esCompleto: a.esCompleto
         })),
         costoUnitario: costoSatelite,
