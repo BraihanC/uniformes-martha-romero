@@ -275,7 +275,7 @@ const Devoluciones = () => {
     return itemsSeleccionados.reduce((total, index) => {
       const item = facturaEncontrada.items[index];
       const cantidadDevuelta = cantidadesDevueltas[index] || item.cantidad;
-      return total + (cantidadDevuelta * item.precioUnitario);
+      return total + (cantidadDevuelta * (item.precioUnitario || 0));
     }, 0);
   };
 
@@ -395,8 +395,8 @@ const Devoluciones = () => {
           referencia: item.referencia || item.product?.referencia,
           talla: item.talla,
           cantidad: item.cantidad,
-          precioUnitario: item.precioUnitario,
-          subtotal: item.cantidad * item.precioUnitario,
+          precioUnitario: item.precioUnitario || 0,
+          subtotal: item.cantidad * (item.precioUnitario || 0),
           razon: item.razon
         })),
         notas: notasDevolucion,
@@ -517,12 +517,12 @@ const Devoluciones = () => {
     return itemsSeleccionados.reduce((total, index) => {
       const item = facturaEncontrada.items[index];
       const cantidadDevuelta = cantidadesDevueltas[index] || item.cantidad;
-      return total + (cantidadDevuelta * item.precioUnitario);
+      return total + (cantidadDevuelta * (item.precioUnitario || 0));
     }, 0);
   };
 
   const calcularValorNuevo = () => {
-    return productosNuevos.reduce((total, p) => total + (p.cantidad * p.precio), 0);
+    return productosNuevos.reduce((total, p) => total + ((p.cantidad || 0) * (p.precio || 0)), 0);
   };
 
   const calcularDiferencia = () => {
@@ -660,9 +660,9 @@ const Devoluciones = () => {
           nombre: p.nombre,
           referencia: p.referencia,
           talla: p.tallaSeleccionada,
-          cantidad: p.cantidad,
-          precio: p.precio,
-          subtotal: p.cantidad * p.precio
+          cantidad: p.cantidad || 0,
+          precio: p.precio || 0,
+          subtotal: (p.cantidad || 0) * (p.precio || 0)
         })),
         valorDevuelto: calcularValorDevuelto(),
         valorNuevo: calcularValorNuevo(),
@@ -712,17 +712,17 @@ const Devoluciones = () => {
             referencia: item.referencia || item.product?.referencia,
             talla: item.talla,
             cantidad: item.cantidad,
-            precioUnitario: item.precioUnitario,
-            subtotal: item.cantidad * item.precioUnitario,
+            precioUnitario: item.precioUnitario || 0,
+            subtotal: item.cantidad * (item.precioUnitario || 0),
             razon: item.razon
           })),
           itemsNuevos: productosNuevos.map(p => ({
             nombre: p.nombre,
             referencia: p.referencia,
             talla: p.tallaSeleccionada,
-            cantidad: p.cantidad,
-            precio: p.precio,
-            subtotal: p.cantidad * p.precio
+            cantidad: p.cantidad || 0,
+            precio: p.precio || 0,
+            subtotal: (p.cantidad || 0) * (p.precio || 0)
           })),
           valorDevuelto: calcularValorDevuelto(),
           valorNuevo: calcularValorNuevo(),

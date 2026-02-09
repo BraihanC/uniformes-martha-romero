@@ -2520,16 +2520,18 @@ const Pedidos = () => {
         });
       });
 
-      // 4. Crear registro de egreso si había abonos (para auditoría)
+      // 4. Crear registro de egreso si había abonos (devolver dinero al cliente)
       if (totalAbonado > 0) {
         const egresoRef = doc(collection(db, 'transactions'));
         batch.set(egresoRef, {
           tipo: 'egreso',
-          monto: totalAbonado,
-          metodoPago: 'Devolución',
+          monto: -totalAbonado, // NEGATIVO porque es dinero que sale de caja
+          metodoPago: 'Efectivo',
+          categoria: 'Devolución',
           pedidoId: selectedPedido.id,
           numeroPedido: selectedPedido.numeroPedido,
           descripcion: `Devolución por anulación Pedido #${selectedPedido.numeroPedido}`,
+          concepto: `Devolución por anulación Pedido #${selectedPedido.numeroPedido}`,
           motivo: motivoAnularPedido,
           clienteId: selectedPedido.clienteId,
           clienteNombre: selectedPedido.clienteNombre,

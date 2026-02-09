@@ -76,6 +76,7 @@ const PedidosB2B = () => {
     }
   };
 
+
   const formatCurrency = (amount) => {
     return new Intl.NumberFormat('es-CO', {
       style: 'currency',
@@ -1126,7 +1127,9 @@ const PedidosB2B = () => {
           estadoProduccion: 'pendiente',
           fechaAlistado: null,
           fechaEnvio: null,
-          fechaRecepcion: null
+          fechaRecepcion: null,
+          historialRecepciones: [],
+          observacionesRecepcion: null
         })),
         total: calcularTotalCarrito(),
         notas: notasPedidoTienda.trim(),

@@ -1154,7 +1154,8 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                     </div>
 
                     <div className="space-y-3">
-                      {pedido.productos?.filter(producto => {
+                      {pedido.productos?.map((producto, originalIndex) => ({ ...producto, _originalIndex: originalIndex }))
+                      .filter(producto => {
                         // Filtro por búsqueda de texto
                         if (filtroProductosPedido.trim()) {
                           const busqueda = filtroProductosPedido.toLowerCase().trim();
@@ -1174,7 +1175,7 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                         }
 
                         return true;
-                      }).map((producto, index) => {
+                      }).map((producto) => {
                         const cantidadPedida = producto.cantidad || 0;
                         const cantidadEnviada = producto.cantidadEnviada || 0;
                         const cantidadRecibida = producto.cantidadRecibida || 0;
@@ -1193,7 +1194,7 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
 
                         return (
                           <div
-                            key={index}
+                            key={producto._originalIndex}
                             className="bg-white p-4 rounded-lg border border-gray-200"
                           >
                             {/* Header del Producto */}
@@ -1269,10 +1270,14 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                             )}
 
                             {/* Historial completo de recepciones */}
-                            {producto.historialRecepciones && producto.historialRecepciones.length > 0 && (
+                            {producto.historialRecepciones && producto.historialRecepciones.length > 0 && (() => {
+                              // Calcular offset: si la primera entrada tiene más acumuladas que reportadas, hubo recepciones previas
+                              const primeraEntrada = producto.historialRecepciones[0];
+                              const recepcionesPrevias = primeraEntrada.cantidadAcumulada - primeraEntrada.cantidadReportada > 0 ? 1 : 0;
+                              return (
                               <div className="mb-3 p-3 rounded-lg border bg-gray-50 border-gray-200">
                                 <p className="font-semibold mb-2 text-gray-700 text-xs flex items-center gap-1">
-                                  📋 Mi Historial de Recepciones ({producto.historialRecepciones.length})
+                                  📋 Mi Historial de Recepciones ({producto.historialRecepciones.length + recepcionesPrevias})
                                 </p>
                                 <div className="space-y-2 max-h-40 overflow-y-auto">
                                   {producto.historialRecepciones.map((registro, idx) => {
@@ -1288,7 +1293,7 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                                       >
                                         <div className="flex justify-between items-start mb-1">
                                           <span className="font-medium">
-                                            {registro.discrepancia ? '⚠️' : '✅'} Recepción #{idx + 1}
+                                            {registro.discrepancia ? '⚠️' : '✅'} Recepción #{idx + 1 + recepcionesPrevias}
                                           </span>
                                           <span className="text-gray-500">
                                             {fechaRegistro.toLocaleDateString('es-CO')} {fechaRegistro.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
@@ -1308,7 +1313,8 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                                   })}
                                 </div>
                               </div>
-                            )}
+                              );
+                            })()}
 
                             {/* Observaciones de recepción (compatibilidad con datos anteriores sin historial) */}
                             {!producto.historialRecepciones && producto.observacionesRecepcion && (
@@ -1367,12 +1373,12 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                             )}
 
                             {/* Botón Confirmar Recepción */}
-                            {cantidadPendienteRecibir > 0 && !hayDiscrepancia && (
+                            {cantidadPendienteRecibir > 0 && (
                               <button
                                 onClick={() => {
                                   setProductoConfirmar({
                                     ...producto,
-                                    index,
+                                    index: producto._originalIndex,
                                     pedidoId: pedido.id
                                   });
                                   setCantidadRecibida(''); // IMPORTANTE: No pre-llenar, el cliente debe escribir manualmente
