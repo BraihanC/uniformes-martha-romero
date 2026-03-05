@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { usePortalAuth } from '../context/PortalAuthContext';
 import { db } from '../../services/firebase';
-import { collection, query, where, getDocs, orderBy, doc, updateDoc, serverTimestamp, addDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, doc, updateDoc, serverTimestamp, addDoc, runTransaction } from 'firebase/firestore';
 import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard, Filter, Download, X, Search, FileSpreadsheet, CheckCircle, AlertTriangle, ShoppingBag, Printer, Loader2 } from 'lucide-react';
 import jsPDF from 'jspdf';
 
@@ -208,52 +208,73 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
     try {
       const pedidoRef = doc(db, 'pedidos_b2b', productoConfirmar.pedidoId);
 
-      // Actualizar el producto específico
-      const pedido = pedidos.find(p => p.id === productoConfirmar.pedidoId);
-      const productosActualizados = pedido.productos.map((p, idx) => {
-        if (idx === productoConfirmar.index) {
-          const nuevaCantidadRecibida = (p.cantidadRecibida || 0) + cantidad;
-          const cantidadEnviadaProducto = p.cantidadEnviada || 0;
-          const discrepanciaActual = cantidad < (cantidadEnviadaProducto - (p.cantidadRecibida || 0));
-
-          // Crear registro de historial para esta recepción
-          const registroRecepcion = {
-            fecha: new Date().toISOString(),
-            cantidadReportada: cantidad,
-            cantidadAcumulada: nuevaCantidadRecibida,
-            cantidadEnviadaAlMomento: cantidadEnviadaProducto,
-            observaciones: observaciones.trim() || null,
-            discrepancia: discrepanciaActual,
-            clienteNombre: clienteCorporativo.nombre,
-            clienteId: clienteCorporativo.id
-          };
-
-          // Agregar al historial existente o crear nuevo
-          const historialExistente = p.historialRecepciones || [];
-
-          return {
-            ...p,
-            cantidadRecibida: nuevaCantidadRecibida,
-            estadoProduccion: nuevaCantidadRecibida >= cantidadEnviadaProducto ? 'recibido' : p.estadoProduccion,
-            fechaRecepcion: new Date(),
-            observacionesRecepcion: observaciones.trim() || null,
-            // Nuevo campo: historial completo de recepciones
-            historialRecepciones: [...historialExistente, registroRecepcion]
-          };
+      // Usar transacción para leer datos frescos y evitar race conditions
+      const resultado = await runTransaction(db, async (transaction) => {
+        const pedidoSnap = await transaction.get(pedidoRef);
+        if (!pedidoSnap.exists()) {
+          throw new Error('El pedido ya no existe');
         }
-        return p;
-      });
 
-      // Verificar si todos los productos fueron recibidos completamente
-      // Compara con cantidadEnviada, no con cantidad pedida
-      const todosRecibidos = productosActualizados.every(p =>
-        (p.cantidadRecibida || 0) >= (p.cantidadEnviada || 0)
-      );
+        const pedidoData = pedidoSnap.data();
+        const productosFrescos = pedidoData.productos || [];
 
-      await updateDoc(pedidoRef, {
-        productos: productosActualizados,
-        estado: todosRecibidos ? 'Completado' : pedido.estado,
-        updatedAt: serverTimestamp()
+        // Validar que el índice sigue siendo válido
+        if (productoConfirmar.index >= productosFrescos.length) {
+          throw new Error('El producto ya no existe en el pedido');
+        }
+
+        // Re-validar con datos frescos
+        const productoFresco = productosFrescos[productoConfirmar.index];
+        const cantidadEnviadaFresca = productoFresco.cantidadEnviada || 0;
+        const cantidadYaRecibidaFresca = productoFresco.cantidadRecibida || 0;
+        const cantidadPendienteFresca = cantidadEnviadaFresca - cantidadYaRecibidaFresca;
+
+        if (cantidad > cantidadPendienteFresca) {
+          throw new Error(`Solo quedan ${cantidadPendienteFresca} unidades pendientes por recibir (datos actualizados).`);
+        }
+
+        const productosActualizados = productosFrescos.map((p, idx) => {
+          if (idx === productoConfirmar.index) {
+            const nuevaCantidadRecibida = (p.cantidadRecibida || 0) + cantidad;
+            const cantidadEnviadaProducto = p.cantidadEnviada || 0;
+            const discrepanciaActual = cantidad < (cantidadEnviadaProducto - (p.cantidadRecibida || 0));
+
+            const registroRecepcion = {
+              fecha: new Date().toISOString(),
+              cantidadReportada: cantidad,
+              cantidadAcumulada: nuevaCantidadRecibida,
+              cantidadEnviadaAlMomento: cantidadEnviadaProducto,
+              observaciones: observaciones.trim() || null,
+              discrepancia: discrepanciaActual,
+              clienteNombre: clienteCorporativo.nombre,
+              clienteId: clienteCorporativo.id
+            };
+
+            const historialExistente = p.historialRecepciones || [];
+
+            return {
+              ...p,
+              cantidadRecibida: nuevaCantidadRecibida,
+              estadoProduccion: nuevaCantidadRecibida >= cantidadEnviadaProducto ? 'recibido' : p.estadoProduccion,
+              fechaRecepcion: new Date(),
+              observacionesRecepcion: observaciones.trim() || null,
+              historialRecepciones: [...historialExistente, registroRecepcion]
+            };
+          }
+          return p;
+        });
+
+        const todosRecibidos = productosActualizados.every(p =>
+          (p.cantidadRecibida || 0) >= (p.cantidadEnviada || 0)
+        );
+
+        transaction.update(pedidoRef, {
+          productos: productosActualizados,
+          estado: todosRecibidos ? 'Completado' : pedidoData.estado,
+          updatedAt: serverTimestamp()
+        });
+
+        return { numeroPedido: pedidoData.numeroPedido };
       });
 
       // Crear notificación para admin si hay discrepancia o hay observaciones
@@ -281,7 +302,7 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
           mensaje: `${clienteCorporativo.nombre} reporta recepción de ${productoConfirmar.descripcion} (Talla: ${productoConfirmar.talla}): ${cantidad}/${cantidadEnviada - cantidadYaRecibidaAntes} unidades pendientes. Total recibido: ${nuevaCantidadTotal}/${cantidadEnviada}. ${observaciones.trim() ? '\n\nObservaciones: ' + observaciones.trim() : ''}`,
           leida: false,
           pedidoId: productoConfirmar.pedidoId,
-          numeroPedido: pedido.numeroPedido,
+          numeroPedido: resultado.numeroPedido,
           clienteId: clienteCorporativo.id,
           clienteNombre: clienteCorporativo.nombre,
           // Datos estructurados completos del producto
@@ -1084,7 +1105,7 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                                 {productosConPendientes.some(p => {
                                   const cantidadEnviada = p.cantidadEnviada || 0;
                                   const cantidadRecibida = p.cantidadRecibida || 0;
-                                  return cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+                                  return cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada && cantidadRecibida < (p.cantidad || 0);
                                 }) && ' Estamos preparando las prendas faltantes para enviártelas a la brevedad.'}
                               </p>
                             </div>
@@ -1186,8 +1207,8 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                         // Pendientes del pedido original: lo que falta para completar lo que pidió
                         const cantidadFaltantePedido = Math.max(0, cantidadPedida - cantidadRecibida);
 
-                        // Hay discrepancia si recibió algo pero no todo lo enviado
-                        const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+                        // Hay discrepancia activa si recibió menos de lo enviado Y aún no tiene todo lo que pidió
+                        const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada && cantidadRecibida < cantidadPedida;
 
                         // El pedido está completo cuando recibió todo lo que pidió originalmente
                         const pedidoCompleto = cantidadRecibida >= cantidadPedida;
@@ -1373,7 +1394,7 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                             )}
 
                             {/* Botón Confirmar Recepción */}
-                            {cantidadPendienteRecibir > 0 && (
+                            {cantidadPendienteRecibir > 0 && !pedidoCompleto && (
                               <button
                                 onClick={() => {
                                   setProductoConfirmar({
@@ -1644,7 +1665,7 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                 </button>
                 <button
                   onClick={handleConfirmarRecepcion}
-                  disabled={confirmandoRecepcion}
+                  disabled={confirmandoRecepcion || !cantidadRecibida || parseInt(cantidadRecibida) <= 0}
                   className="w-full sm:flex-1 px-4 py-2 text-sm md:text-base text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   style={{ backgroundColor: '#D50565' }}
                 >

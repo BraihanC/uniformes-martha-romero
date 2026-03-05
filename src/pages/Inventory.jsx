@@ -356,12 +356,17 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
 
               if (prodIndex !== -1) {
                 const producto = updatedProductos[prodIndex];
-                const nuevaCantidadAlistada = Math.max(0, (producto.cantidadAlistada || 0) - asig.cantidad);
+                const cantidadEnviadaProd = producto.cantidadEnviada || 0;
+                const nuevaAlistadaActual = Math.max(0, (producto.cantidadAlistadaActual ?? Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviadaProd)) - asig.cantidad);
+                const nuevaAlistadaTotal = Math.max(0, (producto.cantidadAlistadaTotal ?? (producto.cantidadAlistada || 0)) - asig.cantidad);
+                const totalPreparado = nuevaAlistadaActual + cantidadEnviadaProd;
 
                 updatedProductos[prodIndex] = {
                   ...producto,
-                  cantidadAlistada: nuevaCantidadAlistada,
-                  estadoProduccion: nuevaCantidadAlistada > 0 ? 'en_produccion' : 'pendiente'
+                  cantidadAlistadaActual: nuevaAlistadaActual,
+                  cantidadAlistadaTotal: nuevaAlistadaTotal,
+                  cantidadAlistada: totalPreparado, // compat
+                  estadoProduccion: totalPreparado >= producto.cantidad ? 'alistado' : (totalPreparado > 0 ? 'en_produccion' : 'pendiente')
                 };
 
                 batch.update(pedidoRef, {
@@ -588,8 +593,8 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
         const estadoGeneral = pedido.estadoGeneral;
         const productos = pedido.productos || [];
 
-        // Saltar pedidos anulados o cancelados
-        if (estadoGeneral === 'Anulado' || estadoGeneral === 'Cancelado') {
+        // Saltar pedidos anulados, cancelados o completados
+        if (estadoGeneral === 'Anulado' || estadoGeneral === 'Cancelado' || estadoGeneral === 'Completado' || estadoGeneral === 'Entregado') {
           return;
         }
 
@@ -600,16 +605,24 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
           // Saltar productos anulados
           if (producto.anulado === true) return;
 
-          // Solo reservar si está alistado o en producción
-          if (producto.estadoProduccion === 'alistado' || producto.estadoProduccion === 'en_produccion') {
-            const cantidadAlistada = producto.cantidadAlistada || 0;
-            const cantidadEntregada = producto.cantidadEntregada || 0;
-            const cantidadReservada = Math.max(0, cantidadAlistada - cantidadEntregada);
+          // Reservar las unidades alistadas del ciclo actual (pendientes de envío)
+          const cantidadEnviadaProd = producto.cantidadEnviada || 0;
+          let alistadaActual = producto.cantidadAlistadaActual !== undefined
+            ? producto.cantidadAlistadaActual
+            : Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviadaProd);
+          // Cap: no más que lo que realmente se puede enviar
+          let maxPosible = Math.max(0, producto.cantidad - cantidadEnviadaProd);
+          const cantRecibida = producto.cantidadRecibida || 0;
+          if (cantRecibida > 0 && cantRecibida < cantidadEnviadaProd && cantRecibida < producto.cantidad) {
+            maxPosible += (cantidadEnviadaProd - cantRecibida);
+          }
+          alistadaActual = Math.min(alistadaActual, maxPosible);
 
+          if (alistadaActual > 0) {
             if (!stockReservadoB2BPorProducto[productoId]) {
               stockReservadoB2BPorProducto[productoId] = 0;
             }
-            stockReservadoB2BPorProducto[productoId] += cantidadReservada;
+            stockReservadoB2BPorProducto[productoId] += alistadaActual;
           }
         });
       });

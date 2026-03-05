@@ -61,12 +61,15 @@ const CrearPedido = () => {
           categoria: item.categoria || '',
           // Control de producción y envío
           cantidadAlistada: 0,
+          cantidadAlistadaActual: 0,
+          cantidadAlistadaTotal: 0,
           cantidadEnviada: 0,
           cantidadRecibida: 0,
           estadoProduccion: 'pendiente',
           fechaAlistado: null,
           fechaEnvio: null,
-          fechaRecepcion: null
+          fechaRecepcion: null,
+          historialEnvios: []
         })),
         total: getTotalPrice(),
         notas: notas.trim(),

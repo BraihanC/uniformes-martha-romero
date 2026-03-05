@@ -84,6 +84,7 @@ const Apartados = () => {
   const [nuevoAbono, setNuevoAbono] = useState('');
   const [notasAbono, setNotasAbono] = useState('');
   const [metodoPagoAbono, setMetodoPagoAbono] = useState('Efectivo');
+  const [referenciaOrigen, setReferenciaOrigen] = useState(''); // Para cruce de saldo
 
   // Estados para corrección de productos en apartados
   const [showCorreccionProductoModal, setShowCorreccionProductoModal] = useState(false);
@@ -192,10 +193,12 @@ const Apartados = () => {
       const q = query(collection(db, 'apartados'), orderBy('createdAt', 'desc'));
       const snapshot = await getDocs(q);
 
-      const apartadosData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      const apartadosData = snapshot.docs
+        .map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }))
+        .filter(a => a.eliminado !== true);
 
       setApartados(apartadosData);
     } catch (error) {
@@ -524,7 +527,8 @@ const Apartados = () => {
         fecha: new Date(),
         monto: abono,
         notas: 'Abono inicial',
-        metodoPago: metodoPago
+        metodoPago: metodoPago,
+        ...(metodoPago === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {})
       }] : [];
 
       // Obtener el siguiente número consecutivo
@@ -596,7 +600,8 @@ const Apartados = () => {
           clienteId: selectedClienteId,
           clienteNombre: cliente.nombreCompleto || cliente.nombre,
           fecha: serverTimestamp(),
-          userId: currentUser.uid
+          userId: currentUser.uid,
+          ...(metodoPago === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {})
         });
       }
 
@@ -626,6 +631,7 @@ const Apartados = () => {
     setPlazoSeleccionado(5);
     setAbonoInicial('0');
     setMetodoPago('Efectivo');
+    setReferenciaOrigen('');
     setNotasApartado('');
   };
 
@@ -671,7 +677,8 @@ const Apartados = () => {
         fecha: new Date().toISOString(), // Usar ISO string para historial
         monto: monto,
         notas: notasAbono || '',
-        metodoPago: metodoPagoAbono
+        metodoPago: metodoPagoAbono,
+        ...(metodoPagoAbono === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {})
       };
 
       const updatedHistorial = [...(selectedApartado.historialAbonos || []), nuevoHistorial];
@@ -691,6 +698,7 @@ const Apartados = () => {
         tipo: 'abono_apartado',
         monto: monto,
         metodoPago: metodoPagoAbono,
+        ...(metodoPagoAbono === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {}),
         apartadoId: selectedApartado.id,
         numeroApartado: selectedApartado.numeroApartado,
         descripcion: `Abono Apartado #${selectedApartado.numeroApartado || selectedApartado.id.substring(0, 5)}`,
@@ -767,6 +775,7 @@ const Apartados = () => {
       setNuevoAbono('');
       setNotasAbono('');
       setMetodoPagoAbono('Efectivo');
+      setReferenciaOrigen('');
       fetchApartados(); // Refrescar lista
       if(estaCompletado) {
         fetchProductos(); // Refrescar stock si se completó
@@ -869,9 +878,83 @@ const Apartados = () => {
         });
       }
 
+      // Anular transacciones de abonos asociadas
+      const transQuery = query(
+        collection(db, 'transactions'),
+        where('apartadoId', '==', selectedApartado.id)
+      );
+      const transSnap = await getDocs(transQuery);
+
+      transSnap.docs.forEach(transDoc => {
+        batch.update(transDoc.ref, {
+          anulada: true,
+          fechaAnulacion: serverTimestamp(),
+          motivoAnulacion: `Apartado #${selectedApartado.numeroApartado} cancelado`
+        });
+      });
+
+      // Crear egresos por devolución de abonos (agrupados por método de pago)
+      const totalAbonado = selectedApartado.totalAbonado || 0;
+      if (totalAbonado > 0) {
+        const historial = selectedApartado.historialAbonos || [];
+
+        // Agrupar por método de pago
+        const abonosPorMetodo = {};
+        historial.forEach(abono => {
+          const metodo = abono.metodoPago || 'Efectivo';
+          if (!abonosPorMetodo[metodo]) abonosPorMetodo[metodo] = 0;
+          abonosPorMetodo[metodo] += abono.monto;
+        });
+
+        const metodos = Object.keys(abonosPorMetodo);
+
+        if (metodos.length === 0) {
+          // Fallback: egreso único con Efectivo
+          const egresoRef = doc(collection(db, 'transactions'));
+          batch.set(egresoRef, {
+            tipo: 'egreso',
+            monto: -totalAbonado,
+            metodoPago: 'Efectivo',
+            categoria: 'Devolución',
+            apartadoId: selectedApartado.id,
+            numeroApartado: selectedApartado.numeroApartado,
+            descripcion: `Devolución por cancelación Apartado #${selectedApartado.numeroApartado}`,
+            concepto: `Devolución por cancelación Apartado #${selectedApartado.numeroApartado}`,
+            clienteId: selectedApartado.clienteId,
+            clienteNombre: selectedApartado.clienteNombre,
+            fecha: serverTimestamp(),
+            userId: currentUser?.uid
+          });
+        } else {
+          // Crear un egreso por cada método de pago
+          for (const metodo of metodos) {
+            const montoMetodo = abonosPorMetodo[metodo];
+            const egresoRef = doc(collection(db, 'transactions'));
+            batch.set(egresoRef, {
+              tipo: 'egreso',
+              monto: -montoMetodo,
+              metodoPago: metodo,
+              categoria: 'Devolución',
+              apartadoId: selectedApartado.id,
+              numeroApartado: selectedApartado.numeroApartado,
+              descripcion: `Devolución por cancelación Apartado #${selectedApartado.numeroApartado} (${metodo})`,
+              concepto: `Devolución por cancelación Apartado #${selectedApartado.numeroApartado}`,
+              clienteId: selectedApartado.clienteId,
+              clienteNombre: selectedApartado.clienteNombre,
+              fecha: serverTimestamp(),
+              userId: currentUser?.uid
+            });
+          }
+        }
+      }
+
       await batch.commit();
 
-      alert('Apartado cancelado exitosamente. El inventario ha sido liberado.');
+      let mensajeCancelacion = 'Apartado cancelado exitosamente. El inventario ha sido liberado.';
+      if (totalAbonado > 0) {
+        mensajeCancelacion += `\n\n⚠️ IMPORTANTE: Debes devolver $${totalAbonado.toLocaleString('es-CO')} al cliente.`;
+      }
+      alert(mensajeCancelacion);
       setShowManageModal(false);
       setSelectedApartado(null);
       fetchApartados();
@@ -885,21 +968,21 @@ const Apartados = () => {
     }
   };
 
-  // Eliminar apartado completamente (incluye transacciones)
+  // Eliminar apartado (soft delete - marca como eliminado sin borrar datos)
   const handleEliminarApartado = async () => {
     if (!selectedApartado) return;
 
     const confirmar = window.confirm(
-      `⚠️ ELIMINAR PERMANENTEMENTE\n\n` +
+      `⚠️ ELIMINAR APARTADO\n\n` +
       `¿Estás seguro de ELIMINAR este apartado?\n\n` +
       `Cliente: ${selectedApartado.clienteNombre}\n` +
       `Total: $${selectedApartado.totalApartado.toLocaleString()}\n` +
       `Abonado: $${selectedApartado.totalAbonado.toLocaleString()}\n\n` +
       `Esta acción:\n` +
-      `• Eliminará el apartado de la base de datos\n` +
-      `• Eliminará todas las transacciones de abonos asociadas\n` +
+      `• Marcará el apartado como eliminado\n` +
+      `• Anulará todas las transacciones de abonos asociadas\n` +
       `• Liberará el inventario reservado\n\n` +
-      `Esta acción NO se puede deshacer.`
+      `El apartado quedará marcado como eliminado.`
     );
 
     if (!confirmar) return;
@@ -908,17 +991,21 @@ const Apartados = () => {
     try {
       const batch = writeBatch(db);
 
-      // 1. Buscar y eliminar transacciones asociadas
+      // 1. Buscar y anular transacciones asociadas (soft delete)
       const transactionsQuery = query(
         collection(db, 'transactions'),
         where('apartadoId', '==', selectedApartado.id)
       );
       const transactionsSnapshot = await getDocs(transactionsQuery);
 
-      let transaccionesEliminadas = 0;
+      let transaccionesAnuladas = 0;
       transactionsSnapshot.docs.forEach(transactionDoc => {
-        batch.delete(transactionDoc.ref);
-        transaccionesEliminadas++;
+        batch.update(transactionDoc.ref, {
+          anulada: true,
+          fechaAnulacion: serverTimestamp(),
+          motivoAnulacion: `Apartado #${selectedApartado.numeroApartado} eliminado`
+        });
+        transaccionesAnuladas++;
       });
 
       // 2. Liberar inventario reservado (si el apartado no estaba completado o cancelado)
@@ -934,17 +1021,75 @@ const Apartados = () => {
         }
       }
 
-      // 3. Eliminar el documento del apartado
+      // 3. Marcar el apartado como eliminado (soft delete)
       const apartadoRef = doc(db, 'apartados', selectedApartado.id);
-      batch.delete(apartadoRef);
+      batch.update(apartadoRef, {
+        eliminado: true,
+        estadoGeneral: 'Eliminado',
+        fechaEliminacion: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      // 4. Crear egresos por devolución si había abonos
+      const totalAbonadoElim = selectedApartado.totalAbonado || 0;
+      if (totalAbonadoElim > 0) {
+        const historial = selectedApartado.historialAbonos || [];
+        const abonosPorMetodo = {};
+        historial.forEach(abono => {
+          const metodo = abono.metodoPago || 'Efectivo';
+          if (!abonosPorMetodo[metodo]) abonosPorMetodo[metodo] = 0;
+          abonosPorMetodo[metodo] += abono.monto;
+        });
+
+        const metodos = Object.keys(abonosPorMetodo);
+
+        if (metodos.length === 0) {
+          const egresoRef = doc(collection(db, 'transactions'));
+          batch.set(egresoRef, {
+            tipo: 'egreso',
+            monto: -totalAbonadoElim,
+            metodoPago: 'Efectivo',
+            categoria: 'Devolución',
+            apartadoId: selectedApartado.id,
+            numeroApartado: selectedApartado.numeroApartado,
+            descripcion: `Devolución por eliminación Apartado #${selectedApartado.numeroApartado}`,
+            concepto: `Devolución por eliminación Apartado #${selectedApartado.numeroApartado}`,
+            clienteId: selectedApartado.clienteId,
+            clienteNombre: selectedApartado.clienteNombre,
+            fecha: serverTimestamp(),
+            userId: currentUser?.uid
+          });
+        } else {
+          for (const metodo of metodos) {
+            const montoMetodo = abonosPorMetodo[metodo];
+            const egresoRef = doc(collection(db, 'transactions'));
+            batch.set(egresoRef, {
+              tipo: 'egreso',
+              monto: -montoMetodo,
+              metodoPago: metodo,
+              categoria: 'Devolución',
+              apartadoId: selectedApartado.id,
+              numeroApartado: selectedApartado.numeroApartado,
+              descripcion: `Devolución por eliminación Apartado #${selectedApartado.numeroApartado} (${metodo})`,
+              concepto: `Devolución por eliminación Apartado #${selectedApartado.numeroApartado}`,
+              clienteId: selectedApartado.clienteId,
+              clienteNombre: selectedApartado.clienteNombre,
+              fecha: serverTimestamp(),
+              userId: currentUser?.uid
+            });
+          }
+        }
+      }
 
       await batch.commit();
 
-      alert(
-        `Apartado eliminado exitosamente.\n\n` +
-        `• ${transaccionesEliminadas} transacción(es) eliminada(s)\n` +
-        `• Inventario liberado`
-      );
+      let mensajeElim = `Apartado eliminado exitosamente.\n\n` +
+        `• ${transaccionesAnuladas} transacción(es) anulada(s)\n` +
+        `• Inventario liberado`;
+      if (totalAbonadoElim > 0) {
+        mensajeElim += `\n\n⚠️ IMPORTANTE: Debes devolver $${totalAbonadoElim.toLocaleString('es-CO')} al cliente.`;
+      }
+      alert(mensajeElim);
 
       setShowManageModal(false);
       setSelectedApartado(null);
@@ -2543,8 +2688,23 @@ const Apartados = () => {
                           <option value="Daviplata">Daviplata</option>
                           <option value="Nu">Nu</option>
                           <option value="Tarjeta">Tarjeta</option>
+                          <option value="Cruce de saldo">Cruce de saldo</option>
                         </select>
                       </div>
+                      {metodoPago === 'Cruce de saldo' && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Factura/Pedido de origen
+                          </label>
+                          <input
+                            type="text"
+                            value={referenciaOrigen}
+                            onChange={(e) => setReferenciaOrigen(e.target.value)}
+                            placeholder="Ej: Factura #152, Pedido #0405"
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                          />
+                        </div>
+                      )}
 
                       <div className="flex justify-between items-center">
                         <span className="text-sm font-medium text-gray-700">Saldo Pendiente:</span>
@@ -2634,6 +2794,7 @@ const Apartados = () => {
                     setNuevoAbono('');
                     setNotasAbono('');
                     setMetodoPagoAbono('Efectivo');
+                    setReferenciaOrigen('');
                   }}
                   className="text-gray-500 hover:text-gray-700 text-2xl"
                 >
@@ -2826,13 +2987,28 @@ const Apartados = () => {
                         onChange={(e) => setMetodoPagoAbono(e.target.value)}
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
                       >
-                        <option>Efectivo</option>
-                        <option>Nequi</option>
-                        <option>Daviplata</option>
-                        <option>Nu</option>
-                        <option>Tarjeta</option>
+                        <option value="Efectivo">Efectivo</option>
+                        <option value="Nequi">Nequi</option>
+                        <option value="Daviplata">Daviplata</option>
+                        <option value="Nu">Nu</option>
+                        <option value="Tarjeta">Tarjeta</option>
+                        <option value="Cruce de saldo">Cruce de saldo</option>
                       </select>
                     </div>
+                    {metodoPagoAbono === 'Cruce de saldo' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Factura/Pedido de origen
+                        </label>
+                        <input
+                          type="text"
+                          value={referenciaOrigen}
+                          onChange={(e) => setReferenciaOrigen(e.target.value)}
+                          placeholder="Ej: Factura #152, Pedido #0405"
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                        />
+                      </div>
+                    )}
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Notas del Abono (opcional)
@@ -2980,6 +3156,7 @@ const Apartados = () => {
                   setNuevoAbono('');
                   setNotasAbono('');
                   setMetodoPagoAbono('Efectivo');
+                  setReferenciaOrigen('');
                 }}
                 className="px-6 py-2 border border-gray-300 rounded-lg hover:bg-gray-100 font-medium"
               >
@@ -4087,6 +4264,7 @@ const Apartados = () => {
                 <option value="Nu">Nu</option>
                 <option value="Tarjeta">Tarjeta</option>
                 <option value="Transferencia">Transferencia</option>
+                <option value="Cruce de saldo">Cruce de saldo</option>
                 <option value="Mixto">Mixto</option>
               </select>
             </div>

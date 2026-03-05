@@ -26,6 +26,20 @@ const formatCurrency = (value) => {
   }).format(value);
 };
 
+// Obtener el total real de una factura (con fallback a cálculo desde items)
+const getFacturaTotal = (f) => {
+  if (f.totalPagado) return f.totalPagado;
+  if (f.total) return f.total;
+  if (f.subtotal) return f.subtotal;
+  if (f.items?.length > 0) {
+    return f.items.reduce((sum, item) => {
+      if (item.anulado) return sum;
+      return sum + (item.subtotal || ((item.precioUnitario || item.precio || 0) * (item.cantidad || 0)));
+    }, 0);
+  }
+  return 0;
+};
+
 const BuscadorFacturas = () => {
   const { isAdmin, currentUser } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
@@ -94,8 +108,13 @@ const BuscadorFacturas = () => {
           id: doc.id,
           ...doc.data()
         }));
-        // Ordenar por número de factura descendente
-        facturas.sort((a, b) => (b.numeroFactura || 0) - (a.numeroFactura || 0));
+        // Ordenar por fecha más reciente primero, luego por número de factura
+        facturas.sort((a, b) => {
+          const dateA = (a.createdAt || a.fecha)?.seconds || 0;
+          const dateB = (b.createdAt || b.fecha)?.seconds || 0;
+          if (dateB !== dateA) return dateB - dateA;
+          return (b.numeroFactura || 0) - (a.numeroFactura || 0);
+        });
         setTodasFacturas(facturas);
         setFacturasEncontradas(facturas);
       } catch (error) {
@@ -147,7 +166,7 @@ const BuscadorFacturas = () => {
 
       // Filtro por rango de fechas
       if (filterFechaInicio || filterFechaFin) {
-        const facturaFecha = factura.createdAt?.toDate?.();
+        const facturaFecha = (factura.createdAt || factura.fecha)?.toDate?.();
         if (facturaFecha) {
           const facturaDate = new Date(facturaFecha.toDateString()); // Solo fecha sin hora
 
@@ -227,7 +246,10 @@ const BuscadorFacturas = () => {
         if (!aStartsDoc && bStartsDoc) return 1;
       }
 
-      // Sin búsqueda o misma prioridad: ordenar por número de factura descendente
+      // Sin búsqueda o misma prioridad: ordenar por fecha más reciente primero
+      const dateA = (a.createdAt || a.fecha)?.seconds || 0;
+      const dateB = (b.createdAt || b.fecha)?.seconds || 0;
+      if (dateB !== dateA) return dateB - dateA;
       return (b.numeroFactura || 0) - (a.numeroFactura || 0);
     });
 
@@ -258,8 +280,8 @@ const BuscadorFacturas = () => {
    */
   const handleVerFactura = (factura) => {
     // La data de la factura necesita un campo 'fecha' legible con hora
-    const fechaLegible = factura.createdAt?.toDate?.()
-      ? factura.createdAt.toDate().toLocaleString('es-CO', {
+    const fechaLegible = (factura.createdAt || factura.fecha)?.toDate?.()
+      ? (factura.createdAt || factura.fecha).toDate().toLocaleString('es-CO', {
           dateStyle: 'short',
           timeStyle: 'short'
         })
@@ -590,8 +612,8 @@ const BuscadorFacturas = () => {
       // Actualizar factura seleccionada
       const facturaActualizada = facturas.find(f => f.id === facturaSeleccionada.id);
       if (facturaActualizada) {
-        const fechaLegible = facturaActualizada.createdAt?.toDate?.()
-          ? facturaActualizada.createdAt.toDate().toLocaleDateString('es-CO')
+        const fechaLegible = (facturaActualizada.createdAt || facturaActualizada.fecha)?.toDate?.()
+          ? (facturaActualizada.createdAt || facturaActualizada.fecha).toDate().toLocaleDateString('es-CO')
           : new Date().toLocaleDateString('es-CO');
         setFacturaSeleccionada({
           ...facturaActualizada,
@@ -740,8 +762,8 @@ const BuscadorFacturas = () => {
       // Actualizar factura seleccionada
       const facturaActualizada = facturas.find(f => f.id === facturaSeleccionada.id);
       if (facturaActualizada) {
-        const fechaLegible = facturaActualizada.createdAt?.toDate?.()
-          ? facturaActualizada.createdAt.toDate().toLocaleDateString('es-CO')
+        const fechaLegible = (facturaActualizada.createdAt || facturaActualizada.fecha)?.toDate?.()
+          ? (facturaActualizada.createdAt || facturaActualizada.fecha).toDate().toLocaleDateString('es-CO')
           : new Date().toLocaleDateString('es-CO');
         setFacturaSeleccionada({
           ...facturaActualizada,
@@ -849,8 +871,8 @@ const BuscadorFacturas = () => {
       // Actualizar factura seleccionada
       const facturaActualizada = facturas.find(f => f.id === facturaSeleccionada.id);
       if (facturaActualizada) {
-        const fechaLegible = facturaActualizada.createdAt?.toDate?.()
-          ? facturaActualizada.createdAt.toDate().toLocaleDateString('es-CO')
+        const fechaLegible = (facturaActualizada.createdAt || facturaActualizada.fecha)?.toDate?.()
+          ? (facturaActualizada.createdAt || facturaActualizada.fecha).toDate().toLocaleDateString('es-CO')
           : new Date().toLocaleDateString('es-CO');
         setFacturaSeleccionada({
           ...facturaActualizada,
@@ -977,8 +999,8 @@ const BuscadorFacturas = () => {
       // Actualizar factura seleccionada
       const facturaActualizada = facturas.find(f => f.id === facturaSeleccionada.id);
       if (facturaActualizada) {
-        const fechaLegible = facturaActualizada.createdAt?.toDate?.()
-          ? facturaActualizada.createdAt.toDate().toLocaleDateString('es-CO')
+        const fechaLegible = (facturaActualizada.createdAt || facturaActualizada.fecha)?.toDate?.()
+          ? (facturaActualizada.createdAt || facturaActualizada.fecha).toDate().toLocaleDateString('es-CO')
           : new Date().toLocaleDateString('es-CO');
         setFacturaSeleccionada({
           ...facturaActualizada,
@@ -1151,11 +1173,11 @@ const BuscadorFacturas = () => {
                     )}
                   </div>
                   <span className="font-bold text-gray-900 text-lg">
-                    {formatCurrency(factura.totalPagado || 0)}
+                    {formatCurrency(getFacturaTotal(factura))}
                   </span>
                 </div>
                 <p className="text-xs text-gray-600 mb-3">
-                  {factura.createdAt?.toDate?.().toLocaleDateString('es-CO') || 'N/A'}
+                  {(factura.createdAt || factura.fecha)?.toDate?.().toLocaleDateString('es-CO') || 'N/A'}
                 </p>
                 <button
                   onClick={() => handleVerFactura(factura)}
@@ -1206,10 +1228,10 @@ const BuscadorFacturas = () => {
                       )}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600">
-                      {factura.createdAt?.toDate?.().toLocaleDateString('es-CO') || 'N/A'}
+                      {(factura.createdAt || factura.fecha)?.toDate?.().toLocaleDateString('es-CO') || 'N/A'}
                     </td>
                     <td className="px-4 py-3 text-right text-sm font-medium text-gray-800">
-                      {formatCurrency(factura.totalPagado || 0)}
+                      {formatCurrency(getFacturaTotal(factura))}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <button
@@ -1432,7 +1454,7 @@ const BuscadorFacturas = () => {
                 )}
                 <div className="flex justify-between font-bold text-base border-t pt-1">
                   <span>TOTAL PAGADO:</span>
-                  <span>{formatCurrency(facturaSeleccionada.totalPagado || 0)}</span>
+                  <span>{formatCurrency(getFacturaTotal(facturaSeleccionada))}</span>
                 </div>
               </div>
 

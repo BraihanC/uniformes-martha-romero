@@ -196,11 +196,16 @@ const CierreCaja = () => { // <--- Nombre cambiado
     if (registrandoRetiro) return;
     setRegistrandoRetiro(true);
 
+    // Generar ID una sola vez ANTES del try.
+    // Si el primer intento falla tras crear el doc en el servidor (timeout de red),
+    // el reintento usa el mismo ID → sobreescribe en vez de duplicar.
+    const retiroRef = doc(collection(db, 'transactions'));
+
     try {
       setLoading(true);
 
-      // Crear transacción de tipo retiro_caja
-      await addDoc(collection(db, 'transactions'), {
+      // Crear transacción de tipo retiro_caja (setDoc = idempotente con el mismo ID)
+      await setDoc(retiroRef, {
         tipo: 'retiro_caja',
         monto: -monto, // Negativo porque sale de caja
         metodoPago: 'Efectivo', // Los retiros siempre son en efectivo

@@ -20,6 +20,15 @@ import {
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../context/AuthContext';
 import { Phone, Loader2 } from 'lucide-react';
+import {
+  calcularValorDeEntrega,
+  calcularValorYaEntregado,
+  calcularValorAcumuladoConHoy,
+  calcularSaldoRequerido,
+  calcularUpdatedItems,
+  calcularEstadoGeneral,
+  esItemInactivo,
+} from '../utils/pedidosLogic';
 
 const Pedidos = () => {
   const { currentUser, isAdmin } = useAuth();
@@ -84,13 +93,14 @@ const Pedidos = () => {
 
   // Estados para gestión de pedido
   const [selectedItemsForDelivery, setSelectedItemsForDelivery] = useState([]);
-  const [nuevoAbono, setNuevoAbono] = useState('');
+  const [nuevoAbono, setNuevoAbono] = useState(0);
   const [nuevoMetodoPago, setNuevoMetodoPago] = useState('Efectivo');
   const [showAbonoForm, setShowAbonoForm] = useState(false);
 
   // Estados para abonos adicionales (sin entrega)
   const [abonoAdicionalMonto, setAbonoAdicionalMonto] = useState('');
   const [abonoAdicionalMetodo, setAbonoAdicionalMetodo] = useState('Efectivo');
+  const [referenciaOrigen, setReferenciaOrigen] = useState(''); // Para cruce de saldo
 
   // Estado para datos de la empresa
   const [companyConfig, setCompanyConfig] = useState(null);
@@ -217,6 +227,49 @@ const Pedidos = () => {
     }
   };
 
+  // Función pura: deriva el estadoGeneral correcto a partir de los ítems del pedido.
+  // No hace lecturas ni escrituras a Firestore.
+  const calcularEstadoCorrectoPedido = (pedido) => {
+    if (!pedido.items || pedido.items.length === 0) return pedido.estadoGeneral;
+
+    // Excluir ítems anulados y registros de cambio de talla (no son entregables)
+    const itemsActivos = pedido.items.filter(
+      item => !item.anulado && item.estadoItem !== 'Cambio de Talla'
+    );
+    if (itemsActivos.length === 0) return pedido.estadoGeneral;
+
+    const todosEntregados = itemsActivos.every(item => item.estadoItem === 'Entregado');
+    const anyInProduction = itemsActivos.some(item => item.estadoItem === 'En Producción');
+    const allReadyOrDelivered = itemsActivos.every(
+      item => item.estadoItem === 'Listo para Entrega' ||
+              item.estadoItem === 'Entregado' ||
+              item.estadoItem === 'Parcialmente Listo'
+    );
+
+    if (todosEntregados) return 'Entregado';
+    if (anyInProduction) return 'En Proceso';
+    if (allReadyOrDelivered) return 'Pedido Completo - Listo para Recoger';
+    return pedido.estadoGeneral;
+  };
+
+  // Persiste correcciones de estado a Firestore sin re-fetch.
+  // Solo se llama una vez por sesión de navegador.
+  const persistirCorreccionesEstados = async (pedidosACorregir) => {
+    try {
+      const batch = writeBatch(db);
+      for (const pedido of pedidosACorregir) {
+        batch.update(doc(db, 'pedidos', pedido.id), {
+          estadoGeneral: pedido.estadoGeneral,
+          updatedAt: serverTimestamp()
+        });
+      }
+      await batch.commit();
+      console.log(`📊 ${pedidosACorregir.length} estado(s) de pedido sincronizados con Firestore`);
+    } catch (error) {
+      console.error('Error al persistir correcciones de estado:', error);
+    }
+  };
+
   const fetchPedidos = async () => {
     setLoading(true);
     try {
@@ -226,75 +279,33 @@ const Pedidos = () => {
         ...doc.data()
       }));
       pedidosData.sort((a, b) => (b.numeroPedido || 0) - (a.numeroPedido || 0));
-      setPedidos(pedidosData);
 
-      // Recalcular estados automáticamente después de cargar
-      await recalcularEstadosPedidos(pedidosData);
+      // Corregir estados usando los datos ya cargados (sin viajes extra a Firestore)
+      const pedidosCorregidos = pedidosData.map(pedido => {
+        const estadoCorrecto = calcularEstadoCorrectoPedido(pedido);
+        return estadoCorrecto !== pedido.estadoGeneral
+          ? { ...pedido, estadoGeneral: estadoCorrecto }
+          : pedido;
+      });
+
+      setPedidos(pedidosCorregidos);
+
+      // Persistir correcciones a Firestore solo una vez por sesión de navegador.
+      // Evita N escrituras innecesarias en cada carga posterior.
+      const SESSION_KEY = 'pedidos_estados_sincronizados';
+      if (!sessionStorage.getItem(SESSION_KEY)) {
+        sessionStorage.setItem(SESSION_KEY, '1');
+        const conDiscrepancias = pedidosCorregidos.filter((p, i) =>
+          p.estadoGeneral !== pedidosData[i].estadoGeneral
+        );
+        if (conDiscrepancias.length > 0) {
+          await persistirCorreccionesEstados(conDiscrepancias);
+        }
+      }
     } catch (error) {
       console.error('Error al cargar pedidos:', error);
     } finally {
       setLoading(false);
-    }
-  };
-
-  // Función automática para recalcular el estado general de los pedidos
-  const recalcularEstadosPedidos = async (pedidosData) => {
-    try {
-      const batch = writeBatch(db);
-      let actualizados = 0;
-
-      for (const pedido of pedidosData) {
-        // Solo procesar pedidos que tengan items
-        if (!pedido.items || pedido.items.length === 0) continue;
-
-        // Calcular el estado correcto basándose en los items
-        const anyInProduction = pedido.items.some(item => item.estadoItem === 'En Producción');
-        const allItemsReadyOrDelivered = pedido.items.every(
-          item => item.estadoItem === 'Listo para Entrega' || item.estadoItem === 'Entregado'
-        );
-        const todosEntregados = pedido.items.every(item => item.estadoItem === 'Entregado');
-
-        let estadoCorrecto;
-        if (todosEntregados) {
-          estadoCorrecto = 'Entregado';
-        } else if (anyInProduction) {
-          estadoCorrecto = 'En Proceso';
-        } else if (allItemsReadyOrDelivered) {
-          estadoCorrecto = 'Pedido Completo - Listo para Recoger';
-        } else {
-          // Casos mixtos, mantener el estado actual
-          estadoCorrecto = pedido.estadoGeneral;
-        }
-
-        // Solo actualizar si el estado está incorrecto
-        if (pedido.estadoGeneral !== estadoCorrecto) {
-          const pedidoRef = doc(db, 'pedidos', pedido.id);
-          batch.update(pedidoRef, {
-            estadoGeneral: estadoCorrecto,
-            updatedAt: serverTimestamp()
-          });
-          actualizados++;
-          console.log(`✅ Pedido #${pedido.numeroPedido}: ${pedido.estadoGeneral} → ${estadoCorrecto}`);
-        }
-      }
-
-      // Ejecutar el batch si hay actualizaciones
-      if (actualizados > 0) {
-        await batch.commit();
-        console.log(`📊 Recalculados ${actualizados} pedidos con estados incorrectos`);
-
-        // Recargar pedidos para reflejar los cambios
-        const querySnapshot = await getDocs(collection(db, 'pedidos'));
-        const pedidosActualizados = querySnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        pedidosActualizados.sort((a, b) => (b.numeroPedido || 0) - (a.numeroPedido || 0));
-        setPedidos(pedidosActualizados);
-      }
-    } catch (error) {
-      console.error('Error al recalcular estados de pedidos:', error);
-      // No mostrar alerta al usuario, solo log en consola
     }
   };
 
@@ -581,6 +592,7 @@ const Pedidos = () => {
         abonos: abonoInicial > 0 ? [{
           monto: abonoInicial,
           metodoPago: metodoPago,
+          ...(metodoPago === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {}),
           fecha: new Date().toISOString()
         }] : [],
         observaciones: observaciones.trim(),
@@ -610,6 +622,7 @@ const Pedidos = () => {
           tipo: 'abono_pedido',
           monto: abonoInicial,
           metodoPago: metodoPago,
+          ...(metodoPago === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {}),
           pedidoId: pedidoRef.id,
           descripcion: `Abono inicial Pedido #${nextNumero}`,
           clienteId: selectedClient.id,
@@ -658,6 +671,7 @@ const Pedidos = () => {
     setObservaciones('');
     setAbono(0);
     setMetodoPago('Efectivo');
+    setReferenciaOrigen('');
     setSelectedColegioId('');
     setClientSearchTerm('');
     setProductSearchTerm('');
@@ -681,6 +695,7 @@ const Pedidos = () => {
         setShowAbonoForm(false);
         setAbonoAdicionalMonto(0);
         setAbonoAdicionalMetodo('Efectivo');
+        setReferenciaOrigen('');
       }
     } catch (error) {
       console.error('Error al cargar pedido:', error);
@@ -836,32 +851,19 @@ const Pedidos = () => {
     if (registrandoEntrega) return;
     setRegistrandoEntrega(true);
 
-    // Paso A: Calcular valor de entrega
-    const valorDeEntrega = selectedItemsForDelivery.reduce((sum, index) => {
-      const item = selectedPedido.items[index];
-      const esParcial = item.estadoItem === 'Parcialmente Listo';
-
-      if (esParcial) {
-        // Para entregas parciales, calcular valor proporcional
-        const cantidadLista = item.cantidadLista || 0;
-        const precioUnitario = item.precio;
-        return sum + (cantidadLista * precioUnitario);
-      } else {
-        // Para entregas totales, usar subtotal completo
-        return sum + item.subtotal;
-      }
-    }, 0);
+    // Paso A: Calcular valor de entrega de hoy
+    const valorDeEntrega = calcularValorDeEntrega(selectedPedido.items, selectedItemsForDelivery);
+    const valorYaEntregado = calcularValorYaEntregado(selectedPedido.items, selectedItemsForDelivery);
+    const valorAcumuladoConHoy = calcularValorAcumuladoConHoy(valorYaEntregado, valorDeEntrega, selectedPedido.total);
 
     // Paso B y C: Validar abono
     const totalAbonado = selectedPedido.totalAbonado || 0;
-    const saldoPendiente = selectedPedido.saldoPendiente || 0;
 
-    // Alerta si está llevando más de lo abonado
-    if (valorDeEntrega > totalAbonado) {
-      const saldoAPagar = valorDeEntrega - totalAbonado;
-      alert(`⚠️ El cliente está llevando más valor del que ha abonado.\n\nValor de entrega: $${valorDeEntrega.toLocaleString('es-CO')}\nTotal abonado: $${totalAbonado.toLocaleString('es-CO')}\nSaldo a pagar hoy: $${saldoAPagar.toLocaleString('es-CO')}`);
+    if (totalAbonado < valorAcumuladoConHoy) {
+      const saldoAPagar = calcularSaldoRequerido(valorAcumuladoConHoy, totalAbonado);
+      alert(`⚠️ El abono actual no cubre el valor de entrega.\n\nTotal del pedido: $${selectedPedido.total.toLocaleString('es-CO')}\nTotal abonado: $${totalAbonado.toLocaleString('es-CO')}\n\nValor de entrega hoy: $${valorDeEntrega.toLocaleString('es-CO')}\nDebe pagar hoy: $${saldoAPagar.toLocaleString('es-CO')}`);
       setShowAbonoForm(true);
-      setRegistrandoEntrega(false); // Resetear para permitir confirmar con abono
+      setRegistrandoEntrega(false);
       return;
     }
 
@@ -876,180 +878,126 @@ const Pedidos = () => {
     if (registrandoEntrega) return;
     setRegistrandoEntrega(true);
 
-    // Calcular valor de entrega ANTES de la validación
-    const valorDeEntrega = selectedItemsForDelivery.reduce((sum, index) => {
-      const item = selectedPedido.items[index];
-      const esParcial = item.estadoItem === 'Parcialmente Listo';
-
-      if (esParcial) {
-        const cantidadLista = item.cantidadLista || 0;
-        const precioUnitario = item.precio;
-        return sum + (cantidadLista * precioUnitario);
-      } else {
-        return sum + item.subtotal;
-      }
-    }, 0);
+    // Calcular valor de entrega de hoy
+    const valorDeEntrega = calcularValorDeEntrega(selectedPedido.items, selectedItemsForDelivery);
+    const valorYaEntregado = calcularValorYaEntregado(selectedPedido.items, selectedItemsForDelivery);
+    const valorAcumuladoConHoy = calcularValorAcumuladoConHoy(valorYaEntregado, valorDeEntrega, selectedPedido.total);
 
     const abonoNuevo = Number(nuevoAbono) || 0;
     const totalAbonado = selectedPedido.totalAbonado || 0;
 
-    // VALIDACIÓN OBLIGATORIA: El cliente debe pagar al menos el valor de los productos que se lleva
-    // Si el total abonado (previo + nuevo) es menor al valor de entrega, NO se puede entregar
+    // VALIDACIÓN: Si se mostró formulario de abono, el cliente necesita cubrir
+    // el acumulado (lo ya entregado + lo de hoy) con lo que ha pagado total.
+    // Nota: showAbonoForm puede quedar true de un intento anterior; solo bloquear
+    // si realmente hay saldo pendiente (saldoRequerido > 0).
     if (showAbonoForm) {
-      const saldoRequerido = valorDeEntrega - totalAbonado;
+      const saldoRequerido = calcularSaldoRequerido(valorAcumuladoConHoy, totalAbonado);
 
-      if (abonoNuevo <= 0) {
+      if (saldoRequerido > 0 && abonoNuevo <= 0) {
         alert(
           `⚠️ ABONO REQUERIDO\n\n` +
-          `El cliente ha abonado: $${totalAbonado.toLocaleString('es-CO')}\n` +
-          `Valor de productos a entregar: $${valorDeEntrega.toLocaleString('es-CO')}\n\n` +
-          `Debe abonar mínimo: $${saldoRequerido.toLocaleString('es-CO')}\n\n` +
+          `Total del pedido: $${selectedPedido.total.toLocaleString('es-CO')}\n` +
+          `Total abonado: $${totalAbonado.toLocaleString('es-CO')}\n\n` +
+          `Valor de entrega hoy: $${valorDeEntrega.toLocaleString('es-CO')}\n` +
+          `Debe pagar hoy mínimo: $${saldoRequerido.toLocaleString('es-CO')}\n\n` +
           `No se puede entregar sin recibir el pago.`
         );
-        setRegistrandoEntrega(false); // Resetear para permitir reintentar
+        setRegistrandoEntrega(false);
         return;
       }
 
-      const totalDespuesDeAbono = totalAbonado + abonoNuevo;
-      if (totalDespuesDeAbono < valorDeEntrega) {
-        const faltante = valorDeEntrega - totalDespuesDeAbono;
+      if (saldoRequerido > 0 && abonoNuevo < saldoRequerido) {
+        const faltante = saldoRequerido - abonoNuevo;
         alert(
           `⚠️ ABONO INSUFICIENTE\n\n` +
-          `El cliente ha abonado previamente: $${totalAbonado.toLocaleString('es-CO')}\n` +
-          `Abono ingresado ahora: $${abonoNuevo.toLocaleString('es-CO')}\n` +
-          `Total abonado: $${totalDespuesDeAbono.toLocaleString('es-CO')}\n\n` +
-          `Valor de productos a entregar: $${valorDeEntrega.toLocaleString('es-CO')}\n\n` +
-          `Faltan: $${faltante.toLocaleString('es-CO')}\n\n` +
-          `El cliente debe completar el pago de los productos que se lleva.`
+          `Total del pedido: $${selectedPedido.total.toLocaleString('es-CO')}\n` +
+          `Abonado previamente: $${totalAbonado.toLocaleString('es-CO')}\n\n` +
+          `Valor de entrega hoy: $${valorDeEntrega.toLocaleString('es-CO')}\n` +
+          `Debe pagar hoy: $${saldoRequerido.toLocaleString('es-CO')}\n\n` +
+          `Abono ingresado: $${abonoNuevo.toLocaleString('es-CO')}\n` +
+          `Falta: $${faltante.toLocaleString('es-CO')}\n\n` +
+          `El cliente debe completar el pago para poder llevarse los productos.`
         );
-        setRegistrandoEntrega(false); // Resetear para permitir reintentar
+        setRegistrandoEntrega(false);
         return;
       }
     }
 
     setLoading(true);
     try {
-      const batch = writeBatch(db);
       const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
 
       const nuevoTotalAbonado = totalAbonado + abonoNuevo;
       const nuevoSaldoPendiente = selectedPedido.total - nuevoTotalAbonado;
 
-      // Actualizar items: cambiar estado según si es entrega parcial o total
-      const updatedItems = selectedPedido.items.map((item, index) => {
-        if (selectedItemsForDelivery.includes(index)) {
-          const esParcial = item.estadoItem === 'Parcialmente Listo';
-
-          if (esParcial) {
-            // Entrega parcial: solo entregar la cantidad lista
-            const cantidadLista = item.cantidadLista || 0;
-            const nuevaCantidadEntregada = (item.cantidadEntregada || 0) + cantidadLista;
-            const cantidadTotal = item.cantidad;
-
-            // Recalcular estado
-            // Después de entregar, cantidadLista será 0, entonces:
-            // - Si se entregó todo -> 'Entregado'
-            // - Si aún quedan unidades pendientes -> 'En Producción' (ya que cantidadLista = 0)
-            let nuevoEstado;
-            if (nuevaCantidadEntregada === cantidadTotal) {
-              nuevoEstado = 'Entregado';
-            } else {
-              nuevoEstado = 'En Producción'; // Aún quedan unidades por producir
-            }
-
-            return {
-              ...item,
-              cantidadEntregada: nuevaCantidadEntregada,
-              cantidadLista: 0, // Ya se entregaron las que estaban listas
-              estadoItem: nuevoEstado
-            };
-          } else {
-            // Entrega total: todo listo se entrega
-            return {
-              ...item,
-              cantidadEntregada: item.cantidad,
-              cantidadLista: 0,
-              estadoItem: 'Entregado'
-            };
-          }
-        }
-        return item;
-      });
+      // Calcular items actualizados a partir del estado local (para preparar el payload)
+      const updatedItems = calcularUpdatedItems(selectedPedido.items, selectedItemsForDelivery);
 
       // Actualizar abonos si hay nuevo abono
-      const updatedAbonos = [...(selectedPedido.abonos || [])];
+      const updatedAbonos = (selectedPedido.abonos || []).map(a => {
+        const limpio = { ...a };
+        Object.keys(limpio).forEach(k => limpio[k] === undefined && delete limpio[k]);
+        return limpio;
+      });
       if (abonoNuevo > 0) {
         updatedAbonos.push({
           monto: abonoNuevo,
           metodoPago: nuevoMetodoPago,
+          ...(nuevoMetodoPago === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {}),
           fecha: new Date().toISOString()
         });
       }
 
-      // Calcular estado general del pedido ANTES del commit para incluirlo en el batch
-      const todosEntregados = updatedItems.every(item => item.anulado || item.estadoItem === 'Entregado');
-      const hayEnProduccion = updatedItems.some(item =>
-        !item.anulado && ((item.cantidadLista || 0) + (item.cantidadEntregada || 0)) < item.cantidad
-      );
-      const todosListosOEntregados = updatedItems.every(item =>
-        item.anulado || ((item.cantidadLista || 0) + (item.cantidadEntregada || 0)) === item.cantidad
-      );
+      // Calcular estado general del pedido
+      const todosEntregados = updatedItems.every(item => esItemInactivo(item) || item.estadoItem === 'Entregado');
+      const nuevoEstadoGeneral = calcularEstadoGeneral(updatedItems, selectedPedido.estadoGeneral);
 
-      let nuevoEstadoGeneral = selectedPedido.estadoGeneral; // Mantener el actual por defecto
-      if (todosEntregados) {
-        nuevoEstadoGeneral = 'Entregado';
-      } else if (hayEnProduccion) {
-        nuevoEstadoGeneral = 'En Proceso';
-      } else if (todosListosOEntregados) {
-        nuevoEstadoGeneral = 'Pedido Completo - Listo para Recoger';
-      }
-
-      // 1. Actualizar Pedido (incluyendo estado general)
-      batch.update(pedidoRef, {
-        items: updatedItems,
-        totalAbonado: nuevoTotalAbonado,
-        saldoPendiente: nuevoSaldoPendiente,
-        abonos: updatedAbonos,
-        estadoGeneral: nuevoEstadoGeneral,
-        updatedAt: serverTimestamp()
-      });
-
-      // 2. Actualizar Inventario (reducir stock)
-      // Primero verificar que todos los productos existan
+      // FASE 1: Verificar existencia de productos FUERA de la transacción
+      // (necesario para poder mostrar window.confirm al usuario)
       const productosNoEncontrados = [];
+      const productosConReservaInsuficiente = [];
+      const productRefsAEntregar = []; // { productRef, cantidadAEntregar }
+
       for (const index of selectedItemsForDelivery) {
         const item = selectedPedido.items[index];
-
-        // IMPORTANTE: Saltar productos anulados (ya liberaron su reserva)
         if (item.anulado) continue;
 
         const esParcial = item.estadoItem === 'Parcialmente Listo';
-
-        // Calcular cuántas unidades se están entregando REALMENTE
         const cantidadAEntregar = esParcial ? (item.cantidadLista || 0) : item.cantidad;
+
+        if (!item.productoId) {
+          productosNoEncontrados.push({
+            nombre: item.productoNombre || item.nombre || '(sin nombre)',
+            ref: item.productoRef || item.referencia || '?',
+            talla: item.talla || '?'
+          });
+          continue;
+        }
 
         const productRef = doc(db, 'products', item.productoId);
         const productSnap = await getDoc(productRef);
 
         if (!productSnap.exists()) {
           productosNoEncontrados.push({
-            nombre: item.productoNombre,
-            ref: item.productoRef,
-            talla: item.talla
+            nombre: item.productoNombre || item.nombre || '(sin nombre)',
+            ref: item.productoRef || item.referencia || '?',
+            talla: item.talla || '?'
           });
         } else {
-          // Solo actualizar si el producto existe
-          // Decrementar: stockTotal (sale de bodega), stockReservadoPedidos (ya no reservado), totalPrendasPedidas (ya no pedido)
-          batch.update(productRef, {
-            stockTotal: increment(-cantidadAEntregar),
-            stockReservadoPedidos: increment(-cantidadAEntregar),
-            totalPrendasPedidas: increment(-cantidadAEntregar),
-            updatedAt: serverTimestamp()
-          });
+          const reservaActual = productSnap.data().stockReservadoPedidos || 0;
+          if (reservaActual < cantidadAEntregar) {
+            productosConReservaInsuficiente.push({
+              nombre: item.productoNombre || item.nombre || '(sin nombre)',
+              ref: item.productoRef || item.referencia || item.ref || '?',
+              talla: item.talla || '?',
+              reserva: reservaActual,
+              necesita: cantidadAEntregar
+            });
+          }
+          productRefsAEntregar.push({ productRef, cantidadAEntregar });
         }
       }
 
-      // Si hay productos no encontrados, advertir pero continuar
       if (productosNoEncontrados.length > 0) {
         const listaProductos = productosNoEncontrados
           .map(p => `- ${p.nombre} (Ref: ${p.ref}, Talla: ${p.talla})`)
@@ -1063,28 +1011,94 @@ const Pedidos = () => {
 
         if (!continuar) {
           setLoading(false);
+          setRegistrandoEntrega(false);
           return;
         }
       }
 
-      // 3. (NUEVO) Registrar Transacción de Abono (si existe)
-      if (abonoNuevo > 0) {
-        const transactionRef = doc(collection(db, 'transactions'));
-        batch.set(transactionRef, {
-          tipo: 'abono_pedido',
-          monto: abonoNuevo,
-          metodoPago: nuevoMetodoPago,
-          pedidoId: pedidoRef.id,
-          descripcion: `Abono en entrega Pedido #${selectedPedido.numeroPedido}`,
-          clienteId: selectedPedido.clienteId,
-          clienteNombre: selectedPedido.clienteNombre,
-          fecha: serverTimestamp(),
-          userId: currentUser.uid
-        });
+      if (productosConReservaInsuficiente.length > 0) {
+        const listaReserva = productosConReservaInsuficiente
+          .map(p => `- ${p.nombre} (Ref: ${p.ref}, Talla: ${p.talla}) — Reserva: ${p.reserva}, Necesita: ${p.necesita}`)
+          .join('\n');
+
+        const continuar = window.confirm(
+          `⚠️ ADVERTENCIA DE STOCK RESERVADO\n\n` +
+          `Los siguientes productos tienen menos unidades apartadas de las que se van a entregar:\n\n${listaReserva}\n\n` +
+          `Esto puede indicar un error en el inventario. El pedido se entregará de todas formas.\n\n` +
+          `¿Deseas continuar?`
+        );
+
+        if (!continuar) {
+          setLoading(false);
+          setRegistrandoEntrega(false);
+          return;
+        }
       }
 
-      // 4. Commit atómico
-      await batch.commit();
+      // FASE 2: Transacción atómica — previene race conditions si dos operadores
+      // actúan sobre el mismo pedido o producto al mismo tiempo
+      const transactionDocRef = abonoNuevo > 0 ? doc(collection(db, 'transactions')) : null;
+
+      await runTransaction(db, async (transaction) => {
+        // ── FASE READS: todos los gets primero ──────────────────────────────
+        const pedidoDoc = await transaction.get(pedidoRef);
+        if (!pedidoDoc.exists()) {
+          throw new Error('El pedido ya no existe en la base de datos.');
+        }
+
+        const productDocsLeidos = [];
+        for (const { productRef, cantidadAEntregar } of productRefsAEntregar) {
+          const productDoc = await transaction.get(productRef);
+          productDocsLeidos.push({ productDoc, productRef, cantidadAEntregar });
+        }
+
+        // ── VALIDACIONES (sin I/O) ───────────────────────────────────────────
+        const pedidoFresco = pedidoDoc.data();
+        for (const index of selectedItemsForDelivery) {
+          const itemFresco = (pedidoFresco.items || [])[index];
+          if (!itemFresco) continue;
+          if (itemFresco.estadoItem === 'Entregado') {
+            throw new Error(
+              `El ítem "${itemFresco.nombre || ''}" (Talla ${itemFresco.talla || ''}) ya fue entregado por otro usuario. Recarga la página e inténtalo de nuevo.`
+            );
+          }
+        }
+
+        // ── FASE WRITES: todos los updates al final ──────────────────────────
+        for (const { productDoc, productRef, cantidadAEntregar } of productDocsLeidos) {
+          if (!productDoc.exists()) continue;
+          transaction.update(productRef, {
+            stockTotal: increment(-cantidadAEntregar),
+            stockReservadoPedidos: increment(-cantidadAEntregar),
+            totalPrendasPedidas: increment(-cantidadAEntregar),
+            updatedAt: serverTimestamp()
+          });
+        }
+
+        transaction.update(pedidoRef, {
+          items: updatedItems,
+          totalAbonado: nuevoTotalAbonado,
+          saldoPendiente: nuevoSaldoPendiente,
+          abonos: updatedAbonos,
+          estadoGeneral: nuevoEstadoGeneral,
+          updatedAt: serverTimestamp()
+        });
+
+        if (abonoNuevo > 0 && transactionDocRef) {
+          transaction.set(transactionDocRef, {
+            tipo: 'abono_pedido',
+            monto: abonoNuevo,
+            metodoPago: nuevoMetodoPago,
+            ...(nuevoMetodoPago === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {}),
+            pedidoId: pedidoRef.id,
+            descripcion: `Abono en entrega Pedido #${selectedPedido.numeroPedido}`,
+            clienteId: selectedPedido.clienteId,
+            clienteNombre: selectedPedido.clienteNombre,
+            fecha: serverTimestamp(),
+            userId: currentUser.uid
+          });
+        }
+      });
 
       // 5. Si todos los items están entregados, generar factura automáticamente
       let numeroFactura = null;
@@ -1158,7 +1172,14 @@ const Pedidos = () => {
             clienteId: selectedPedido.clienteId,
             clienteNombre: selectedPedido.clienteNombre,
             clienteDocumento: selectedPedido.clienteDocumento || '',
-            items: updatedItems.filter(item => !item.anulado && item.estadoItem !== 'Cambio de Talla'),
+            items: updatedItems
+              .filter(item => !item.anulado && item.estadoItem !== 'Cambio de Talla')
+              .map(item => {
+                const itemLimpio = { ...item, precioUnitario: item.precioUnitario || item.precio || 0, subtotal: item.subtotal || (item.cantidad * (item.precioUnitario || item.precio || 0)) };
+                // Firestore rechaza valores undefined — eliminarlos
+                Object.keys(itemLimpio).forEach(k => itemLimpio[k] === undefined && delete itemLimpio[k]);
+                return itemLimpio;
+              }),
             subtotal: selectedPedido.total,
             total: selectedPedido.total,
             totalAbonado: nuevoTotalAbonado,
@@ -1166,11 +1187,11 @@ const Pedidos = () => {
             abonos: updatedAbonos,
             transaccionesIds: transaccionesIds, // Referencias a transacciones existentes
             yaRegistradoEnCaja: true, // Importante: ya fue registrado en abonos
-            metodoPago: updatedAbonos.length > 0 ? updatedAbonos[updatedAbonos.length - 1].metodoPago : 'N/A',
+            metodoPago: 'Abonos',
             fecha: serverTimestamp(),
             userId: currentUser.uid,
-            colegioId: selectedPedido.colegioId,
-            colegioNombre: selectedPedido.colegioNombre
+            ...(selectedPedido.colegioId != null ? { colegioId: selectedPedido.colegioId } : {}),
+            ...(selectedPedido.colegioNombre != null ? { colegioNombre: selectedPedido.colegioNombre } : {})
           };
 
           await addDoc(collection(db, 'sales'), facturaData);
@@ -1184,7 +1205,7 @@ const Pedidos = () => {
 
         } catch (error) {
           console.error('Error al generar factura:', error);
-          alert('⚠️ La entrega se completó pero hubo un error al generar la factura. Por favor, contacta a soporte.');
+          alert(`⚠️ La entrega se completó pero hubo un error al generar la factura: ${error.message || error}`);
         }
       }
 
@@ -1200,11 +1221,13 @@ const Pedidos = () => {
       setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
       setSelectedItemsForDelivery([]);
       setNuevoAbono(0);
+      setNuevoMetodoPago('Efectivo');
+      setReferenciaOrigen('');
       setShowAbonoForm(false);
       fetchPedidos();
     } catch (error) {
       console.error('Error al registrar entrega:', error);
-      alert('Error al registrar la entrega.');
+      alert(`Error al registrar la entrega: ${error.message || error}`);
     } finally {
       setLoading(false);
       setRegistrandoEntrega(false);
@@ -1240,6 +1263,7 @@ const Pedidos = () => {
       updatedAbonos.push({
         monto: monto,
         metodoPago: abonoAdicionalMetodo,
+        ...(abonoAdicionalMetodo === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {}),
         fecha: new Date().toISOString()
       });
 
@@ -1257,6 +1281,7 @@ const Pedidos = () => {
         tipo: 'abono_pedido',
         monto: monto,
         metodoPago: abonoAdicionalMetodo,
+        ...(abonoAdicionalMetodo === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {}),
         pedidoId: selectedPedido.id,
         descripcion: `Abono adicional Pedido #${selectedPedido.numeroPedido}`,
         clienteId: selectedPedido.clienteId,
@@ -1275,6 +1300,7 @@ const Pedidos = () => {
       setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
       setAbonoAdicionalMonto(0);
       setAbonoAdicionalMetodo('Efectivo');
+      setReferenciaOrigen('');
       fetchPedidos();
 
     } catch (error) {
@@ -1390,9 +1416,11 @@ const Pedidos = () => {
         estadoItem: estadoItemActual // Preservar el estado
       };
 
-      // Recalcular total del pedido
-      const nuevoTotal = updatedItems.reduce((sum, item) => sum + item.subtotal, 0);
-      const nuevoSaldoPendiente = nuevoTotal - (selectedPedido.totalAbonado || 0);
+      // Recalcular total del pedido (excluyendo items anulados y cambios de talla)
+      const nuevoTotal = updatedItems
+        .filter(item => !item.anulado && item.estadoItem !== 'Cambio de Talla')
+        .reduce((sum, item) => sum + (item.subtotal || 0), 0);
+      const nuevoSaldoPendiente = Math.max(0, nuevoTotal - (selectedPedido.totalAbonado || 0));
 
       // Ajustar inventario
       const itemTieneStockReservado = estadoItemActual === 'Listo para Entrega' || estadoItemActual === 'Parcialmente Listo';
@@ -1401,7 +1429,7 @@ const Pedidos = () => {
       if (!cambioDeProducto) {
         // Mismo producto, solo cambió la cantidad
         const diferenciaCantidad = cantidadNueva - cantidadAnterior;
-        if (diferenciaCantidad !== 0) {
+        if (diferenciaCantidad !== 0 && itemActual.productoId) {
           const productoRef = doc(db, 'products', itemActual.productoId);
           const updateData = {
             totalPrendasPedidas: increment(diferenciaCantidad),
@@ -1418,33 +1446,37 @@ const Pedidos = () => {
         }
       } else {
         // Productos diferentes
-        // Liberar del producto anterior
-        const productoAnteriorRef = doc(db, 'products', itemActual.productoId);
-        const updateDataAnterior = {
-          totalPrendasPedidas: increment(-cantidadAnterior),
-          updatedAt: serverTimestamp()
-        };
+        // Liberar del producto anterior (solo si tiene productoId válido)
+        if (itemActual.productoId) {
+          const productoAnteriorRef = doc(db, 'products', itemActual.productoId);
+          const updateDataAnterior = {
+            totalPrendasPedidas: increment(-cantidadAnterior),
+            updatedAt: serverTimestamp()
+          };
 
-        // Liberar reserva del producto anterior (si tenía)
-        if (itemTieneStockReservado) {
-          updateDataAnterior.stockReservadoPedidos = increment(-cantidadReservadaActual);
+          // Liberar reserva del producto anterior (si tenía)
+          if (itemTieneStockReservado) {
+            updateDataAnterior.stockReservadoPedidos = increment(-cantidadReservadaActual);
+          }
+
+          batch.update(productoAnteriorRef, updateDataAnterior);
         }
 
-        batch.update(productoAnteriorRef, updateDataAnterior);
+        // Incrementar del producto nuevo (solo si tiene productoId válido)
+        if (productoNuevoId) {
+          const productoNuevoRef = doc(db, 'products', productoNuevoId);
+          const updateDataNuevo = {
+            totalPrendasPedidas: increment(cantidadNueva),
+            updatedAt: serverTimestamp()
+          };
 
-        // Incrementar del producto nuevo
-        const productoNuevoRef = doc(db, 'products', productoNuevoId);
-        const updateDataNuevo = {
-          totalPrendasPedidas: increment(cantidadNueva),
-          updatedAt: serverTimestamp()
-        };
+          // Reservar en el producto nuevo (si estaba listo)
+          if (itemTieneStockReservado) {
+            updateDataNuevo.stockReservadoPedidos = increment(cantidadNueva);
+          }
 
-        // Reservar en el producto nuevo (si estaba listo)
-        if (itemTieneStockReservado) {
-          updateDataNuevo.stockReservadoPedidos = increment(cantidadNueva);
+          batch.update(productoNuevoRef, updateDataNuevo);
         }
-
-        batch.update(productoNuevoRef, updateDataNuevo);
       }
 
       // Actualizar el pedido
@@ -1471,15 +1503,22 @@ const Pedidos = () => {
       if (nuevoTotal < totalAbonado) {
         const diferenciaExceso = totalAbonado - nuevoTotal;
 
+        // Determinar método de pago del último abono para el egreso
+        const abonosCorreccion = selectedPedido.abonos || [];
+        const metodoEgresoCorreccion = abonosCorreccion.length > 0
+          ? (abonosCorreccion[abonosCorreccion.length - 1].metodoPago || 'Efectivo')
+          : 'Efectivo';
+
         // Crear transacción de egreso/devolución con la fecha ACTUAL (cuando sale el dinero de caja)
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
           tipo: 'egreso',
           monto: -diferenciaExceso, // Negativo para que se reste en el cierre de caja
-          metodoPago: 'Ajuste',
+          metodoPago: metodoEgresoCorreccion,
           pedidoId: selectedPedido.id,
           numeroPedido: selectedPedido.numeroPedido,
           descripcion: `Egreso por corrección Pedido #${selectedPedido.numeroPedido}: Total abonado ($${totalAbonado.toLocaleString()}) excede nuevo total ($${nuevoTotal.toLocaleString()})`,
+          categoria: 'Devolución',
           notas: `Corrección: ${itemActual.nombre || itemActual.productoNombre} → ${productoParaUsar.nombre}. ${notasCorreccion}`,
           clienteId: selectedPedido.clienteId,
           clienteNombre: selectedPedido.clienteNombre,
@@ -1603,27 +1642,30 @@ const Pedidos = () => {
         }
       };
 
-      // Recalcular totales (solo productos NO anulados)
+      // Recalcular totales (solo productos NO anulados y NO cambio de talla)
       const nuevoTotal = updatedItems
-        .filter(item => !item.anulado)
-        .reduce((sum, item) => sum + item.subtotal, 0);
+        .filter(item => !item.anulado && item.estadoItem !== 'Cambio de Talla')
+        .reduce((sum, item) => sum + (item.subtotal || 0), 0);
 
       // Decrementar inventario
       const itemTeniaStockReservado = estadoItemActual === 'Listo para Entrega' || estadoItemActual === 'Parcialmente Listo';
       const cantidadReservada = itemTeniaStockReservado ? (itemToAnular.cantidadLista || itemToAnular.cantidad) : 0;
-      const productoRef = doc(db, 'products', itemToAnular.productoId);
-      const updateData = {
-        totalPrendasPedidas: increment(-itemToAnular.cantidad),
-        updatedAt: serverTimestamp()
-      };
+      // Solo actualizar inventario si el item tiene productoId válido
+      if (itemToAnular.productoId) {
+        const productoRef = doc(db, 'products', itemToAnular.productoId);
+        const updateData = {
+          totalPrendasPedidas: increment(-itemToAnular.cantidad),
+          updatedAt: serverTimestamp()
+        };
 
-      // Si tenía stock reservado, liberar la reserva (pero NO tocar stockTotal)
-      // Las prendas siguen existiendo en el inventario, solo ya no están reservadas
-      if (itemTeniaStockReservado) {
-        updateData.stockReservadoPedidos = increment(-cantidadReservada);
+        // Si tenía stock reservado, liberar la reserva (pero NO tocar stockTotal)
+        // Las prendas siguen existiendo en el inventario, solo ya no están reservadas
+        if (itemTeniaStockReservado) {
+          updateData.stockReservadoPedidos = increment(-cantidadReservada);
+        }
+
+        batch.update(productoRef, updateData);
       }
-
-      batch.update(productoRef, updateData);
 
       // Verificar totales para el pedido
       const totalAbonado = selectedPedido.totalAbonado || 0;
@@ -1641,12 +1683,19 @@ const Pedidos = () => {
       if (nuevoTotal < totalAbonado) {
         const diferenciaExceso = totalAbonado - nuevoTotal;
 
+        // Determinar método de pago del último abono para el egreso
+        const abonosAnulacion = selectedPedido.abonos || [];
+        const metodoEgresoAnulacion = abonosAnulacion.length > 0
+          ? (abonosAnulacion[abonosAnulacion.length - 1].metodoPago || 'Efectivo')
+          : 'Efectivo';
+
         // Crear transacción de egreso/devolución con la fecha ACTUAL (cuando sale el dinero de caja)
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
           tipo: 'egreso',
           monto: -diferenciaExceso, // Negativo para que se reste en el cierre de caja
-          metodoPago: 'Ajuste',
+          metodoPago: metodoEgresoAnulacion,
+          categoria: 'Devolución',
           pedidoId: selectedPedido.id,
           numeroPedido: selectedPedido.numeroPedido,
           descripcion: `Egreso por anulación Pedido #${selectedPedido.numeroPedido}: Total abonado ($${totalAbonado.toLocaleString()}) excede nuevo total ($${nuevoTotal.toLocaleString()})`,
@@ -1727,32 +1776,37 @@ const Pedidos = () => {
       const { anulado, anulacion, ...itemSinAnulacion } = itemToRestaurar;
       updatedItems[itemIndex] = itemSinAnulacion;
 
-      // Recalcular totales
+      // Recalcular totales (excluyendo anulados y cambios de talla)
       const nuevoTotal = updatedItems
-        .filter(item => !item.anulado)
-        .reduce((sum, item) => sum + item.subtotal, 0);
+        .filter(item => !item.anulado && item.estadoItem !== 'Cambio de Talla')
+        .reduce((sum, item) => sum + (item.subtotal || 0), 0);
 
-      // Incrementar inventario
+      // Incrementar inventario (solo si tiene productoId válido)
       const itemTieneStockReservado = itemToRestaurar.estadoItem === 'Listo para Entrega' || itemToRestaurar.estadoItem === 'Parcialmente Listo';
       const cantidadReservada = itemTieneStockReservado ? (itemToRestaurar.cantidadLista || itemToRestaurar.cantidad) : 0;
-      const productoRef = doc(db, 'products', itemToRestaurar.productoId);
-      const updateData = {
-        totalPrendasPedidas: increment(itemToRestaurar.cantidad),
-        updatedAt: serverTimestamp()
-      };
 
-      // Si tiene stock reservado, volver a reservar (pero NO tocar stockTotal)
-      // Las prendas ya existen en el inventario, solo volvemos a reservarlas
-      if (itemTieneStockReservado) {
-        updateData.stockReservadoPedidos = increment(cantidadReservada);
+      if (itemToRestaurar.productoId) {
+        const productoRef = doc(db, 'products', itemToRestaurar.productoId);
+        const updateData = {
+          totalPrendasPedidas: increment(itemToRestaurar.cantidad),
+          updatedAt: serverTimestamp()
+        };
+
+        // Si tiene stock reservado, volver a reservar (pero NO tocar stockTotal)
+        // Las prendas ya existen en el inventario, solo volvemos a reservarlas
+        if (itemTieneStockReservado) {
+          updateData.stockReservadoPedidos = increment(cantidadReservada);
+        }
+
+        batch.update(productoRef, updateData);
       }
 
-      batch.update(productoRef, updateData);
-
-      // Actualizar pedido
+      // Actualizar pedido (incluyendo saldoPendiente recalculado)
+      const nuevoSaldoPendiente = Math.max(0, nuevoTotal - (selectedPedido.totalAbonado || 0));
       batch.update(pedidoRef, {
         items: updatedItems,
         total: nuevoTotal,
+        saldoPendiente: nuevoSaldoPendiente,
         updatedAt: serverTimestamp()
       });
 
@@ -1761,12 +1815,18 @@ const Pedidos = () => {
       const tieneAbonos = totalAbonado > 0;
 
       if (tieneAbonos) {
+        // Determinar método de pago del último abono para la restauración
+        const abonosRestauracion = selectedPedido.abonos || [];
+        const metodoRestauracion = abonosRestauracion.length > 0
+          ? (abonosRestauracion[abonosRestauracion.length - 1].metodoPago || 'Efectivo')
+          : 'Efectivo';
+
         const diferenciaTotal = itemToRestaurar.subtotal;
         const transactionRef = doc(collection(db, 'transactions'));
         batch.set(transactionRef, {
           tipo: 'restauracion_pedido',
           monto: diferenciaTotal, // POSITIVO - representa reversión de ajuste
-          metodoPago: 'Ajuste',
+          metodoPago: metodoRestauracion,
           pedidoId: selectedPedido.id,
           numeroPedido: selectedPedido.numeroPedido,
           descripcion: `Restauración producto en Pedido #${selectedPedido.numeroPedido}: ${itemToRestaurar.nombre}`,
@@ -1994,7 +2054,7 @@ const Pedidos = () => {
         .filter(item => !item.anulado && item.estadoItem !== 'Cambio de Talla')
         .reduce((sum, item) => sum + item.subtotal, 0);
 
-      const nuevoSaldoPendiente = nuevoTotal - (selectedPedido.totalAbonado || 0);
+      const nuevoSaldoPendiente = Math.max(0, nuevoTotal - (selectedPedido.totalAbonado || 0));
 
       // Actualizar inventario
       // 1. Liberar el producto anterior
@@ -2520,24 +2580,60 @@ const Pedidos = () => {
         });
       });
 
-      // 4. Crear registro de egreso si había abonos (devolver dinero al cliente)
+      // 4. Crear registro(s) de egreso si había abonos (devolver dinero al cliente)
       if (totalAbonado > 0) {
-        const egresoRef = doc(collection(db, 'transactions'));
-        batch.set(egresoRef, {
-          tipo: 'egreso',
-          monto: -totalAbonado, // NEGATIVO porque es dinero que sale de caja
-          metodoPago: 'Efectivo',
-          categoria: 'Devolución',
-          pedidoId: selectedPedido.id,
-          numeroPedido: selectedPedido.numeroPedido,
-          descripcion: `Devolución por anulación Pedido #${selectedPedido.numeroPedido}`,
-          concepto: `Devolución por anulación Pedido #${selectedPedido.numeroPedido}`,
-          motivo: motivoAnularPedido,
-          clienteId: selectedPedido.clienteId,
-          clienteNombre: selectedPedido.clienteNombre,
-          fecha: serverTimestamp(),
-          userId: currentUser?.uid
+        const abonos = selectedPedido.abonos || [];
+
+        // Agrupar abonos por método de pago
+        const abonosPorMetodo = {};
+        abonos.forEach(abono => {
+          const metodo = abono.metodoPago || 'Efectivo';
+          if (!abonosPorMetodo[metodo]) abonosPorMetodo[metodo] = 0;
+          abonosPorMetodo[metodo] += abono.monto;
         });
+
+        const metodos = Object.keys(abonosPorMetodo);
+
+        if (metodos.length === 0) {
+          // Fallback: si no hay array de abonos, crear egreso único con Efectivo
+          const egresoRef = doc(collection(db, 'transactions'));
+          batch.set(egresoRef, {
+            tipo: 'egreso',
+            monto: -totalAbonado,
+            metodoPago: 'Efectivo',
+            categoria: 'Devolución',
+            pedidoId: selectedPedido.id,
+            numeroPedido: selectedPedido.numeroPedido,
+            descripcion: `Devolución por anulación Pedido #${selectedPedido.numeroPedido}`,
+            concepto: `Devolución por anulación Pedido #${selectedPedido.numeroPedido}`,
+            motivo: motivoAnularPedido,
+            clienteId: selectedPedido.clienteId,
+            clienteNombre: selectedPedido.clienteNombre,
+            fecha: serverTimestamp(),
+            userId: currentUser?.uid
+          });
+        } else {
+          // Crear un egreso por cada método de pago usado
+          for (const metodo of metodos) {
+            const montoMetodo = abonosPorMetodo[metodo];
+            const egresoRef = doc(collection(db, 'transactions'));
+            batch.set(egresoRef, {
+              tipo: 'egreso',
+              monto: -montoMetodo,
+              metodoPago: metodo,
+              categoria: 'Devolución',
+              pedidoId: selectedPedido.id,
+              numeroPedido: selectedPedido.numeroPedido,
+              descripcion: `Devolución por anulación Pedido #${selectedPedido.numeroPedido} (${metodo})`,
+              concepto: `Devolución por anulación Pedido #${selectedPedido.numeroPedido}`,
+              motivo: motivoAnularPedido,
+              clienteId: selectedPedido.clienteId,
+              clienteNombre: selectedPedido.clienteNombre,
+              fecha: serverTimestamp(),
+              userId: currentUser?.uid
+            });
+          }
+        }
       }
 
       await batch.commit();
@@ -2547,7 +2643,21 @@ const Pedidos = () => {
       mensaje += `• Productos liberados: ${itemsActivos.length}`;
 
       if (totalAbonado > 0) {
+        const abonos = selectedPedido.abonos || [];
+        const abonosPorMetodo = {};
+        abonos.forEach(abono => {
+          const metodo = abono.metodoPago || 'Efectivo';
+          if (!abonosPorMetodo[metodo]) abonosPorMetodo[metodo] = 0;
+          abonosPorMetodo[metodo] += abono.monto;
+        });
+        const detalleMetodos = Object.entries(abonosPorMetodo)
+          .map(([metodo, monto]) => `  • ${metodo}: $${monto.toLocaleString('es-CO')}`)
+          .join('\n');
+
         mensaje += `\n\n⚠️ IMPORTANTE:\nDebes devolver $${totalAbonado.toLocaleString('es-CO')} al cliente.`;
+        if (detalleMetodos) {
+          mensaje += `\nDesglose por método:\n${detalleMetodos}`;
+        }
       }
 
       alert(mensaje);
@@ -3277,8 +3387,23 @@ const Pedidos = () => {
                     <option value="Daviplata">Daviplata</option>
                     <option value="Nu">Nu</option>
                     <option value="Tarjeta">Tarjeta</option>
+                    <option value="Cruce de saldo">Cruce de saldo</option>
                   </select>
                 </div>
+                {metodoPago === 'Cruce de saldo' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Factura/Pedido de origen
+                    </label>
+                    <input
+                      type="text"
+                      value={referenciaOrigen}
+                      onChange={(e) => setReferenciaOrigen(e.target.value)}
+                      placeholder="Ej: Factura #152, Pedido #0405"
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Observaciones */}
@@ -3675,8 +3800,23 @@ const Pedidos = () => {
                               <option value="Daviplata">Daviplata</option>
                               <option value="Nu">Nu</option>
                               <option value="Tarjeta">Tarjeta</option>
+                              <option value="Cruce de saldo">Cruce de saldo</option>
                             </select>
                           </div>
+                          {nuevoMetodoPago === 'Cruce de saldo' && (
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-1">
+                                Factura/Pedido de origen
+                              </label>
+                              <input
+                                type="text"
+                                value={referenciaOrigen}
+                                onChange={(e) => setReferenciaOrigen(e.target.value)}
+                                placeholder="Ej: Factura #152, Pedido #0405"
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                              />
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
@@ -3751,8 +3891,23 @@ const Pedidos = () => {
                         <option value="Daviplata">Daviplata</option>
                         <option value="Nu">Nu</option>
                         <option value="Tarjeta">Tarjeta</option>
+                        <option value="Cruce de saldo">Cruce de saldo</option>
                       </select>
                     </div>
+                    {abonoAdicionalMetodo === 'Cruce de saldo' && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Factura/Pedido de origen
+                        </label>
+                        <input
+                          type="text"
+                          value={referenciaOrigen}
+                          onChange={(e) => setReferenciaOrigen(e.target.value)}
+                          placeholder="Ej: Factura #152, Pedido #0405"
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <button
@@ -4922,6 +5077,7 @@ const Pedidos = () => {
                 <option value="Nu">Nu</option>
                 <option value="Tarjeta">Tarjeta</option>
                 <option value="Transferencia">Transferencia</option>
+                <option value="Cruce de saldo">Cruce de saldo</option>
                 <option value="Mixto">Mixto</option>
               </select>
             </div>

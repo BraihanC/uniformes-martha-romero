@@ -27,12 +27,16 @@ const ReporteCorte = () => {
   const [csvData, setCsvData] = useState([]); // Datos para el CSV
 
   // Estados para los filtros
-  // Opciones: 'En Producción', 'Parcialmente Listo', 'Listo para Entrega', 'Todos los Pendientes', 'Todos'
+  // Opciones: 'En Producción', 'Parcialmente Listo', 'Listo para Entrega', 'Todos los Pendientes', 'Cambios de Talla', 'Todos'
   const [filtroEstado, setFiltroEstado] = useState('Todos los Pendientes');
 
   // Filtros de búsqueda
   const [searchPrenda, setSearchPrenda] = useState('');
   const [searchColegio, setSearchColegio] = useState('');
+
+  // Paginación
+  const [paginaActual, setPaginaActual] = useState(1);
+  const itemsPorPagina = 20;
   const [searchTalla, setSearchTalla] = useState('');
   const [searchReferencia, setSearchReferencia] = useState('');
   const [soloCAmbiosTalla, setSoloCambiosTalla] = useState(false);
@@ -100,13 +104,18 @@ const ReporteCorte = () => {
             !item.anulado && item.estadoItem === 'Listo para Entrega'
           );
         } else if (filtroEstado === 'Todos los Pendientes') {
-          // Todo lo que NO esté entregado
+          // Todo lo que NO esté entregado ni sea un cambio de talla (item viejo)
           itemsParaCorte = pedido.items.filter(item =>
-            !item.anulado && item.estadoItem !== 'Entregado'
+            !item.anulado && item.estadoItem !== 'Entregado' && item.estadoItem !== 'Cambio de Talla'
+          );
+        } else if (filtroEstado === 'Cambios de Talla') {
+          // Solo items nuevos que se originaron de un cambio de talla
+          itemsParaCorte = pedido.items.filter(item =>
+            !item.anulado && item.estadoItem !== 'Cambio de Talla' && item.origenCambioTalla
           );
         } else {
-          // 'Todos' - Incluir todo (incluso entregados)
-          itemsParaCorte = pedido.items.filter(item => !item.anulado);
+          // 'Todos' - Incluir todo (incluso entregados) excepto cambios de talla (items viejos)
+          itemsParaCorte = pedido.items.filter(item => !item.anulado && item.estadoItem !== 'Cambio de Talla');
         }
 
         itemsParaCorte.forEach(item => {
@@ -141,8 +150,8 @@ const ReporteCorte = () => {
             detalleEstado = ` (${cantidadLista} listas, ${cantidadPendiente} pendientes)`;
           }
 
-          // Verificar si es un cambio de talla (por origenCambioTalla o fechaSolicitud)
-          const esCambioTalla = !!(item.origenCambioTalla || item.fechaSolicitud);
+          // Verificar si es un cambio de talla (solo si tiene origenCambioTalla)
+          const esCambioTalla = !!item.origenCambioTalla;
 
           itemsAplanados.push({
             colegio: colegioNombre,
@@ -156,7 +165,8 @@ const ReporteCorte = () => {
             tallaAnterior: item.tallaAnterior || null,
             observaciones: pedido.observaciones || '',
             pedidoNum: pedido.numeroPedido || 'N/A',
-            clienteNombre: pedido.clienteNombre || 'Sin nombre'
+            clienteNombre: pedido.clienteNombre || 'Sin nombre',
+            fechaSolicitud: item.fechaSolicitud || (pedido.createdAt?.toDate ? pedido.createdAt.toDate().toISOString() : new Date().toISOString())
           });
         });
       });
@@ -183,7 +193,8 @@ const ReporteCorte = () => {
             detallesEstado: [],
             esCambioTalla: item.esCambioTalla,
             tallasAnteriores: new Set(),
-            cantidadCambiosTalla: 0
+            cantidadCambiosTalla: 0,
+            fechaSolicitudMasAntigua: item.fechaSolicitud
           };
         }
 
@@ -202,6 +213,10 @@ const ReporteCorte = () => {
             acc[key].tallasAnteriores.add(item.tallaAnterior);
           }
         }
+        // Actualizar fecha más antigua
+        if (item.fechaSolicitud < acc[key].fechaSolicitudMasAntigua) {
+          acc[key].fechaSolicitudMasAntigua = item.fechaSolicitud;
+        }
 
         return acc;
       }, {});
@@ -217,8 +232,14 @@ const ReporteCorte = () => {
         tallasAnterioresString: Array.from(g.tallasAnteriores).join(', ')
       }));
 
-      // Ordenar por colegio y luego por prenda
+      // Ordenar por fecha de solicitud (más antigua primero), luego por colegio y prenda
       reporteFinal.sort((a, b) => {
+        // Primero por fecha (más antigua primero = orden de llegada)
+        const fechaA = new Date(a.fechaSolicitudMasAntigua);
+        const fechaB = new Date(b.fechaSolicitudMasAntigua);
+        if (fechaA < fechaB) return -1;
+        if (fechaA > fechaB) return 1;
+        // Si tienen la misma fecha, ordenar por colegio, prenda, talla
         if (a.colegio < b.colegio) return -1;
         if (a.colegio > b.colegio) return 1;
         if (a.prenda < b.prenda) return -1;
@@ -232,6 +253,7 @@ const ReporteCorte = () => {
 
       // 7. Preparar datos para CSV (con formato simple)
       const dataParaCsv = reporteFinal.map(r => ({
+        FECHA: r.fechaSolicitudMasAntigua ? new Date(r.fechaSolicitudMasAntigua).toLocaleDateString('es-CO', { year: 'numeric', month: '2-digit', day: '2-digit' }) : 'N/A',
         COLEGIO: r.colegio,
         PRENDA: r.prenda,
         TALLA: r.talla,
@@ -271,6 +293,17 @@ const ReporteCorte = () => {
   // Calcular total de cambios de talla
   const totalCambiosTalla = filteredReportData.filter(item => item.esCambioTalla).reduce((sum, item) => sum + item.cantidadTotal, 0);
   const filasCambiosTalla = filteredReportData.filter(item => item.esCambioTalla).length;
+
+  // Paginación
+  const totalPaginas = Math.ceil(filteredReportData.length / itemsPorPagina);
+  const indiceInicio = (paginaActual - 1) * itemsPorPagina;
+  const indiceFin = indiceInicio + itemsPorPagina;
+  const datosPaginados = filteredReportData.slice(indiceInicio, indiceFin);
+
+  // Resetear página cuando cambian los filtros
+  useEffect(() => {
+    setPaginaActual(1);
+  }, [searchPrenda, searchColegio, searchTalla, searchReferencia, soloCAmbiosTalla, filtroEstado]);
 
   const handlePrint = () => {
     window.print();
@@ -366,6 +399,7 @@ const ReporteCorte = () => {
               <option value="En Producción">🔧 En Producción</option>
               <option value="Parcialmente Listo">⏳ Parcialmente Listo</option>
               <option value="Listo para Entrega">✅ Listo para Entrega</option>
+              <option value="Cambios de Talla">🔄 Solo Cambios de Talla</option>
               <option value="Todos">📋 Todos (Incluir Entregados)</option>
             </select>
           </div>
@@ -547,7 +581,7 @@ const ReporteCorte = () => {
 
             {/* Vista de Tarjetas - Solo Móvil */}
             <div className="md:hidden divide-y divide-gray-200">
-              {filteredReportData.map((item, index) => (
+              {datosPaginados.map((item, index) => (
                 <div key={index} className={`p-4 ${item.esCambioTalla ? 'bg-purple-50 border-l-4 border-purple-500' : ''}`}>
                   <div className="flex justify-between items-start mb-2">
                     <div className="flex-1">
@@ -597,6 +631,7 @@ const ReporteCorte = () => {
               <table className="w-full">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Fecha</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Colegio</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Prenda</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Talla</th>
@@ -608,8 +643,13 @@ const ReporteCorte = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {filteredReportData.map((item, index) => (
+                  {datosPaginados.map((item, index) => (
                     <tr key={index} className={`hover:bg-gray-50 ${item.esCambioTalla ? 'bg-purple-50' : ''}`}>
+                      <td className="px-3 py-2 text-sm text-gray-600 whitespace-nowrap">
+                        {item.fechaSolicitudMasAntigua
+                          ? new Date(item.fechaSolicitudMasAntigua).toLocaleDateString('es-CO', { year: 'numeric', month: '2-digit', day: '2-digit' })
+                          : 'N/A'}
+                      </td>
                       <td className="px-3 py-2 text-sm font-medium text-gray-800 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           {item.colegio}
@@ -663,6 +703,34 @@ const ReporteCorte = () => {
                 </tbody>
               </table>
             </div>
+
+            {/* Paginación */}
+            {totalPaginas > 1 && (
+              <div className="px-4 py-4 border-t border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-3 no-print">
+                <div className="text-sm text-gray-600">
+                  Mostrando {indiceInicio + 1} - {Math.min(indiceFin, filteredReportData.length)} de {filteredReportData.length} items
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setPaginaActual(prev => Math.max(prev - 1, 1))}
+                    disabled={paginaActual === 1}
+                    className="px-3 py-1 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  >
+                    ← Anterior
+                  </button>
+                  <span className="text-sm text-gray-600">
+                    Pág. {paginaActual} de {totalPaginas}
+                  </span>
+                  <button
+                    onClick={() => setPaginaActual(prev => Math.min(prev + 1, totalPaginas))}
+                    disabled={paginaActual === totalPaginas}
+                    className="px-3 py-1 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  >
+                    Siguiente →
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -679,6 +747,11 @@ const ReporteCorte = () => {
           /* Ocultar todo excepto el reporte */
           body * {
             visibility: hidden;
+          }
+
+          /* Ocultar paginación en impresión */
+          .no-print {
+            display: none !important;
           }
 
           #reporte-corte-print,

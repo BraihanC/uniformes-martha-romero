@@ -57,6 +57,7 @@ const Devoluciones = () => {
   // Estados de devolución
   const [metodoDevolucion, setMetodoDevolucion] = useState('Efectivo');
   const [notasDevolucion, setNotasDevolucion] = useState('');
+  const [referenciaOrigen, setReferenciaOrigen] = useState('');
 
   // Estados de cambio
   const [searchProducto, setSearchProducto] = useState('');
@@ -174,6 +175,7 @@ const Devoluciones = () => {
           ...snapshot.docs[0].data()
         };
         setFacturaEncontrada(factura);
+        setMetodoDevolucion(factura.metodoPago && factura.metodoPago !== 'Mixto' ? factura.metodoPago : 'Efectivo');
         setFacturasEncontradas([]);
         setItemsSeleccionados([]);
         setRazones({});
@@ -190,6 +192,7 @@ const Devoluciones = () => {
   // Seleccionar factura específica cuando hay duplicados
   const handleSeleccionarFactura = (factura) => {
     setFacturaEncontrada(factura);
+    setMetodoDevolucion(factura.metodoPago && factura.metodoPago !== 'Mixto' ? factura.metodoPago : 'Efectivo');
     setShowSeleccionFactura(false);
     setFacturasEncontradas([]);
     setItemsSeleccionados([]);
@@ -355,6 +358,7 @@ const Devoluciones = () => {
         itemsDevueltos: itemsDevueltos,
         montoDevuelto: calcularMontoDevolucion(),
         metodoDevolucion: metodoDevolucion,
+        ...(metodoDevolucion === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {}),
         notas: notasDevolucion,
         userId: currentUser.uid,
         createdAt: serverTimestamp()
@@ -384,6 +388,7 @@ const Devoluciones = () => {
         tipo: 'devolucion',
         monto: -montoDevuelto, // ¡Importante! Monto negativo
         metodoPago: metodoDevolucion,
+        ...(metodoDevolucion === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {}),
         devolucionId: devolucionRef.id,
         ventaId: facturaEncontrada.id,
         numeroFactura: facturaEncontrada.numeroFactura,
@@ -670,6 +675,7 @@ const Devoluciones = () => {
         tipoDiferencia: tipoDiferencia,
         metodoPagoDiferencia: diferencia > 0 ? metodoPagoDiferencia : null,
         metodoDevolucionDiferencia: diferencia < 0 ? metodoPagoDiferencia : null,
+        ...(metodoPagoDiferencia === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {}),
         notas: notasCambio,
         userId: currentUser.uid,
         createdAt: serverTimestamp()
@@ -699,6 +705,7 @@ const Devoluciones = () => {
           tipo: diferencia > 0 ? 'cambio_ingreso' : 'cambio_egreso',
           monto: diferencia, // Positivo si cliente paga, negativo si cliente recibe
           metodoPago: metodoPagoDiferencia,
+          ...(metodoPagoDiferencia === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {}),
           cambioId: cambioRef.id,
           ventaId: facturaEncontrada.id,
           numeroFactura: facturaEncontrada.numeroFactura,
@@ -765,6 +772,8 @@ const Devoluciones = () => {
     setCantidadesDevueltas({});
     setProductosNuevos([]);
     setMetodoDevolucion('Efectivo');
+    setMetodoPagoDiferencia('Efectivo');
+    setReferenciaOrigen('');
     setNotasDevolucion('');
     setNotasCambio('');
     setSearchProducto('');
@@ -1353,8 +1362,25 @@ const Devoluciones = () => {
                     <option value="Daviplata">Daviplata</option>
                     <option value="Nu">Nu</option>
                     <option value="Tarjeta">Tarjeta</option>
+                    <option value="Cruce de saldo">Cruce de saldo</option>
                   </select>
                 </div>
+
+                {/* Campo referencia origen para Cruce de saldo */}
+                {metodoDevolucion === 'Cruce de saldo' && (
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Factura/Pedido de destino (opcional)
+                    </label>
+                    <input
+                      type="text"
+                      value={referenciaOrigen}
+                      onChange={(e) => setReferenciaOrigen(e.target.value)}
+                      placeholder="Ej: Pedido #0045, Apartado #012"
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
+                    />
+                  </div>
+                )}
 
                 {/* Notas */}
                 <div>
@@ -1641,7 +1667,24 @@ const Devoluciones = () => {
                           <option value="Daviplata">Daviplata</option>
                           <option value="Nu">Nu</option>
                           <option value="Tarjeta">Tarjeta</option>
+                          <option value="Cruce de saldo">Cruce de saldo</option>
                         </select>
+                      </div>
+                    )}
+
+                    {/* Campo referencia origen para Cruce de saldo en cambio */}
+                    {calcularDiferencia() !== 0 && metodoPagoDiferencia === 'Cruce de saldo' && (
+                      <div className="mt-4">
+                        <label className="block text-sm font-semibold text-gray-700 mb-2">
+                          Factura/Pedido de destino (opcional)
+                        </label>
+                        <input
+                          type="text"
+                          value={referenciaOrigen}
+                          onChange={(e) => setReferenciaOrigen(e.target.value)}
+                          placeholder="Ej: Pedido #0045, Apartado #012"
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
                       </div>
                     )}
                   </div>

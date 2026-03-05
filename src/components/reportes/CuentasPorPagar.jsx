@@ -516,13 +516,19 @@ ${entrada.asignaciones.map(asig =>
                 const pedidoData = pedidoSnap.data();
                 const productosActualizados = [...pedidoData.productos];
 
-                // Revertir cantidad alistada y estado
+                // Revertir cantidad alistada y estado — actualizar los 3 campos
                 if (productosActualizados[asig.itemIndex]) {
                   const producto = productosActualizados[asig.itemIndex];
+                  const cantidadEnviadaProd = producto.cantidadEnviada || 0;
+                  const nuevaAlistadaActual = Math.max(0, (producto.cantidadAlistadaActual ?? Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviadaProd)) - asig.cantidad);
+                  const nuevaAlistadaTotal = Math.max(0, (producto.cantidadAlistadaTotal ?? (producto.cantidadAlistada || 0)) - asig.cantidad);
+                  const totalPreparado = nuevaAlistadaActual + cantidadEnviadaProd;
                   productosActualizados[asig.itemIndex] = {
                     ...producto,
-                    cantidadAlistada: Math.max(0, (producto.cantidadAlistada || 0) - asig.cantidad),
-                    estadoProduccion: 'en_produccion',
+                    cantidadAlistadaActual: nuevaAlistadaActual,
+                    cantidadAlistadaTotal: nuevaAlistadaTotal,
+                    cantidadAlistada: totalPreparado, // compat
+                    estadoProduccion: totalPreparado >= producto.cantidad ? 'alistado' : 'en_produccion',
                     fechaAlistado: null
                   };
 

@@ -8,7 +8,9 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "clean-db": "node cleanDatabase.js"
+    "clean-db": "node cleanDatabase.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "firebase": "^12.4.0",
@@ -39,6 +41,7 @@
     "tailwindcss": "^4.1.15",
     "vite": "^7.1.7",
     "vite-plugin-pwa": "^1.2.0",
+    "vitest": "^4.0.18",
     "workbox-window": "^7.4.0"
   }
 }

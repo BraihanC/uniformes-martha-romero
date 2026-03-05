@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { db } from '../services/firebase';
 import { collection, getDocs, doc, updateDoc, serverTimestamp, query, orderBy, addDoc, where, limit, getDoc, getDocFromServer, writeBatch, increment, runTransaction, Timestamp, arrayUnion } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
-import { Package, CheckCircle, Eye, Calendar, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer, Loader2, DollarSign } from 'lucide-react';
+import { Package, CheckCircle, Eye, Calendar, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer, Loader2, DollarSign, Plus } from 'lucide-react';
 import jsPDF from 'jspdf';
 
 const PedidosB2B = () => {
@@ -44,11 +44,15 @@ const PedidosB2B = () => {
   const [alistandoProducto, setAlistandoProducto] = useState(false);
   const [enviandoProductos, setEnviandoProductos] = useState(false);
 
+  // Estados para anulación
+  const [anulandoPedido, setAnulandoPedido] = useState(false);
+
   // Estados para modal de abono
   const [showAbonoModal, setShowAbonoModal] = useState(false);
   const [pedidoAbono, setPedidoAbono] = useState(null);
   const [montoAbono, setMontoAbono] = useState('');
   const [notasAbono, setNotasAbono] = useState('');
+  const [metodoPagoAbono, setMetodoPagoAbono] = useState('Transferencia');
   const [registrandoAbono, setRegistrandoAbono] = useState(false);
 
   useEffect(() => {
@@ -84,18 +88,6 @@ const PedidosB2B = () => {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
     }).format(amount);
-  };
-
-  const formatDate = (timestamp) => {
-    if (!timestamp) return 'N/A';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return new Intl.DateTimeFormat('es-CO', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }).format(date);
   };
 
   const formatDateShort = (timestamp) => {
@@ -139,6 +131,45 @@ const PedidosB2B = () => {
     return total - abonado;
   };
 
+  // Helper: obtiene la cantidad alistada para el envío ACTUAL (no acumulada)
+  // Compatible con pedidos viejos que solo tienen cantidadAlistada (acumulativa)
+  const getAlistadaActual = (producto) => {
+    let valor;
+    if (producto.cantidadAlistadaActual !== undefined) {
+      valor = producto.cantidadAlistadaActual;
+    } else {
+      valor = Math.max(0, (producto.cantidadAlistada || 0) - (producto.cantidadEnviada || 0));
+    }
+    // Cap: nunca más que pendientes + reposición por discrepancia
+    if (producto.cantidad !== undefined) {
+      const cantidadEnviada = producto.cantidadEnviada || 0;
+      let maxPosible = Math.max(0, producto.cantidad - cantidadEnviada);
+      // Si hay discrepancia, permitir alistamiento extra para reponer
+      const cantidadRecibida = producto.cantidadRecibida || 0;
+      if (cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada && cantidadRecibida < producto.cantidad) {
+        maxPosible += (cantidadEnviada - cantidadRecibida);
+      }
+      return Math.min(valor, maxPosible);
+    }
+    return valor;
+  };
+
+  // Calcula cuántas unidades se pueden alistar para ESTE envío:
+  // pendientes originales (no enviadas ni alistadas) + reposición por discrepancias
+  const calcularMaxAlistar = (producto) => {
+    const cantidadEnviada = producto.cantidadEnviada || 0;
+    const cantidadRecibida = producto.cantidadRecibida || 0;
+    const alistadaActual = getAlistadaActual(producto);
+    const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada && cantidadRecibida < producto.cantidad;
+    const pendientesOriginal = Math.max(0, producto.cantidad - cantidadEnviada - alistadaActual);
+    const discrepanciaTotal = hayDiscrepancia
+      ? cantidadEnviada - cantidadRecibida
+      : 0;
+    const alistadaSobrante = Math.max(0, alistadaActual - Math.max(0, producto.cantidad - cantidadEnviada));
+    const pendientesPorDiscrepancia = Math.max(0, discrepanciaTotal - alistadaSobrante);
+    return pendientesOriginal + pendientesPorDiscrepancia;
+  };
+
   // Abrir modal de abono
   const abrirModalAbono = (pedido) => {
     setPedidoAbono(pedido);
@@ -170,6 +201,7 @@ const PedidosB2B = () => {
       const nuevoAbono = {
         monto: monto,
         fecha: Timestamp.now(),
+        metodoPago: metodoPagoAbono,
         registradoPor: user?.displayName || user?.email || 'Administrador',
         notas: notasAbono.trim()
       };
@@ -190,7 +222,7 @@ const PedidosB2B = () => {
         numeroPedido: pedidoAbono.numeroPedido || 0,
         clienteNombre: pedidoAbono.clienteNombre || '',
         codigoColegio: pedidoAbono.codigoColegio || '',
-        metodoPago: 'No especificado',
+        metodoPago: metodoPagoAbono,
         referencia: '',
         notas: notasAbono.trim(),
         totalPedido: totalPedido,
@@ -203,6 +235,7 @@ const PedidosB2B = () => {
       setShowAbonoModal(false);
       setMontoAbono('');
       setNotasAbono('');
+      setMetodoPagoAbono('Transferencia');
       setPedidoAbono(null);
       fetchPedidos(); // Recargar pedidos
     } catch (error) {
@@ -210,6 +243,139 @@ const PedidosB2B = () => {
       alert('Error al registrar abono: ' + error.message);
     } finally {
       setRegistrandoAbono(false);
+    }
+  };
+
+  // Anular pedido B2B completo
+  const handleAnularPedidoB2B = async (pedido) => {
+    const totalAbonado = calcularTotalAbonado(pedido.abonos);
+
+    const confirmar = window.confirm(
+      `⚠️ ANULAR PEDIDO B2B\n\n` +
+      `¿Estás seguro de anular este pedido?\n\n` +
+      `Cliente: ${pedido.clienteNombre}\n` +
+      `Pedido: #${String(pedido.numeroPedido || 0).padStart(4, '0')}\n` +
+      `Total: ${formatCurrency(obtenerTotalPedido(pedido))}\n` +
+      `Abonado: ${formatCurrency(totalAbonado)}\n\n` +
+      (totalAbonado > 0
+        ? `⚠️ Se registrará la devolución de ${formatCurrency(totalAbonado)} al cliente.`
+        : `No hay abonos registrados.`)
+    );
+
+    if (!confirmar) return;
+
+    setAnulandoPedido(true);
+    try {
+      const batch = writeBatch(db);
+
+      // 1. Marcar pedido como anulado
+      const pedidoRef = doc(db, 'pedidos_b2b', pedido.id);
+      batch.update(pedidoRef, {
+        estado: 'Anulado',
+        anulado: true,
+        fechaAnulacion: serverTimestamp(),
+        anuladoPor: user?.displayName || user?.email || 'Administrador',
+        updatedAt: serverTimestamp()
+      });
+
+      // 2. Anular transacciones B2B asociadas
+      const transQuery = query(
+        collection(db, 'transactions_b2b'),
+        where('pedidoB2BId', '==', pedido.id)
+      );
+      const transSnap = await getDocs(transQuery);
+
+      transSnap.docs.forEach(transDoc => {
+        batch.update(transDoc.ref, {
+          anulada: true,
+          fechaAnulacion: serverTimestamp(),
+          motivoAnulacion: `Pedido B2B #${String(pedido.numeroPedido || 0).padStart(4, '0')} anulado`
+        });
+      });
+
+      // 3. Crear egresos por devolución de abonos (en transactions_b2b)
+      if (totalAbonado > 0) {
+        const abonos = pedido.abonos || [];
+
+        // Agrupar por método de pago
+        const abonosPorMetodo = {};
+        abonos.forEach(abono => {
+          const metodo = abono.metodoPago || 'No especificado';
+          if (!abonosPorMetodo[metodo]) abonosPorMetodo[metodo] = 0;
+          abonosPorMetodo[metodo] += abono.monto;
+        });
+
+        const metodos = Object.keys(abonosPorMetodo);
+
+        if (metodos.length === 0) {
+          const egresoRef = doc(collection(db, 'transactions_b2b'));
+          batch.set(egresoRef, {
+            tipo: 'egreso_anulacion_b2b',
+            monto: -totalAbonado,
+            metodoPago: 'No especificado',
+            pedidoB2BId: pedido.id,
+            numeroPedido: pedido.numeroPedido || 0,
+            clienteNombre: pedido.clienteNombre || '',
+            codigoColegio: pedido.codigoColegio || '',
+            descripcion: `Devolución por anulación Pedido B2B #${String(pedido.numeroPedido || 0).padStart(4, '0')}`,
+            fecha: serverTimestamp(),
+            createdAt: serverTimestamp(),
+            createdBy: user?.displayName || user?.email || 'Administrador'
+          });
+        } else {
+          for (const metodo of metodos) {
+            const montoMetodo = abonosPorMetodo[metodo];
+            const egresoRef = doc(collection(db, 'transactions_b2b'));
+            batch.set(egresoRef, {
+              tipo: 'egreso_anulacion_b2b',
+              monto: -montoMetodo,
+              metodoPago: metodo,
+              pedidoB2BId: pedido.id,
+              numeroPedido: pedido.numeroPedido || 0,
+              clienteNombre: pedido.clienteNombre || '',
+              codigoColegio: pedido.codigoColegio || '',
+              descripcion: `Devolución por anulación Pedido B2B #${String(pedido.numeroPedido || 0).padStart(4, '0')} (${metodo})`,
+              fecha: serverTimestamp(),
+              createdAt: serverTimestamp(),
+              createdBy: user?.displayName || user?.email || 'Administrador'
+            });
+          }
+        }
+      }
+
+      // 4. Liberar stockReservadoB2B de productos alistados que no fueron enviados
+      for (const p of (pedido.productos || [])) {
+        if (p.anulado) continue;
+        const reservaPendiente = getAlistadaActual(p);
+        if (reservaPendiente > 0) {
+          const productoEncontrado = await buscarProductoEnInventario(p.productoId, p.codigo, p.talla);
+          if (productoEncontrado) {
+            const productRef = doc(db, 'products', productoEncontrado.id);
+            batch.update(productRef, {
+              stockReservadoB2B: increment(-reservaPendiente),
+              updatedAt: serverTimestamp()
+            });
+          }
+        }
+      }
+
+      await batch.commit();
+
+      let mensaje = `Pedido B2B #${String(pedido.numeroPedido || 0).padStart(4, '0')} anulado exitosamente.\n\n`;
+      mensaje += `• Transacciones anuladas: ${transSnap.size}`;
+      if (totalAbonado > 0) {
+        mensaje += `\n\n⚠️ IMPORTANTE: Debes devolver ${formatCurrency(totalAbonado)} al cliente.`;
+      }
+      alert(mensaje);
+
+      setShowDetalleModal(false);
+      setSelectedPedido(null);
+      fetchPedidos();
+    } catch (error) {
+      console.error('Error al anular pedido B2B:', error);
+      alert('Error al anular pedido: ' + error.message);
+    } finally {
+      setAnulandoPedido(false);
     }
   };
 
@@ -251,7 +417,7 @@ const PedidosB2B = () => {
       const tieneDiscrepancia = pedido.productos?.some(producto => {
         const cantidadRecibida = producto.cantidadRecibida || 0;
         const cantidadEnviada = producto.cantidadEnviada || 0;
-        return cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+        return cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada && cantidadRecibida < (producto.cantidad || 0);
       });
       if (!tieneDiscrepancia) {
         return false;
@@ -261,13 +427,15 @@ const PedidosB2B = () => {
     if (filtroEspecial === 'pendientes') {
       const tienePendientes = pedido.productos?.some(producto => {
         const cantidadPedida = producto.cantidad || 0;
-        const cantidadAlistada = producto.cantidadAlistada || 0;
         const cantidadEnviada = producto.cantidadEnviada || 0;
+        const alistadaActual = getAlistadaActual(producto);
         const cantidadRecibida = producto.cantidadRecibida || 0;
-        const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+        const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada && cantidadRecibida < cantidadPedida;
 
-        const pendientesOriginal = Math.max(0, cantidadPedida - cantidadAlistada);
-        const pendientesPorDiscrepancia = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+        const pendientesOriginal = Math.max(0, cantidadPedida - cantidadEnviada - alistadaActual);
+        const discrepanciaTotal = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+        const alistadaSobrante = Math.max(0, alistadaActual - Math.max(0, cantidadPedida - cantidadEnviada));
+        const pendientesPorDiscrepancia = Math.max(0, discrepanciaTotal - alistadaSobrante);
 
         return (pendientesOriginal + pendientesPorDiscrepancia) > 0;
       });
@@ -292,28 +460,43 @@ const PedidosB2B = () => {
 
   // Función auxiliar para buscar producto en inventario por ID o referencia
   const buscarProductoEnInventario = async (productoId, codigo, talla) => {
-    // Primero intentar buscar por ID directo del documento
+    const tallaStr = String(talla || '');
+
+    // Primero intentar buscar por ID directo del documento (más confiable)
     if (productoId) {
       const productoDoc = await getDoc(doc(db, 'products', productoId));
       if (productoDoc.exists()) {
         const data = productoDoc.data();
-        if (data.talla === talla) {
+        // Comparar talla como string para evitar fallos por tipo (ej: '12' vs 12)
+        if (String(data.talla || '') === tallaStr) {
           return { id: productoDoc.id, ...data };
         }
       }
     }
 
-    // Si no se encontró por ID, buscar por referencia (codigo)
+    // Fallback: buscar por el campo 'referencia' usando el valor del codigo del pedido B2B
     if (codigo) {
-      const productosQuery = query(
+      const queryReferencia = query(
         collection(db, 'products'),
         where('referencia', '==', codigo)
       );
-      const productosSnapshot = await getDocs(productosQuery);
-
-      for (const docSnap of productosSnapshot.docs) {
+      const snapReferencia = await getDocs(queryReferencia);
+      for (const docSnap of snapReferencia.docs) {
         const data = docSnap.data();
-        if (data.talla === talla) {
+        if (String(data.talla || '') === tallaStr) {
+          return { id: docSnap.id, ...data };
+        }
+      }
+
+      // Segundo fallback: buscar por el campo 'codigo' (por si products.codigo !== products.referencia)
+      const queryCodigo = query(
+        collection(db, 'products'),
+        where('codigo', '==', codigo)
+      );
+      const snapCodigo = await getDocs(queryCodigo);
+      for (const docSnap of snapCodigo.docs) {
+        const data = docSnap.data();
+        if (String(data.talla || '') === tallaStr) {
           return { id: docSnap.id, ...data };
         }
       }
@@ -372,7 +555,7 @@ const PedidosB2B = () => {
 
   const handleAlistarProducto = async () => {
     const cantidad = parseInt(cantidadAlistar);
-    const cantidadPendiente = Math.max(0, productoAlistar.cantidad - (productoAlistar.cantidadAlistada || 0));
+    const cantidadPendiente = calcularMaxAlistar(productoAlistar);
 
     if (!cantidad || cantidad <= 0) {
       alert('Ingresa una cantidad válida');
@@ -423,10 +606,21 @@ const PedidosB2B = () => {
 
         // Función helper para limpiar un producto (evitar null y problemas de serialización)
         const limpiarProducto = (producto) => {
+          const cantidadEnviada = producto.cantidadEnviada || 0;
+          // Migración automática: si no tiene cantidadAlistadaActual, calcular desde campo viejo
+          const cantidadAlistadaActual = producto.cantidadAlistadaActual !== undefined
+            ? producto.cantidadAlistadaActual
+            : Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviada);
+          const cantidadAlistadaTotal = producto.cantidadAlistadaTotal !== undefined
+            ? producto.cantidadAlistadaTotal
+            : (producto.cantidadAlistada || 0);
+
           const limpio = {
             cantidad: producto.cantidad,
-            cantidadAlistada: producto.cantidadAlistada || 0,
-            cantidadEnviada: producto.cantidadEnviada || 0,
+            cantidadAlistadaActual: cantidadAlistadaActual,
+            cantidadAlistadaTotal: cantidadAlistadaTotal,
+            cantidadAlistada: cantidadAlistadaActual + cantidadEnviada, // compat
+            cantidadEnviada: cantidadEnviada,
             cantidadRecibida: producto.cantidadRecibida || 0,
             categoria: producto.categoria || '',
             codigo: producto.codigo || '',
@@ -439,6 +633,17 @@ const PedidosB2B = () => {
             tipo: producto.tipo || ''
           };
 
+          // Conservar anulado si existe
+          if (producto.anulado !== undefined) limpio.anulado = producto.anulado;
+
+          // Conservar historiales (NO borrar en cada alistado)
+          if (producto.historialRecepciones && producto.historialRecepciones.length > 0) {
+            limpio.historialRecepciones = producto.historialRecepciones;
+          }
+          if (producto.historialEnvios && producto.historialEnvios.length > 0) {
+            limpio.historialEnvios = producto.historialEnvios;
+          }
+
           // Agregar fechas solo si existen (evitar null)
           if (producto.fechaAlistado) limpio.fechaAlistado = producto.fechaAlistado;
           if (producto.fechaEnvio) limpio.fechaEnvio = producto.fechaEnvio;
@@ -448,10 +653,17 @@ const PedidosB2B = () => {
           return limpio;
         };
 
+        // Leer el pedido fresco desde Firebase (no desde estado de React que puede ser viejo)
+        const pedidoDocFresco = await transaction.get(pedidoRef);
+        if (!pedidoDocFresco.exists()) {
+          throw new Error('El pedido ya no existe en la base de datos.');
+        }
+        const productosFrescos = pedidoDocFresco.data().productos || [];
+
         // Preparar actualización de productos del pedido B2B
         // IMPORTANTE: Buscar por identificadores únicos, NO por índice (el índice puede ser incorrecto si hay filtros activos)
         let productoEncontrado = false;
-        const productosActualizados = selectedPedido.productos.map((p) => {
+        const productosActualizados = productosFrescos.map((p) => {
           // Buscar por productoId+talla O por codigo+talla+descripcion
           const coincideProductoId = p.productoId && productoAlistar.productoId &&
                                      p.productoId === productoAlistar.productoId &&
@@ -465,16 +677,21 @@ const PedidosB2B = () => {
           if (esElProducto && !productoEncontrado) {
             // Solo actualizar el primer producto que coincida (evitar duplicados)
             productoEncontrado = true;
-            const nuevaCantidadAlistada = (p.cantidadAlistada || 0) + cantidad;
-            const nuevoEstado = nuevaCantidadAlistada >= p.cantidad ? 'alistado' : 'en_produccion';
-
-            // Actualizar el producto que se está alistando
             const productoActualizado = limpiarProducto(p);
-            productoActualizado.cantidadAlistada = nuevaCantidadAlistada;
+
+            // Incrementar alistamiento del ciclo actual y total histórico
+            const nuevaAlistadaActual = productoActualizado.cantidadAlistadaActual + cantidad;
+            const nuevaAlistadaTotal = productoActualizado.cantidadAlistadaTotal + cantidad;
+            const totalPreparado = nuevaAlistadaActual + (p.cantidadEnviada || 0);
+            const nuevoEstado = totalPreparado >= p.cantidad ? 'alistado' : 'en_produccion';
+
+            productoActualizado.cantidadAlistadaActual = nuevaAlistadaActual;
+            productoActualizado.cantidadAlistadaTotal = nuevaAlistadaTotal;
+            productoActualizado.cantidadAlistada = totalPreparado; // compat
             productoActualizado.estadoProduccion = nuevoEstado;
 
             // Actualizar fechaAlistado si se completa el alistamiento
-            if (nuevaCantidadAlistada >= p.cantidad) {
+            if (totalPreparado >= p.cantidad) {
               productoActualizado.fechaAlistado = Timestamp.now();
             }
 
@@ -545,9 +762,9 @@ const PedidosB2B = () => {
   };
 
   const handleEnviarProductosAlistados = async () => {
-    // Verificar que hay productos alistados
+    // Verificar que hay productos alistados para este envío
     const productosAlistados = selectedPedido.productos.filter(p =>
-      (p.cantidadAlistada || 0) > (p.cantidadEnviada || 0)
+      getAlistadaActual(p) > 0
     );
 
     if (productosAlistados.length === 0) {
@@ -556,16 +773,19 @@ const PedidosB2B = () => {
     }
 
     // Calcular si el envío es completo o parcial
-    const todosEnviados = selectedPedido.productos.every(p =>
-      (p.cantidadAlistada || 0) >= p.cantidad
-    );
+    const todosEnviados = selectedPedido.productos.every(p => {
+      if (p.anulado) return true;
+      const alistadaActual = getAlistadaActual(p);
+      const totalEnviadoDespues = (p.cantidadEnviada || 0) + alistadaActual;
+      return totalEnviadoDespues >= p.cantidad;
+    });
 
     const tipoEnvio = todosEnviados ? 'completo' : 'parcial';
     const nuevoEstado = todosEnviados ? 'Enviado' : 'Enviado Parcial';
 
     // Mostrar confirmación con detalle
     const detalleProductos = productosAlistados.map(p => {
-      const cantidadAEnviar = (p.cantidadAlistada || 0) - (p.cantidadEnviada || 0);
+      const cantidadAEnviar = getAlistadaActual(p);
       return `- ${p.descripcion} (Talla ${p.talla}): ${cantidadAEnviar} unidad(es)`;
     }).join('\n');
 
@@ -575,77 +795,140 @@ const PedidosB2B = () => {
 
     setEnviandoProductos(true);
     try {
-      const batch = writeBatch(db);
       const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
 
-      // Mapear productos a enviar con sus cantidades
+      // Calcular número de envío (basado en el máximo de envíos previos de cualquier producto)
+      const enviosPrevios = selectedPedido.productos.reduce((max, p) => {
+        const historial = p.historialEnvios || [];
+        return Math.max(max, historial.length);
+      }, 0);
+      const numeroEnvio = enviosPrevios + 1;
+      const fechaEnvioActual = new Date().toISOString();
+
+      // Construir lista de productos a enviar y calcular productos actualizados
       const productosParaEnviar = [];
-
-      // Actualizar productos: mover cantidadAlistada a cantidadEnviada
       const productosActualizados = selectedPedido.productos.map(p => {
-        const cantidadAEnviar = Math.max(0, (p.cantidadAlistada || 0) - (p.cantidadEnviada || 0));
-        if (cantidadAEnviar > 0) {
+        const alistadaActual = getAlistadaActual(p);
+        if (alistadaActual > 0) {
           productosParaEnviar.push({
-            codigo: p.codigo, // Referencia del producto (puede ser null en B2B)
-            productoId: p.productoId, // ID del documento Firebase (usado en B2B)
+            codigo: p.codigo,
+            productoId: p.productoId,
             talla: p.talla,
-            cantidadAEnviar
+            descripcion: p.descripcion,
+            cantidadAEnviar: alistadaActual
           });
-          const nuevaCantidadEnviada = (p.cantidadEnviada || 0) + cantidadAEnviar;
-          const nuevaCantidadAlistada = p.cantidadAlistada || 0;
+          const nuevaCantidadEnviada = (p.cantidadEnviada || 0) + alistadaActual;
 
-          // Determinar estado según cantidades
-          let nuevoEstado;
+          let nuevoEstadoProd;
           if (nuevaCantidadEnviada >= p.cantidad) {
-            nuevoEstado = 'enviado'; // Todo enviado
-          } else if (nuevaCantidadAlistada >= p.cantidad) {
-            nuevoEstado = 'alistado'; // Todo alistado pero falta enviar
-          } else if (nuevaCantidadAlistada > 0 || nuevaCantidadEnviada > 0) {
-            nuevoEstado = 'en_produccion'; // Hay progreso pero no está completo
+            nuevoEstadoProd = 'enviado';
           } else {
-            nuevoEstado = 'pendiente'; // No ha iniciado
+            nuevoEstadoProd = 'en_produccion';
           }
+
+          // Registrar en historial de envíos
+          const historialEnvios = [...(p.historialEnvios || [])];
+          historialEnvios.push({
+            envioNumero: numeroEnvio,
+            fecha: fechaEnvioActual,
+            cantidadEnviada: alistadaActual,
+            cantidadAcumulada: nuevaCantidadEnviada,
+            tipo: nuevaCantidadEnviada >= p.cantidad ? 'completo' : 'parcial'
+          });
 
           return {
             ...p,
             cantidadEnviada: nuevaCantidadEnviada,
-            estadoProduccion: nuevoEstado,
-            fechaEnvio: Timestamp.now()
+            cantidadAlistadaActual: 0, // *** RESET del ciclo actual ***
+            cantidadAlistadaTotal: (p.cantidadAlistadaTotal ?? (p.cantidadAlistada || 0)),
+            cantidadAlistada: nuevaCantidadEnviada, // compat
+            estadoProduccion: nuevoEstadoProd,
+            fechaEnvio: Timestamp.now(),
+            historialEnvios
           };
         }
         return p;
       });
 
-      batch.update(pedidoRef, {
-        productos: productosActualizados,
-        estado: nuevoEstado,
-        updatedAt: serverTimestamp()
-      });
+      // FASE 1: Leer stock actual de cada producto UNA SOLA VEZ y verificar suficiencia
+      // Hacemos esto ANTES de la transacción para poder mostrar window.confirm al usuario
+      const productRefsAEnviar = []; // { productRef, cantidadAEnviar }
+      const alertasStock = [];
 
-      // Actualizar inventario: decrementar stockReservadoB2B y stockTotal
       for (const producto of productosParaEnviar) {
-        // Buscar producto usando la función auxiliar
         const productoEncontrado = await buscarProductoEnInventario(
           producto.productoId,
           producto.codigo,
           producto.talla
         );
 
-        // Si encontramos el producto, actualizar inventario
         if (productoEncontrado) {
-          const productRef = doc(db, 'products', productoEncontrado.id);
-          batch.update(productRef, {
-            // Liberar la reserva B2B
-            stockReservadoB2B: increment(-producto.cantidadAEnviar),
-            // Decrementar stock total (sale del inventario)
-            stockTotal: increment(-producto.cantidadAEnviar),
-            updatedAt: serverTimestamp()
+          const stockActual = productoEncontrado.stockTotal || 0;
+          productRefsAEnviar.push({
+            productRef: doc(db, 'products', productoEncontrado.id),
+            cantidadAEnviar: producto.cantidadAEnviar
           });
+
+          if (stockActual < producto.cantidadAEnviar) {
+            alertasStock.push({
+              descripcion: producto.descripcion,
+              talla: producto.talla,
+              stockActual,
+              cantidadAEnviar: producto.cantidadAEnviar
+            });
+          }
         }
       }
 
-      // Ejecutar batch
-      await batch.commit();
+      // Mostrar todas las advertencias de stock junto antes de continuar
+      if (alertasStock.length > 0) {
+        const detalleAlertas = alertasStock.map(a =>
+          `• ${a.descripcion} (Talla ${a.talla}): stock ${a.stockActual}, a enviar ${a.cantidadAEnviar} → quedará en ${a.stockActual - a.cantidadAEnviar}`
+        ).join('\n');
+
+        const continuar = window.confirm(
+          `⚠️ ADVERTENCIA DE INVENTARIO\n\n` +
+          `Los siguientes productos tienen stock insuficiente:\n\n${detalleAlertas}\n\n` +
+          `¿Deseas continuar de todas formas?`
+        );
+
+        if (!continuar) {
+          setEnviandoProductos(false);
+          return;
+        }
+      }
+
+      // FASE 2: Transacción atómica — previene race conditions
+      // Firestore exige que TODOS los reads ocurran antes de CUALQUIER write
+      await runTransaction(db, async (transaction) => {
+        // --- TODOS LOS READS PRIMERO ---
+        const pedidoDoc = await transaction.get(pedidoRef);
+        if (!pedidoDoc.exists()) {
+          throw new Error('El pedido ya no existe en la base de datos.');
+        }
+
+        const productDocs = [];
+        for (const { productRef, cantidadAEnviar } of productRefsAEnviar) {
+          const productDoc = await transaction.get(productRef);
+          productDocs.push({ productRef, cantidadAEnviar, exists: productDoc.exists() });
+        }
+
+        // --- TODOS LOS WRITES DESPUÉS ---
+        for (const { productRef, cantidadAEnviar, exists } of productDocs) {
+          if (!exists) continue;
+          transaction.update(productRef, {
+            stockReservadoB2B: increment(-cantidadAEnviar),
+            stockTotal: increment(-cantidadAEnviar),
+            updatedAt: serverTimestamp()
+          });
+        }
+
+        transaction.update(pedidoRef, {
+          productos: productosActualizados,
+          estado: nuevoEstado,
+          updatedAt: serverTimestamp()
+        });
+      });
 
       // Actualizar selectedPedido localmente para reflejar cambios inmediatamente
       setSelectedPedido({
@@ -656,7 +939,7 @@ const PedidosB2B = () => {
 
       // Crear notificación para el cliente
       const totalUnidadesEnviadas = productosAlistados.reduce((sum, p) => {
-        return sum + ((p.cantidadAlistada || 0) - (p.cantidadEnviada || 0));
+        return sum + getAlistadaActual(p);
       }, 0);
 
       await crearNotificacion(
@@ -705,14 +988,33 @@ const PedidosB2B = () => {
     }
 
     try {
+      const batch = writeBatch(db);
       const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
 
-      await updateDoc(pedidoRef, {
+      batch.update(pedidoRef, {
         estado: 'Completado',
         fechaCompletado: serverTimestamp(),
         completadoPor: user?.displayName || user?.email || 'Admin',
         updatedAt: serverTimestamp()
       });
+
+      // Liberar stockReservadoB2B de productos alistados que no fueron enviados
+      for (const p of selectedPedido.productos) {
+        if (p.anulado) continue;
+        const reservaPendiente = getAlistadaActual(p);
+        if (reservaPendiente > 0) {
+          const productoEncontrado = await buscarProductoEnInventario(p.productoId, p.codigo, p.talla);
+          if (productoEncontrado) {
+            const productRef = doc(db, 'products', productoEncontrado.id);
+            batch.update(productRef, {
+              stockReservadoB2B: increment(-reservaPendiente),
+              updatedAt: serverTimestamp()
+            });
+          }
+        }
+      }
+
+      await batch.commit();
 
       // Crear notificación para el cliente
       await crearNotificacion(
@@ -1122,6 +1424,8 @@ const PedidosB2B = () => {
         productos: carritoTienda.map(item => ({
           ...item,
           cantidadAlistada: 0,
+          cantidadAlistadaActual: 0,
+          cantidadAlistadaTotal: 0,
           cantidadEnviada: 0,
           cantidadRecibida: 0,
           estadoProduccion: 'pendiente',
@@ -1129,6 +1433,7 @@ const PedidosB2B = () => {
           fechaEnvio: null,
           fechaRecepcion: null,
           historialRecepciones: [],
+          historialEnvios: [],
           observacionesRecepcion: null
         })),
         total: calcularTotalCarrito(),
@@ -1185,6 +1490,10 @@ const PedidosB2B = () => {
         return 'bg-purple-100 text-purple-800 border-purple-300';
       case 'Entregado':
         return 'bg-green-100 text-green-800 border-green-300';
+      case 'Completado':
+        return 'bg-emerald-100 text-emerald-800 border-emerald-300';
+      case 'Anulado':
+        return 'bg-red-100 text-red-800 border-red-300';
       default:
         return 'bg-gray-100 text-gray-800 border-gray-300';
     }
@@ -1258,6 +1567,8 @@ const PedidosB2B = () => {
                 <option value="Enviado Parcial">Enviado Parcial</option>
                 <option value="Enviado">Enviado</option>
                 <option value="Entregado">Entregado</option>
+                <option value="Completado">Completado</option>
+                <option value="Anulado">Anulado</option>
               </select>
             </div>
 
@@ -1514,6 +1825,22 @@ const PedidosB2B = () => {
                         {aprobandoPedido === pedido.id ? 'Aprobando...' : 'Aprobar Pedido'}
                       </button>
                     )}
+
+                    {/* Botón Anular (solo si no está anulado ni completado) */}
+                    {pedido.estado !== 'Anulado' && pedido.estado !== 'Completado' && (
+                      <button
+                        onClick={() => handleAnularPedidoB2B(pedido)}
+                        disabled={anulandoPedido}
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {anulandoPedido ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={16} />
+                        )}
+                        {anulandoPedido ? 'Anulando...' : 'Anular Pedido'}
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -1602,10 +1929,10 @@ const PedidosB2B = () => {
                   <h3 className="font-semibold text-gray-800">Productos</h3>
                   <div className="flex gap-2">
                     {/* Botón Enviar Productos Alistados */}
-                    {selectedPedido.productos?.some(p => (p.cantidadAlistada || 0) > (p.cantidadEnviada || 0)) && (() => {
-                      // Calcular si todos los productos están completamente alistados
+                    {selectedPedido.productos?.some(p => getAlistadaActual(p) > 0) && (() => {
+                      // Calcular si todos los productos están completamente alistados + enviados
                       const todosAlistados = selectedPedido.productos.every(p =>
-                        (p.cantidadAlistada || 0) >= p.cantidad
+                        ((p.cantidadEnviada || 0) + getAlistadaActual(p)) >= p.cantidad
                       );
                       const textoBoton = todosAlistados ? 'Enviar Pedido Completo' : 'Enviar Productos Alistados (Parcial)';
 
@@ -1635,6 +1962,22 @@ const PedidosB2B = () => {
                       >
                         <CheckCircle size={16} />
                         Completar Pedido
+                      </button>
+                    )}
+
+                    {/* Botón Anular en modal de detalle */}
+                    {selectedPedido.estado !== 'Anulado' && selectedPedido.estado !== 'Completado' && (
+                      <button
+                        onClick={() => handleAnularPedidoB2B(selectedPedido)}
+                        disabled={anulandoPedido}
+                        className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {anulandoPedido ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={16} />
+                        )}
+                        {anulandoPedido ? 'Anulando...' : 'Anular Pedido'}
                       </button>
                     )}
                   </div>
@@ -1691,13 +2034,15 @@ const PedidosB2B = () => {
                         // Filtro por pendientes
                         if (soloConPendientesModal) {
                           const cantidadPedida = p.cantidad || 0;
-                          const cantidadAlistada = p.cantidadAlistada || 0;
                           const cantidadEnviada = p.cantidadEnviada || 0;
+                          const alistadaAct = getAlistadaActual(p);
                           const cantidadRecibida = p.cantidadRecibida || 0;
-                          const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+                          const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada && cantidadRecibida < cantidadPedida;
 
-                          const pendientesOriginal = Math.max(0, cantidadPedida - cantidadAlistada);
-                          const pendientesPorDiscrepancia = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+                          const pendientesOriginal = Math.max(0, cantidadPedida - cantidadEnviada - alistadaAct);
+                          const discrepanciaTotal = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+                          const alistadaSobrante = Math.max(0, alistadaAct - Math.max(0, cantidadPedida - cantidadEnviada));
+                          const pendientesPorDiscrepancia = Math.max(0, discrepanciaTotal - alistadaSobrante);
                           const totalPendientes = pendientesOriginal + pendientesPorDiscrepancia;
 
                           if (totalPendientes === 0) return false;
@@ -1731,13 +2076,15 @@ const PedidosB2B = () => {
                     // Filtro por pendientes
                     if (soloConPendientesModal) {
                       const cantidadPedida = producto.cantidad || 0;
-                      const cantidadAlistada = producto.cantidadAlistada || 0;
                       const cantidadEnviada = producto.cantidadEnviada || 0;
+                      const alistadaActual = getAlistadaActual(producto);
                       const cantidadRecibida = producto.cantidadRecibida || 0;
-                      const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+                      const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada && cantidadRecibida < cantidadPedida;
 
-                      const pendientesOriginal = Math.max(0, cantidadPedida - cantidadAlistada);
-                      const pendientesPorDiscrepancia = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+                      const pendientesOriginal = Math.max(0, cantidadPedida - cantidadEnviada - alistadaActual);
+                      const discrepanciaTotal = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+                      const alistadaSobrante = Math.max(0, alistadaActual - Math.max(0, cantidadPedida - cantidadEnviada));
+                      const pendientesPorDiscrepancia = Math.max(0, discrepanciaTotal - alistadaSobrante);
                       const totalPendientes = pendientesOriginal + pendientesPorDiscrepancia;
 
                       if (totalPendientes === 0) return false;
@@ -1753,14 +2100,16 @@ const PedidosB2B = () => {
                     return true;
                   }).map((producto, index) => {
                     const cantidadPedida = producto.cantidad || 0;
-                    const cantidadAlistada = producto.cantidadAlistada || 0;
+                    const alistadaActual = getAlistadaActual(producto);
                     const cantidadEnviada = producto.cantidadEnviada || 0;
                     const cantidadRecibida = producto.cantidadRecibida || 0;
-                    const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada;
+                    const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada && cantidadRecibida < cantidadPedida;
 
-                    // Calcular pendientes: incluye tanto lo que falta del pedido original como lo que falta por discrepancia
-                    const pendientesOriginal = Math.max(0, cantidadPedida - cantidadAlistada);
-                    const pendientesPorDiscrepancia = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+                    // Pendientes = lo que falta por enviar - lo que ya está listo para este envío + discrepancias no cubiertas
+                    const pendientesOriginal = Math.max(0, cantidadPedida - cantidadEnviada - alistadaActual);
+                    const discrepanciaTotal = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
+                    const alistadaSobrante = Math.max(0, alistadaActual - Math.max(0, cantidadPedida - cantidadEnviada));
+                    const pendientesPorDiscrepancia = Math.max(0, discrepanciaTotal - alistadaSobrante);
                     const cantidadPendienteAlistar = pendientesOriginal + pendientesPorDiscrepancia;
 
                     return (
@@ -1792,8 +2141,8 @@ const PedidosB2B = () => {
                             <p className="text-lg font-bold text-gray-800">{cantidadPedida}</p>
                           </div>
                           <div className="bg-blue-50 rounded-lg p-2 text-center border border-blue-200">
-                            <p className="text-xs text-blue-600">Alistadas</p>
-                            <p className="text-lg font-bold text-blue-700">{cantidadAlistada}</p>
+                            <p className="text-xs text-blue-600">Listas p/ envío</p>
+                            <p className="text-lg font-bold text-blue-700">{alistadaActual}</p>
                           </div>
                           <div className="bg-purple-50 rounded-lg p-2 text-center border border-purple-200">
                             <p className="text-xs text-purple-600">Enviadas</p>
@@ -1844,6 +2193,39 @@ const PedidosB2B = () => {
                                   </p>
                                 )}
                               </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Historial de envíos realizados */}
+                        {producto.historialEnvios && producto.historialEnvios.length > 0 && (
+                          <div className="mb-3 p-3 rounded-lg border bg-purple-50 border-purple-200">
+                            <p className="font-semibold mb-2 text-purple-700 text-xs flex items-center gap-1">
+                              📦 Historial de Envíos ({producto.historialEnvios.length})
+                            </p>
+                            <div className="space-y-1">
+                              {producto.historialEnvios.map((envio, idx) => {
+                                const fechaEnvio = new Date(envio.fecha);
+                                return (
+                                  <div key={idx} className="p-2 rounded border bg-white border-purple-100 text-xs flex justify-between items-center">
+                                    <span className="font-medium text-purple-800">
+                                      Envío #{envio.envioNumero || idx + 1}
+                                    </span>
+                                    <span className="text-gray-600">
+                                      {envio.cantidadEnviada} unid.
+                                      <span className="text-gray-400 ml-1">(acum: {envio.cantidadAcumulada})</span>
+                                    </span>
+                                    <span className="text-gray-500">
+                                      {fechaEnvio.toLocaleDateString('es-CO')}
+                                    </span>
+                                    <span className={`px-1.5 py-0.5 rounded text-xs ${
+                                      envio.tipo === 'completo' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                                    }`}>
+                                      {envio.tipo === 'completo' ? 'Completo' : 'Parcial'}
+                                    </span>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -1948,27 +2330,19 @@ const PedidosB2B = () => {
                           );
                         })()}
 
-                        {/* Botón Alistar Faltantes por Discrepancia */}
-                        {hayDiscrepancia && cantidadPendienteAlistar === 0 && (
-                          <button
-                            onClick={() => {
-                              const cantidadFaltante = cantidadEnviada - cantidadRecibida;
-                              setProductoAlistar({ ...producto });
-                              setCantidadAlistar(cantidadFaltante.toString());
-                              setShowAlistarModal(true);
-                            }}
-                            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors"
-                          >
-                            <ClipboardCheck size={16} />
-                            Alistar Faltantes ({cantidadEnviada - cantidadRecibida} unidades)
-                          </button>
-                        )}
-
                         {/* Badge de estado completo */}
-                        {cantidadAlistada >= cantidadPedida && !hayDiscrepancia && (
+                        {cantidadPendienteAlistar === 0 && !hayDiscrepancia && (cantidadEnviada + alistadaActual) >= cantidadPedida && (
                           <div className="mt-2 flex items-center justify-center gap-2 text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg py-1">
                             <CheckCircle size={14} />
                             Producto completamente alistado
+                          </div>
+                        )}
+
+                        {/* Badge de reposición lista para envío */}
+                        {hayDiscrepancia && cantidadPendienteAlistar === 0 && alistadaActual > 0 && (
+                          <div className="mt-2 flex items-center justify-center gap-2 text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg py-1">
+                            <CheckCircle size={14} />
+                            Reposición lista para envío
                           </div>
                         )}
 
@@ -2037,19 +2411,23 @@ const PedidosB2B = () => {
               {/* Estado Actual */}
               <div className="bg-blue-50 border border-blue-200 p-3 rounded-lg">
                 <h4 className="font-semibold text-blue-900 mb-2 text-sm">Estado Actual</h4>
-                <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="grid grid-cols-4 gap-2 text-xs">
                   <div>
                     <p className="text-gray-600">Pedidas</p>
                     <p className="font-bold text-gray-800">{productoAlistar.cantidad}</p>
                   </div>
                   <div>
-                    <p className="text-gray-600">Alistadas</p>
-                    <p className="font-bold text-blue-700">{productoAlistar.cantidadAlistada || 0}</p>
+                    <p className="text-gray-600">Listas (este envío)</p>
+                    <p className="font-bold text-blue-700">{productoAlistar ? getAlistadaActual(productoAlistar) : 0}</p>
                   </div>
                   <div>
-                    <p className="text-gray-600">Pendientes</p>
+                    <p className="text-gray-600">Ya enviadas</p>
+                    <p className="font-bold text-purple-700">{productoAlistar.cantidadEnviada || 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Por alistar</p>
                     <p className="font-bold text-orange-700">
-                      {productoAlistar.cantidad - (productoAlistar.cantidadAlistada || 0)}
+                      {productoAlistar ? calcularMaxAlistar(productoAlistar) : 0}
                     </p>
                   </div>
                 </div>
@@ -2065,12 +2443,12 @@ const PedidosB2B = () => {
                   value={cantidadAlistar}
                   onChange={(e) => setCantidadAlistar(e.target.value)}
                   min="1"
-                  max={productoAlistar.cantidad - (productoAlistar.cantidadAlistada || 0)}
+                  max={calcularMaxAlistar(productoAlistar)}
                   placeholder="0"
                   className="w-full px-3 md:px-4 py-2 text-sm md:text-base border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Máximo: {productoAlistar.cantidad - (productoAlistar.cantidadAlistada || 0)} unidades
+                  Máximo: {calcularMaxAlistar(productoAlistar)} unidades
                 </p>
               </div>
 
@@ -2361,6 +2739,7 @@ const PedidosB2B = () => {
                   setPedidoAbono(null);
                   setMontoAbono('');
                   setNotasAbono('');
+                  setMetodoPagoAbono('Transferencia');
                 }}
                 className="text-gray-500 hover:text-gray-700 text-2xl"
               >
@@ -2407,12 +2786,30 @@ const PedidosB2B = () => {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Método de Pago *
+                </label>
+                <select
+                  value={metodoPagoAbono}
+                  onChange={(e) => setMetodoPagoAbono(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="Transferencia">Transferencia</option>
+                  <option value="Efectivo">Efectivo</option>
+                  <option value="Nequi">Nequi</option>
+                  <option value="Daviplata">Daviplata</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Consignación">Consignación</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
                   Notas (opcional)
                 </label>
                 <textarea
                   value={notasAbono}
                   onChange={(e) => setNotasAbono(e.target.value)}
-                  placeholder="Transferencia, efectivo, referencia de pago..."
+                  placeholder="Referencia de pago, número de transferencia..."
                   rows={2}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
                 />
