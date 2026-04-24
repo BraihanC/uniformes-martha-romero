@@ -456,7 +456,12 @@ const Catalogo = () => {
           {productosFiltrados.map(producto => {
             const precio = getPrecio(producto);
             const tienePrecioEspecial = preciosCorporativos[producto.id] !== undefined;
-            const stockDisponible = producto.stockDisponible || 0;
+            const stockDisponible = Math.max(0,
+              (producto.stockTotal || 0) -
+              (producto.stockReservadoPedidos || 0) -
+              (producto.stockReservadoApartados || 0) -
+              (producto.stockReservadoB2B || 0)
+            );
 
             return (
               <div

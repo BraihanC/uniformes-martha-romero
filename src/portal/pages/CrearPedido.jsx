@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { usePortalAuth } from '../context/PortalAuthContext';
 import { useCart } from '../context/CartContext';
 import { db } from '../../services/firebase';
-import { collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { collection, addDoc, doc, getDoc, serverTimestamp, query, orderBy, limit, getDocs } from 'firebase/firestore';
 import { ShoppingBag, Package, ArrowLeft, Send } from 'lucide-react';
 
 const CrearPedido = () => {
@@ -25,6 +25,33 @@ const CrearPedido = () => {
   const handleCrearPedido = async () => {
     if (cartItems.length === 0) {
       alert('El carrito está vacío');
+      return;
+    }
+
+    // Bug 13: validar que cada producto del carrito siga existiendo en inventario
+    // (entre que se agregó al carrito y se confirma el pedido el admin pudo eliminarlo).
+    // No validamos stock — los pedidos B2B van a producción.
+    const itemsInvalidos = [];
+    for (const item of cartItems) {
+      if (!item.id) {
+        itemsInvalidos.push(`${item.descripcion || 'Producto sin nombre'} — sin ID válido`);
+        continue;
+      }
+      try {
+        const prodSnap = await getDoc(doc(db, 'products', item.id));
+        if (!prodSnap.exists()) {
+          itemsInvalidos.push(`${item.descripcion || item.id} — ya no existe en inventario`);
+        }
+      } catch (err) {
+        console.warn('Error validando producto', item.id, err);
+      }
+    }
+    if (itemsInvalidos.length > 0) {
+      alert(
+        `⚠️ No se puede crear el pedido — los siguientes productos ya no son válidos:\n\n` +
+        itemsInvalidos.map(s => `• ${s}`).join('\n') +
+        `\n\nPor favor elimínalos del carrito o contacta al administrador.`
+      );
       return;
     }
 
@@ -73,7 +100,12 @@ const CrearPedido = () => {
         })),
         total: getTotalPrice(),
         notas: notas.trim(),
-        estado: 'Pendiente',
+        // Auto-aprobación: el pedido entra directo a "En Preparación" para que el matching
+        // automático en entradas de producto pueda asignarle prendas sin esperar aprobación manual.
+        estado: 'En Preparación',
+        aprobado: true,
+        aprobadoPor: 'Auto-aprobación (portal)',
+        fechaAprobacion: serverTimestamp(),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };

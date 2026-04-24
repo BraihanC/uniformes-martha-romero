@@ -66,6 +66,8 @@ const AnalisisB2B = () => {
     }).format(date);
   };
 
+  const esAnulado = (pedido) => pedido?.estado === 'Anulado' || pedido?.anulado === true;
+
   const calcularTotalAbonado = (abonos) => {
     if (!abonos || abonos.length === 0) return 0;
     return abonos.reduce((sum, abono) => sum + (abono.monto || 0), 0);
@@ -77,7 +79,8 @@ const AnalisisB2B = () => {
 
   // Obtener el total real del pedido (usa total guardado o calcula desde productos)
   const obtenerTotalPedido = (pedido) => {
-    if (pedido.total && pedido.total > 0) {
+    if (esAnulado(pedido)) return 0;
+    if (pedido.total !== undefined && pedido.total !== null) {
       return pedido.total;
     }
     // Calcular desde productos si no hay total guardado
@@ -88,8 +91,10 @@ const AnalisisB2B = () => {
     }, 0);
   };
 
-  const calcularEstadoPago = (total, abonos) => {
-    const totalAbonado = calcularTotalAbonado(abonos);
+  const calcularEstadoPago = (pedido) => {
+    if (esAnulado(pedido)) return 'Anulado';
+    const total = obtenerTotalPedido(pedido);
+    const totalAbonado = calcularTotalAbonado(pedido.abonos);
     if (totalAbonado === 0) return 'Sin pagar';
     if (totalAbonado >= total) return 'Pagado';
     return 'Abonado';
@@ -97,6 +102,11 @@ const AnalisisB2B = () => {
 
   // Calcular totales y costos del pedido
   const calcularFinanzasPedido = (pedido) => {
+    // Pedidos anulados no aportan ventas ni costos al análisis
+    if (esAnulado(pedido)) {
+      return { totalVenta: 0, totalCosto: 0, utilidadBruta: 0, margenPorcentaje: 0 };
+    }
+
     let totalVenta = 0;
     let totalCosto = 0;
 
@@ -276,7 +286,7 @@ const AnalisisB2B = () => {
         'Margen %': finanzas.margenPorcentaje.toFixed(2),
         'Total Abonado': totalAbonado,
         'Saldo Pendiente': saldoPendiente,
-        'Estado Pago': calcularEstadoPago(totalPedidoReal, pedido.abonos)
+        'Estado Pago': calcularEstadoPago(pedido)
       };
     });
 
@@ -391,9 +401,12 @@ const AnalisisB2B = () => {
             >
               <option value="todos">Todos los estados</option>
               <option value="Pendiente">Pendiente</option>
-              <option value="En Producción">En Producción</option>
-              <option value="Listo">Listo</option>
+              <option value="En Preparación">En Preparación</option>
+              <option value="Enviado Parcial">Enviado Parcial</option>
+              <option value="Enviado">Enviado</option>
               <option value="Entregado">Entregado</option>
+              <option value="Completado">Completado</option>
+              <option value="Anulado">Anulado</option>
             </select>
           </div>
 
@@ -472,11 +485,15 @@ const AnalisisB2B = () => {
                   const totalAbonado = calcularTotalAbonado(pedido.abonos);
                   const totalPedidoReal = obtenerTotalPedido(pedido);
                   const saldoPendiente = calcularSaldoPendiente(totalPedidoReal, pedido.abonos);
+                  const pedidoAnulado = esAnulado(pedido);
 
                   return (
-                    <tr key={pedido.id} className="hover:bg-gray-50">
+                    <tr
+                      key={pedido.id}
+                      className={pedidoAnulado ? 'bg-gray-50 opacity-60 hover:bg-gray-100' : 'hover:bg-gray-50'}
+                    >
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <span className="text-sm font-medium text-gray-900">
+                        <span className={`text-sm font-medium ${pedidoAnulado ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
                           #{String(pedido.numeroPedido || 0).padStart(4, '0')}
                         </span>
                       </td>
@@ -484,14 +501,18 @@ const AnalisisB2B = () => {
                         {formatDate(pedido.createdAt)}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="text-sm text-gray-900">{pedido.clienteNombre}</div>
+                        <div className={`text-sm ${pedidoAnulado ? 'text-gray-500' : 'text-gray-900'}`}>{pedido.clienteNombre}</div>
                         <div className="text-xs text-gray-500">{pedido.nombreColegio}</div>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
+                          pedido.estado === 'Anulado' ? 'bg-red-100 text-red-800' :
+                          pedido.estado === 'Completado' ? 'bg-emerald-100 text-emerald-800' :
                           pedido.estado === 'Entregado' ? 'bg-green-100 text-green-800' :
-                          pedido.estado === 'Listo' ? 'bg-blue-100 text-blue-800' :
-                          pedido.estado === 'En Producción' ? 'bg-yellow-100 text-yellow-800' :
+                          pedido.estado === 'Enviado' || pedido.estado === 'Despachado' ? 'bg-purple-100 text-purple-800' :
+                          pedido.estado === 'Enviado Parcial' ? 'bg-orange-100 text-orange-800' :
+                          pedido.estado === 'En Preparación' ? 'bg-blue-100 text-blue-800' :
+                          pedido.estado === 'Pendiente' ? 'bg-yellow-100 text-yellow-800' :
                           'bg-gray-100 text-gray-800'
                         }`}>
                           {pedido.estado}
@@ -529,7 +550,7 @@ const AnalisisB2B = () => {
                           >
                             <Eye size={18} />
                           </button>
-                          {saldoPendiente > 0 && (
+                          {saldoPendiente > 0 && !pedidoAnulado && (
                             <button
                               onClick={() => {
                                 setSelectedPedido(pedido);

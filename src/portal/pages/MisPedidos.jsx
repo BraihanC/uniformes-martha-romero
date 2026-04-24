@@ -109,18 +109,26 @@ const MisPedidos = () => {
         return 'bg-purple-100 text-purple-800 border-purple-300';
       case 'Entregado':
         return 'bg-green-100 text-green-800 border-green-300';
+      case 'Completado':
+        return 'bg-emerald-100 text-emerald-800 border-emerald-300';
+      case 'Anulado':
+        return 'bg-red-100 text-red-800 border-red-300';
       default:
         return 'bg-gray-100 text-gray-800 border-gray-300';
     }
   };
+
+  const esAnulado = (pedido) => pedido?.estado === 'Anulado' || pedido?.anulado === true;
 
   const calcularTotalAbonado = (abonos) => {
     if (!abonos || abonos.length === 0) return 0;
     return abonos.reduce((sum, abono) => sum + (abono.monto || 0), 0);
   };
 
-  const calcularEstadoPago = (total, abonos) => {
-    const totalAbonado = calcularTotalAbonado(abonos);
+  const calcularEstadoPago = (pedido) => {
+    if (esAnulado(pedido)) return 'Anulado';
+    const total = pedido.total || 0;
+    const totalAbonado = calcularTotalAbonado(pedido.abonos);
     if (totalAbonado === 0) return 'Sin Pagar';
     if (totalAbonado >= total) return 'Pagado';
     return 'Pago Parcial';
@@ -133,6 +141,8 @@ const MisPedidos = () => {
       case 'Pago Parcial':
         return 'bg-yellow-100 text-yellow-800 border-yellow-300';
       case 'Sin Pagar':
+        return 'bg-red-100 text-red-800 border-red-300';
+      case 'Anulado':
         return 'bg-red-100 text-red-800 border-red-300';
       default:
         return 'bg-gray-100 text-gray-800 border-gray-300';
@@ -362,7 +372,7 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
 
     // Filtro por estado de pago
     if (filtroPago) {
-      resultado = resultado.filter(p => calcularEstadoPago(p.total, p.abonos) === filtroPago);
+      resultado = resultado.filter(p => calcularEstadoPago(p) === filtroPago);
     }
 
     // Filtro por fecha desde
@@ -435,7 +445,7 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
       csv += `"#${String(pedido.numeroPedido || 0).padStart(4, '0')}",`;
       csv += `"${formatDateShort(pedido.createdAt)}",`;
       csv += `"${pedido.estado}",`;
-      csv += `"${calcularEstadoPago(pedido.total, pedido.abonos)}",`;
+      csv += `"${calcularEstadoPago(pedido)}",`;
       csv += `"${formatCurrency(pedido.total)}",`;
       csv += `"${formatCurrency(totalAbonado)}",`;
       csv += `"${formatCurrency(saldo)}",`;
@@ -476,8 +486,10 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
     const colorGris = [100, 100, 100];
     const colorNegro = [0, 0, 0];
 
-    const totalComprado = pedidosFiltrados.reduce((sum, p) => sum + p.total, 0);
-    const totalAbonado = pedidosFiltrados.reduce((sum, p) => sum + calcularTotalAbonado(p.abonos), 0);
+    // Para los totales del estado de cuenta, ignorar pedidos anulados (no son deuda real)
+    const pedidosParaTotales = pedidosFiltrados.filter(p => !esAnulado(p));
+    const totalComprado = pedidosParaTotales.reduce((sum, p) => sum + (p.total || 0), 0);
+    const totalAbonado = pedidosParaTotales.reduce((sum, p) => sum + calcularTotalAbonado(p.abonos), 0);
     const saldoTotal = totalComprado - totalAbonado;
 
     // Encabezado
@@ -536,8 +548,10 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
     yPosition += 10;
 
     pedidosFiltrados.forEach((pedido, index) => {
-      const totalAbonadoPedido = calcularTotalAbonado(pedido.abonos);
-      const saldoPedido = pedido.total - totalAbonadoPedido;
+      const pedidoAnulado = esAnulado(pedido);
+      const totalAbonadoPedido = pedidoAnulado ? 0 : calcularTotalAbonado(pedido.abonos);
+      const totalPedidoMostrar = pedidoAnulado ? 0 : (pedido.total || 0);
+      const saldoPedido = totalPedidoMostrar - totalAbonadoPedido;
 
       // Verificar si necesitamos nueva página
       if (yPosition > pageHeight - 50) {
@@ -854,8 +868,12 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                 <option value="">Todos</option>
                 <option value="Pendiente">Pendiente</option>
                 <option value="En Preparación">En Preparación</option>
+                <option value="Enviado Parcial">Enviado Parcial</option>
+                <option value="Enviado">Enviado</option>
                 <option value="Despachado">Despachado</option>
                 <option value="Entregado">Entregado</option>
+                <option value="Completado">Completado</option>
+                <option value="Anulado">Anulado</option>
               </select>
             </div>
 
@@ -1008,11 +1026,11 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                       </span>
                       <span
                         className={`px-3 py-1 rounded-full text-xs font-semibold border flex items-center gap-1 ${getEstadoPagoBadgeColor(
-                          calcularEstadoPago(pedido.total, pedido.abonos)
+                          calcularEstadoPago(pedido)
                         )}`}
                       >
                         <CreditCard size={12} />
-                        {calcularEstadoPago(pedido.total, pedido.abonos)}
+                        {calcularEstadoPago(pedido)}
                       </span>
                       {pedido.origenPedido === 'tienda' && (
                         <span
@@ -1074,8 +1092,25 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
               {/* Detalles del Pedido (Expandible) */}
               {expandedPedido === pedido.id && (
                 <div className="border-t border-gray-200 bg-gray-50 p-6">
-                  {/* Banner de productos con pendientes */}
-                  {(() => {
+                  {/* Aviso si el pedido fue anulado */}
+                  {esAnulado(pedido) && (
+                    <div className="mb-4 p-4 rounded-lg bg-red-50 border-2 border-red-200">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle size={20} className="text-red-600 flex-shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                          <p className="font-bold text-red-900 mb-1">
+                            Pedido Anulado
+                          </p>
+                          <p className="text-sm text-red-800">
+                            Este pedido fue anulado{pedido.fechaAnulacion ? ` el ${formatDateShort(pedido.fechaAnulacion)}` : ''}. No genera deuda y los abonos fueron devueltos.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Banner de productos con pendientes — no aplica a anulados */}
+                  {!esAnulado(pedido) && (() => {
                     const productosConPendientes = pedido.productos?.filter(p => {
                       const cantidadPedida = p.cantidad || 0;
                       const cantidadRecibida = p.cantidadRecibida || 0;
@@ -1393,8 +1428,8 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                               </div>
                             )}
 
-                            {/* Botón Confirmar Recepción */}
-                            {cantidadPendienteRecibir > 0 && !pedidoCompleto && (
+                            {/* Botón Confirmar Recepción — no aplica a pedidos anulados */}
+                            {cantidadPendienteRecibir > 0 && !pedidoCompleto && !esAnulado(pedido) && (
                               <button
                                 onClick={() => {
                                   setProductoConfirmar({
@@ -1415,7 +1450,7 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                             )}
 
                             {/* Badge de producto completamente recibido */}
-                            {cantidadRecibida >= cantidadEnviada && cantidadRecibida > 0 && (
+                            {pedidoCompleto && (
                               <div className="flex items-center justify-center gap-2 text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg py-2">
                                 <CheckCircle size={14} />
                                 Producto completamente recibido
@@ -1472,8 +1507,34 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                     </div>
                   )}
 
-                  {/* Resumen Financiero */}
-                  <div className="bg-white p-4 rounded-lg border-2" style={{ borderColor: '#D50565' }}>
+                  {/* Resumen Financiero — para anulados, mostrar historial original */}
+                  <div className="bg-white p-4 rounded-lg border-2" style={{ borderColor: esAnulado(pedido) ? '#999' : '#D50565' }}>
+                    {esAnulado(pedido) ? (
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-gray-600">Total Original:</span>
+                          <span className="font-semibold text-gray-500 line-through">
+                            {formatCurrency(pedido.totalOriginal || 0)}
+                          </span>
+                        </div>
+                        {pedido.abonosOriginales && pedido.abonosOriginales.length > 0 && (
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-gray-600">Abonado (devuelto):</span>
+                            <span className="font-semibold text-gray-500 line-through">
+                              {formatCurrency(
+                                pedido.abonosOriginales.reduce((sum, a) => sum + (a.monto || 0), 0)
+                              )}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex justify-between items-center pt-2 border-t">
+                          <span className="text-lg font-bold text-gray-800">Saldo:</span>
+                          <span className="text-2xl font-bold text-gray-500">
+                            {formatCurrency(0)}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
                     <div className="space-y-2">
                       <div className="flex justify-between items-center text-sm">
                         <span className="text-gray-600">Total del Pedido:</span>
@@ -1510,6 +1571,7 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
                         </div>
                       )}
                     </div>
+                    )}
                   </div>
                 </div>
               )}

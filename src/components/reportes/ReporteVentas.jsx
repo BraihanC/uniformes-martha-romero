@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { db } from '../../services/firebase';
 import {
   collection,
@@ -13,59 +13,76 @@ import {
   TrendingUp,
   Filter,
   Package,
-  Users,
-  DollarSign
+  DollarSign,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
+const TALLA_ORDEN = [
+  '0', '2', '4', '6', '8', '10', '12', '14', '16', '18', '20',
+  'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'
+];
+
+const sortTallas = (a, b) => {
+  const ia = TALLA_ORDEN.indexOf(a);
+  const ib = TALLA_ORDEN.indexOf(b);
+  if (ia === -1 && ib === -1) return a.localeCompare(b);
+  if (ia === -1) return 1;
+  if (ib === -1) return -1;
+  return ia - ib;
+};
+
+const CLIENTE_GENERAL_KEY = '__general__';
+
 const ReporteVentas = () => {
-  // Estados para filtros
+  // Filtros de consulta (afectan a Firestore)
   const [startDate, setStartDate] = useState(new Date());
   const [endDate, setEndDate] = useState(new Date());
-  const [fuenteVenta, setFuenteVenta] = useState('todas'); // todas, pos, pedidos, pedidosB2B, apartados
+  const [fuenteVenta, setFuenteVenta] = useState('todas');
+
+  // Filtros cliente-side (se re-aplican sin consultar)
   const [clienteId, setClienteId] = useState('');
-  const [productoRef, setProductoRef] = useState('');
+  const [productoFiltro, setProductoFiltro] = useState('');
+  const [talla, setTalla] = useState('');
   const [metodoPago, setMetodoPago] = useState('todos');
   const [colegioId, setColegioId] = useState('');
-  const [agrupacion, setAgrupacion] = useState('ninguna'); // ninguna, producto, cliente, fecha, metodoPago
+  const [agrupacion, setAgrupacion] = useState('matrizProductoTalla');
 
-  // Estados para datos
+  // Datos
   const [loading, setLoading] = useState(false);
-  const [reportData, setReportData] = useState(null);
+  const [ventasCrudas, setVentasCrudas] = useState(null); // null = no se ha generado
   const [clientes, setClientes] = useState([]);
   const [productos, setProductos] = useState([]);
   const [colegios, setColegios] = useState([]);
 
-  // Cargar catálogos
+  // Orden y paginación
+  const [sortConfig, setSortConfig] = useState({ key: 'totalCantidad', direction: 'desc' });
+  const [paginaActual, setPaginaActual] = useState(1);
+  const [tamanoPagina, setTamanoPagina] = useState(50);
+
+  // Snapshot de los filtros de consulta al generar (para detectar cambios pendientes)
+  const [consultaGenerada, setConsultaGenerada] = useState(null);
+
   useEffect(() => {
     loadCatalogos();
   }, []);
 
   const loadCatalogos = async () => {
     try {
-      // Cargar clientes
-      const clientesSnap = await getDocs(collection(db, 'clientes'));
-      const clientesData = clientesSnap.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setClientes(clientesData);
-
-      // Cargar productos
-      const productosSnap = await getDocs(collection(db, 'products'));
-      const productosData = productosSnap.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setProductos(productosData);
-
-      // Cargar colegios
-      const colegiosSnap = await getDocs(collection(db, 'colegios'));
-      const colegiosData = colegiosSnap.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setColegios(colegiosData);
+      const [clientesSnap, productosSnap, colegiosSnap] = await Promise.all([
+        getDocs(collection(db, 'clientes')),
+        getDocs(collection(db, 'products')),
+        getDocs(collection(db, 'colegios'))
+      ]);
+      setClientes(clientesSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setProductos(productosSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setColegios(colegiosSnap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch (error) {
       console.error('Error al cargar catálogos:', error);
     }
@@ -84,7 +101,7 @@ const ReporteVentas = () => {
       currency: 'COP',
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
-    }).format(value);
+    }).format(value || 0);
   };
 
   const setPresetDate = (preset) => {
@@ -96,28 +113,65 @@ const ReporteVentas = () => {
         setStartDate(today);
         setEndDate(today);
         break;
-      case 'ayer':
+      case 'ayer': {
         const yesterday = new Date(today);
         yesterday.setDate(yesterday.getDate() - 1);
         setStartDate(yesterday);
         setEndDate(yesterday);
         break;
-      case 'semana':
+      }
+      case 'semana': {
         const weekAgo = new Date(today);
         weekAgo.setDate(weekAgo.getDate() - 7);
         setStartDate(weekAgo);
         setEndDate(today);
         break;
-      case 'mes':
+      }
+      case 'mes': {
         const monthAgo = new Date(today);
         monthAgo.setMonth(monthAgo.getMonth() - 1);
         setStartDate(monthAgo);
         setEndDate(today);
         break;
+      }
     }
   };
 
+  // Clientes ordenados alfabéticamente
+  const clientesOrdenados = useMemo(
+    () => [...clientes].sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '')),
+    [clientes]
+  );
+
+  // Colegios ordenados alfabéticamente
+  const colegiosOrdenados = useMemo(
+    () => [...colegios].sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '')),
+    [colegios]
+  );
+
+  // Productos ordenados alfabéticamente para el datalist
+  const productosOrdenados = useMemo(
+    () => [...productos].sort((a, b) => (a.referencia || '').localeCompare(b.referencia || '')),
+    [productos]
+  );
+
+  // Tallas presentes en las ventas crudas (para poblar el selector)
+  const tallasDisponibles = useMemo(() => {
+    if (!ventasCrudas) return [];
+    const set = new Set();
+    ventasCrudas.forEach(v => { if (v.talla) set.add(v.talla); });
+    return Array.from(set).sort(sortTallas);
+  }, [ventasCrudas]);
+
   const generarReporte = async () => {
+    const diasRango = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    if (diasRango > 90) {
+      const ok = window.confirm(
+        `El rango seleccionado es de ${diasRango} días. Puede tardar y consumir muchos datos. ¿Continuar?`
+      );
+      if (!ok) return;
+    }
+
     setLoading(true);
     try {
       const start = new Date(startDate);
@@ -128,10 +182,57 @@ const ReporteVentas = () => {
       const startTimestamp = Timestamp.fromDate(start);
       const endTimestamp = Timestamp.fromDate(end);
 
-      let todasLasVentas = [];
+      const todasLasVentas = [];
 
-      // 1. VENTAS POS (sales)
-      if (fuenteVenta === 'todas' || fuenteVenta === 'pos') {
+      // Mapas de costos (productoId tiene prioridad, referencia como fallback)
+      const productosByIdMap = {};
+      const productosByRefMap = {};
+      productos.forEach(p => {
+        const info = {
+          costoCompra: p.costoCompra || 0,
+          costoSatelite: p.costoSatelite || 0
+        };
+        if (p.id) productosByIdMap[p.id] = info;
+        if (p.referencia && !productosByRefMap[p.referencia]) {
+          productosByRefMap[p.referencia] = info;
+        }
+      });
+
+      const calcularCosto = (venta) => {
+        const info = productosByIdMap[venta.productoId]
+          || productosByRefMap[venta.referencia]
+          || {};
+        const costoUnitario = info.costoCompra || info.costoSatelite || 0;
+        const costoTotal = costoUnitario * venta.cantidad;
+        const utilidad = venta.subtotal - costoTotal;
+        const margen = venta.subtotal > 0 ? (utilidad / venta.subtotal) * 100 : 0;
+        return { costoUnitario, costoTotal, utilidad, margen };
+      };
+
+      const resumenMetodosPago = (abonos = []) => {
+        const metodos = abonos.map(a => a?.metodoPago).filter(Boolean);
+        const unicos = [...new Set(metodos)];
+        return {
+          metodosPagoArr: unicos,
+          metodoPagoStr: unicos.join(', ') || 'N/A'
+        };
+      };
+
+      // Mapa colegio codigo -> nombre para B2B
+      const colegioCodigoANombre = {};
+      colegios.forEach(c => {
+        if (c.codigo) colegioCodigoANombre[c.codigo] = c.nombre || c.codigo;
+      });
+
+      // Colegio seleccionado: obtenemos código y nombre para optimizar consultas
+      const colegioSel = colegioId ? colegios.find(c => c.id === colegioId) : null;
+      const codigoColegioSel = colegioSel?.codigo || '';
+
+      // Si hay colegio filtrado, POS no aplica (no tiene colegio asociado)
+      const consultarPOS = !colegioId && (fuenteVenta === 'todas' || fuenteVenta === 'pos');
+
+      // 1. VENTAS POS
+      if (consultarPOS) {
         const salesQuery = query(
           collection(db, 'sales'),
           where('createdAt', '>=', startTimestamp),
@@ -141,14 +242,14 @@ const ReporteVentas = () => {
 
         salesSnap.forEach(doc => {
           const sale = doc.data();
-
-          // ✅ EXCLUIR facturas de pedidos (son documentos de referencia, no ventas nuevas)
-          // Las ventas de pedidos ya se cuentan en la colección 'pedidos'
+          // Excluir facturas de pedidos (ya se cuentan en 'pedidos')
           if (sale.tipo === 'pedido') return;
+
+          const metodo = sale.metodoPago || 'Efectivo';
 
           sale.items?.forEach(item => {
             const subtotalItem = item.subtotal || 0;
-            todasLasVentas.push({
+            const base = {
               fecha: sale.createdAt.toDate(),
               fuente: 'POS',
               numeroDocumento: sale.numeroFactura || 0,
@@ -160,17 +261,20 @@ const ReporteVentas = () => {
               talla: item.talla || '',
               cantidad: item.cantidad || 0,
               precioUnitario: item.precioUnitario || 0,
-              subtotal: subtotalItem, // Total de venta
-              montoRecibido: subtotalItem, // POS: se recibe todo de una vez
-              metodoPago: sale.metodoPago || 'Efectivo',
+              subtotal: subtotalItem,
+              montoRecibido: subtotalItem,
+              metodoPago: metodo,
+              metodosPagoArr: [metodo],
               colegioId: '',
+              colegioCodigo: '',
               colegioNombre: ''
-            });
+            };
+            todasLasVentas.push({ ...base, ...calcularCosto(base) });
           });
         });
       }
 
-      // 2. PEDIDOS (pedidos)
+      // 2. PEDIDOS
       if (fuenteVenta === 'todas' || fuenteVenta === 'pedidos') {
         const pedidosQuery = query(
           collection(db, 'pedidos'),
@@ -181,16 +285,22 @@ const ReporteVentas = () => {
 
         pedidosSnap.forEach(doc => {
           const pedido = doc.data();
-          // Calcular proporción abonada
+
+          // Excluir pedidos completamente anulados
+          if (pedido.estado === 'Anulado' || pedido.anulado === true) return;
+
           const totalPedido = pedido.total || 0;
           const totalAbonado = pedido.totalAbonado || 0;
           const proporcionAbonada = totalPedido > 0 ? totalAbonado / totalPedido : 0;
+          const { metodosPagoArr, metodoPagoStr } = resumenMetodosPago(pedido.abonos);
 
-          pedido.items?.forEach(item => {
+          const itemsValidos = (pedido.items || []).filter(
+            item => !item.anulado && item.estadoItem !== 'Cambio de Talla'
+          );
+
+          itemsValidos.forEach(item => {
             const subtotalItem = item.subtotal || 0;
-            const montoRecibidoItem = subtotalItem * proporcionAbonada;
-
-            todasLasVentas.push({
+            const base = {
               fecha: pedido.createdAt.toDate(),
               fuente: 'Pedido',
               numeroDocumento: pedido.numeroPedido || 0,
@@ -202,38 +312,50 @@ const ReporteVentas = () => {
               talla: item.talla || '',
               cantidad: item.cantidad || 0,
               precioUnitario: item.precio || 0,
-              subtotal: subtotalItem, // Total de venta
-              montoRecibido: montoRecibidoItem, // Lo realmente cobrado
-              metodoPago: pedido.abonos?.[0]?.metodoPago || 'N/A',
+              subtotal: subtotalItem,
+              montoRecibido: subtotalItem * proporcionAbonada,
+              metodoPago: metodoPagoStr,
+              metodosPagoArr,
               colegioId: pedido.colegioId || '',
+              colegioCodigo: pedido.codigoColegio || '',
               colegioNombre: pedido.colegioNombre || ''
-            });
+            };
+            todasLasVentas.push({ ...base, ...calcularCosto(base) });
           });
         });
       }
 
       // 3. PEDIDOS B2B
       if (fuenteVenta === 'todas' || fuenteVenta === 'pedidosB2B') {
-        const pedidosB2BQuery = query(
-          collection(db, 'pedidos_b2b'),
+        const b2bConstraints = [
           where('createdAt', '>=', startTimestamp),
           where('createdAt', '<=', endTimestamp)
-        );
+        ];
+        if (codigoColegioSel) {
+          b2bConstraints.push(where('codigoColegio', '==', codigoColegioSel));
+        }
+        const pedidosB2BQuery = query(collection(db, 'pedidos_b2b'), ...b2bConstraints);
         const pedidosB2BSnap = await getDocs(pedidosB2BQuery);
 
         pedidosB2BSnap.forEach(doc => {
           const pedido = doc.data();
 
-          // Calcular proporción abonada
+          if (pedido.estado === 'Anulado' || pedido.anulado === true) return;
+
           const totalPedido = pedido.total || 0;
-          const totalAbonado = pedido.abonos?.reduce((sum, abono) => sum + (abono.monto || 0), 0) || 0;
+          const totalAbonado = (pedido.abonos || []).reduce(
+            (sum, a) => sum + (a.monto || 0),
+            0
+          );
           const proporcionAbonada = totalPedido > 0 ? totalAbonado / totalPedido : 0;
+          const { metodosPagoArr, metodoPagoStr } = resumenMetodosPago(pedido.abonos);
+
+          const codigoCol = pedido.codigoColegio || '';
+          const nombreCol = colegioCodigoANombre[codigoCol] || codigoCol;
 
           pedido.productos?.forEach(item => {
             const subtotalItem = item.subtotal || 0;
-            const montoRecibidoItem = subtotalItem * proporcionAbonada;
-
-            todasLasVentas.push({
+            const base = {
               fecha: pedido.createdAt.toDate(),
               fuente: 'Pedido B2B',
               numeroDocumento: pedido.numeroPedido || 0,
@@ -245,17 +367,20 @@ const ReporteVentas = () => {
               talla: item.talla || '',
               cantidad: item.cantidad || 0,
               precioUnitario: item.precioUnitario || 0,
-              subtotal: subtotalItem, // Total de venta
-              montoRecibido: montoRecibidoItem, // Lo realmente cobrado
-              metodoPago: pedido.abonos?.[0]?.metodoPago || 'N/A',
+              subtotal: subtotalItem,
+              montoRecibido: subtotalItem * proporcionAbonada,
+              metodoPago: metodoPagoStr,
+              metodosPagoArr,
               colegioId: '',
-              colegioNombre: pedido.codigoColegio || ''
-            });
+              colegioCodigo: codigoCol,
+              colegioNombre: nombreCol
+            };
+            todasLasVentas.push({ ...base, ...calcularCosto(base) });
           });
         });
       }
 
-      // 4. APARTADOS COMPLETADOS
+      // 4. APARTADOS
       if (fuenteVenta === 'todas' || fuenteVenta === 'apartados') {
         const apartadosQuery = query(
           collection(db, 'apartados'),
@@ -267,16 +392,16 @@ const ReporteVentas = () => {
         apartadosSnap.forEach(doc => {
           const apartado = doc.data();
 
-          // Calcular proporción abonada (incluir todos los apartados, no solo completados)
+          if (apartado.estado === 'Anulado' || apartado.anulado === true) return;
+
           const totalApartado = apartado.totalApartado || 0;
           const totalAbonado = apartado.totalAbonado || 0;
           const proporcionAbonada = totalApartado > 0 ? totalAbonado / totalApartado : 0;
+          const { metodosPagoArr, metodoPagoStr } = resumenMetodosPago(apartado.historialAbonos);
 
           apartado.items?.forEach(item => {
             const subtotalItem = item.subtotal || 0;
-            const montoRecibidoItem = subtotalItem * proporcionAbonada;
-
-            todasLasVentas.push({
+            const base = {
               fecha: apartado.createdAt.toDate(),
               fuente: 'Apartado',
               numeroDocumento: apartado.numeroApartado || 0,
@@ -288,162 +413,300 @@ const ReporteVentas = () => {
               talla: item.talla || '',
               cantidad: item.cantidad || 0,
               precioUnitario: item.precioUnitario || 0,
-              subtotal: subtotalItem, // Total de venta
-              montoRecibido: montoRecibidoItem, // Lo realmente cobrado
-              metodoPago: apartado.historialAbonos?.[0]?.metodoPago || 'N/A',
+              subtotal: subtotalItem,
+              montoRecibido: subtotalItem * proporcionAbonada,
+              metodoPago: metodoPagoStr,
+              metodosPagoArr,
               colegioId: apartado.colegioId || '',
+              colegioCodigo: '',
               colegioNombre: apartado.colegioNombre || ''
-            });
+            };
+            todasLasVentas.push({ ...base, ...calcularCosto(base) });
           });
         });
       }
 
-      // Aplicar filtros adicionales
-      let ventasFiltradas = todasLasVentas;
-
-      if (clienteId) {
-        ventasFiltradas = ventasFiltradas.filter(v => v.clienteId === clienteId);
-      }
-
-      if (productoRef) {
-        ventasFiltradas = ventasFiltradas.filter(v =>
-          v.referencia.toLowerCase().includes(productoRef.toLowerCase())
-        );
-      }
-
-      if (metodoPago !== 'todos') {
-        ventasFiltradas = ventasFiltradas.filter(v => v.metodoPago === metodoPago);
-      }
-
-      if (colegioId) {
-        // Buscar el nombre del colegio seleccionado
-        const colegioSeleccionado = colegios.find(c => c.id === colegioId);
-        const nombreColegio = colegioSeleccionado?.nombre || '';
-        const codigoColegio = colegioSeleccionado?.codigo || '';
-
-        ventasFiltradas = ventasFiltradas.filter(v =>
-          v.colegioId === colegioId ||
-          v.colegioNombre === nombreColegio ||
-          v.colegioNombre === codigoColegio
-        );
-      }
-
-      // Obtener costos de productos
-      const productosMap = {};
-      productos.forEach(p => {
-        productosMap[p.referencia] = {
-          costoCompra: p.costoCompra || 0,
-          costoSatelite: p.costoSatelite || 0
-        };
+      setVentasCrudas(todasLasVentas);
+      setConsultaGenerada({
+        startDate: startDate.getTime(),
+        endDate: endDate.getTime(),
+        fuenteVenta,
+        colegioId,
+        clienteId
       });
-
-      // Calcular costos y utilidades
-      ventasFiltradas = ventasFiltradas.map(venta => {
-        const producto = productosMap[venta.referencia] || {};
-        const costoUnitario = producto.costoCompra || producto.costoSatelite || 0;
-        const costoTotal = costoUnitario * venta.cantidad;
-        const utilidad = venta.subtotal - costoTotal;
-        const margen = venta.subtotal > 0 ? (utilidad / venta.subtotal) * 100 : 0;
-
-        return {
-          ...venta,
-          costoUnitario,
-          costoTotal,
-          utilidad,
-          margen
-        };
-      });
-
-      // Agrupar según selección
-      let datosAgrupados = [];
-
-      if (agrupacion === 'ninguna') {
-        datosAgrupados = ventasFiltradas;
-      } else {
-        const grupos = {};
-
-        ventasFiltradas.forEach(venta => {
-          let clave = '';
-
-          switch (agrupacion) {
-            case 'producto':
-              clave = venta.referencia;
-              break;
-            case 'cliente':
-              clave = venta.clienteId || 'Sin Cliente';
-              break;
-            case 'fecha':
-              clave = venta.fecha.toISOString().split('T')[0];
-              break;
-            case 'metodoPago':
-              clave = venta.metodoPago;
-              break;
-            default:
-              clave = 'General';
-          }
-
-          if (!grupos[clave]) {
-            grupos[clave] = {
-              clave,
-              nombre: agrupacion === 'producto' ? venta.productoNombre :
-                      agrupacion === 'cliente' ? venta.clienteNombre :
-                      agrupacion === 'fecha' ? clave :
-                      agrupacion === 'metodoPago' ? clave : 'General',
-              referencia: venta.referencia,
-              cantidad: 0,
-              totalVentas: 0,
-              montoRecibido: 0,
-              costoTotal: 0,
-              utilidad: 0,
-              ventas: []
-            };
-          }
-
-          grupos[clave].cantidad += venta.cantidad;
-          grupos[clave].totalVentas += venta.subtotal;
-          grupos[clave].montoRecibido += venta.montoRecibido;
-          grupos[clave].costoTotal += venta.costoTotal;
-          grupos[clave].utilidad += venta.utilidad;
-          grupos[clave].ventas.push(venta);
-        });
-
-        datosAgrupados = Object.values(grupos).map(grupo => ({
-          ...grupo,
-          margen: grupo.totalVentas > 0 ? (grupo.utilidad / grupo.totalVentas) * 100 : 0
-        }));
-
-        // Ordenar por total de ventas descendente
-        datosAgrupados.sort((a, b) => b.totalVentas - a.totalVentas);
-      }
-
-      // Calcular totales generales
-      const totales = {
-        cantidadTotal: ventasFiltradas.reduce((sum, v) => sum + v.cantidad, 0),
-        ventasTotal: ventasFiltradas.reduce((sum, v) => sum + v.subtotal, 0),
-        montoRecibidoTotal: ventasFiltradas.reduce((sum, v) => sum + v.montoRecibido, 0),
-        costoTotal: ventasFiltradas.reduce((sum, v) => sum + v.costoTotal, 0),
-        utilidadTotal: ventasFiltradas.reduce((sum, v) => sum + v.utilidad, 0),
-        margenPromedio: 0
-      };
-      totales.margenPromedio = totales.ventasTotal > 0
-        ? (totales.utilidadTotal / totales.ventasTotal) * 100
-        : 0;
-
-      setReportData({
-        datos: datosAgrupados,
-        totales
-      });
-
     } catch (error) {
       console.error('Error al generar reporte:', error);
-      alert('Error al generar reporte');
+      alert('Error al generar reporte: ' + (error.message || error));
     } finally {
       setLoading(false);
     }
   };
 
+  // Detectar si los filtros de consulta cambiaron desde el último fetch
+  const filtrosConsultaCambiados = useMemo(() => {
+    if (!consultaGenerada) return false;
+    return (
+      consultaGenerada.startDate !== startDate.getTime() ||
+      consultaGenerada.endDate !== endDate.getTime() ||
+      consultaGenerada.fuenteVenta !== fuenteVenta ||
+      consultaGenerada.colegioId !== colegioId ||
+      consultaGenerada.clienteId !== clienteId
+    );
+  }, [consultaGenerada, startDate, endDate, fuenteVenta, colegioId, clienteId]);
+
+  // ---- Filtros cliente-side ----
+  const ventasFiltradas = useMemo(() => {
+    if (!ventasCrudas) return [];
+    let res = ventasCrudas;
+
+    if (clienteId === CLIENTE_GENERAL_KEY) {
+      res = res.filter(v => !v.clienteId);
+    } else if (clienteId) {
+      res = res.filter(v => v.clienteId === clienteId);
+    }
+
+    const q = productoFiltro.trim().toLowerCase();
+    if (q) {
+      res = res.filter(v =>
+        (v.referencia || '').toLowerCase().includes(q) ||
+        (v.productoNombre || '').toLowerCase().includes(q)
+      );
+    }
+
+    if (talla) {
+      res = res.filter(v => v.talla === talla);
+    }
+
+    if (metodoPago !== 'todos') {
+      res = res.filter(v => v.metodosPagoArr?.includes(metodoPago));
+    }
+
+    if (colegioId) {
+      const c = colegios.find(col => col.id === colegioId);
+      const nombre = c?.nombre || '';
+      const codigo = c?.codigo || '';
+      res = res.filter(v =>
+        v.colegioId === colegioId ||
+        (codigo && v.colegioCodigo === codigo) ||
+        (nombre && v.colegioNombre === nombre)
+      );
+    }
+
+    return res;
+  }, [ventasCrudas, clienteId, productoFiltro, talla, metodoPago, colegioId, colegios]);
+
+  // ---- Totales ----
+  const totales = useMemo(() => {
+    const t = {
+      cantidadTotal: 0,
+      ventasTotal: 0,
+      montoRecibidoTotal: 0,
+      costoTotal: 0,
+      utilidadTotal: 0,
+      margenPromedio: 0,
+      totalRegistros: ventasFiltradas.length
+    };
+    ventasFiltradas.forEach(v => {
+      t.cantidadTotal += v.cantidad;
+      t.ventasTotal += v.subtotal;
+      t.montoRecibidoTotal += v.montoRecibido;
+      t.costoTotal += v.costoTotal;
+      t.utilidadTotal += v.utilidad;
+    });
+    t.margenPromedio = t.ventasTotal > 0
+      ? (t.utilidadTotal / t.ventasTotal) * 100
+      : 0;
+    return t;
+  }, [ventasFiltradas]);
+
+  // ---- Tallas para la matriz ----
+  const tallasMatriz = useMemo(() => {
+    if (agrupacion !== 'matrizProductoTalla') return [];
+    const set = new Set();
+    ventasFiltradas.forEach(v => set.add(v.talla || 'Sin talla'));
+    return Array.from(set).sort(sortTallas);
+  }, [ventasFiltradas, agrupacion]);
+
+  // ---- Agrupación ----
+  const datosAgrupados = useMemo(() => {
+    if (agrupacion === 'ninguna') return ventasFiltradas;
+
+    // Matriz Producto × Talla (para producción)
+    if (agrupacion === 'matrizProductoTalla') {
+      const grupos = {};
+      ventasFiltradas.forEach(v => {
+        const clave = v.productoId || v.referencia || 'Sin ref';
+        const t = v.talla || 'Sin talla';
+        if (!grupos[clave]) {
+          grupos[clave] = {
+            clave,
+            nombre: v.productoNombre || v.referencia || 'Sin nombre',
+            referencia: v.referencia || '',
+            tallas: {},
+            totalCantidad: 0,
+            totalVentas: 0,
+            montoRecibido: 0,
+            costoTotal: 0,
+            utilidad: 0
+          };
+        }
+        grupos[clave].tallas[t] = (grupos[clave].tallas[t] || 0) + v.cantidad;
+        grupos[clave].totalCantidad += v.cantidad;
+        grupos[clave].totalVentas += v.subtotal;
+        grupos[clave].montoRecibido += v.montoRecibido;
+        grupos[clave].costoTotal += v.costoTotal;
+        grupos[clave].utilidad += v.utilidad;
+      });
+      return Object.values(grupos).map(g => ({
+        ...g,
+        margen: g.totalVentas > 0 ? (g.utilidad / g.totalVentas) * 100 : 0
+      }));
+    }
+
+    const grupos = {};
+    ventasFiltradas.forEach(v => {
+      let clave = '';
+      let nombre = '';
+
+      switch (agrupacion) {
+        case 'producto':
+          clave = v.productoId || v.referencia || 'Sin ref';
+          nombre = v.referencia ? `${v.referencia} - ${v.productoNombre}` : v.productoNombre;
+          break;
+        case 'cliente':
+          clave = v.clienteId || CLIENTE_GENERAL_KEY;
+          nombre = v.clienteId ? v.clienteNombre : 'Cliente General';
+          break;
+        case 'colegio':
+          clave = v.colegioId || v.colegioCodigo || v.colegioNombre || 'Sin colegio';
+          nombre = v.colegioNombre || v.colegioCodigo || 'Sin colegio';
+          break;
+        case 'talla':
+          clave = v.talla || 'Sin talla';
+          nombre = v.talla || 'Sin talla';
+          break;
+        case 'fecha': {
+          const d = v.fecha;
+          clave = d.toISOString().split('T')[0];
+          nombre = d.toLocaleDateString('es-CO');
+          break;
+        }
+        case 'metodoPago':
+          clave = v.metodoPago;
+          nombre = v.metodoPago;
+          break;
+        default:
+          clave = 'General';
+          nombre = 'General';
+      }
+
+      if (!grupos[clave]) {
+        grupos[clave] = {
+          clave,
+          nombre,
+          cantidad: 0,
+          totalVentas: 0,
+          montoRecibido: 0,
+          costoTotal: 0,
+          utilidad: 0
+        };
+      }
+
+      grupos[clave].cantidad += v.cantidad;
+      grupos[clave].totalVentas += v.subtotal;
+      grupos[clave].montoRecibido += v.montoRecibido;
+      grupos[clave].costoTotal += v.costoTotal;
+      grupos[clave].utilidad += v.utilidad;
+    });
+
+    return Object.values(grupos).map(g => ({
+      ...g,
+      margen: g.totalVentas > 0 ? (g.utilidad / g.totalVentas) * 100 : 0
+    }));
+  }, [ventasFiltradas, agrupacion]);
+
+  // Totales por talla para la fila final de la matriz
+  const totalesPorTalla = useMemo(() => {
+    if (agrupacion !== 'matrizProductoTalla') return {};
+    const res = {};
+    tallasMatriz.forEach(t => { res[t] = 0; });
+    datosAgrupados.forEach(p => {
+      tallasMatriz.forEach(t => {
+        res[t] += p.tallas?.[t] || 0;
+      });
+    });
+    return res;
+  }, [datosAgrupados, tallasMatriz, agrupacion]);
+
+  // ---- Ordenamiento ----
+  const datosOrdenados = useMemo(() => {
+    const arr = [...datosAgrupados];
+    const { key, direction } = sortConfig;
+    const mult = direction === 'asc' ? 1 : -1;
+    const esTalla = key.startsWith('talla_');
+    const tallaKey = esTalla ? key.substring(6) : null;
+
+    arr.sort((a, b) => {
+      let va, vb;
+      if (esTalla) {
+        va = a.tallas?.[tallaKey] || 0;
+        vb = b.tallas?.[tallaKey] || 0;
+      } else {
+        va = a[key];
+        vb = b[key];
+      }
+      if (va instanceof Date) va = va.getTime();
+      if (vb instanceof Date) vb = vb.getTime();
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === 'string' && typeof vb === 'string') {
+        return va.localeCompare(vb) * mult;
+      }
+      return (va - vb) * mult;
+    });
+    return arr;
+  }, [datosAgrupados, sortConfig]);
+
+  // ---- Paginación ----
+  const totalPaginas = Math.max(1, Math.ceil(datosOrdenados.length / tamanoPagina));
+  const datosPaginados = useMemo(() => {
+    const inicio = (paginaActual - 1) * tamanoPagina;
+    return datosOrdenados.slice(inicio, inicio + tamanoPagina);
+  }, [datosOrdenados, paginaActual, tamanoPagina]);
+
+  // Reset paginación cuando cambian filtros/orden/agrupación
+  useEffect(() => {
+    setPaginaActual(1);
+  }, [clienteId, productoFiltro, talla, metodoPago, colegioId, agrupacion, tamanoPagina, sortConfig, ventasCrudas]);
+
+  // Reset orden al cambiar agrupación
+  useEffect(() => {
+    if (agrupacion === 'ninguna') {
+      setSortConfig({ key: 'fecha', direction: 'desc' });
+    } else if (agrupacion === 'matrizProductoTalla') {
+      setSortConfig({ key: 'totalCantidad', direction: 'desc' });
+    } else {
+      setSortConfig({ key: 'totalVentas', direction: 'desc' });
+    }
+  }, [agrupacion]);
+
+  // Mantener página en rango si cambia el total
+  useEffect(() => {
+    if (paginaActual > totalPaginas) setPaginaActual(totalPaginas);
+  }, [totalPaginas, paginaActual]);
+
+  const handleSort = (key) => {
+    setSortConfig(prev => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key, direction: 'desc' };
+    });
+  };
+
   const exportarAExcel = () => {
-    if (!reportData || !reportData.datos.length) {
+    if (!datosOrdenados.length) {
       alert('No hay datos para exportar');
       return;
     }
@@ -451,9 +714,21 @@ const ReporteVentas = () => {
     try {
       let dataParaExcel = [];
 
-      if (agrupacion === 'ninguna') {
-        // Exportar detalle completo
-        dataParaExcel = reportData.datos.map(venta => ({
+      if (agrupacion === 'matrizProductoTalla') {
+        dataParaExcel = datosOrdenados.map(prod => {
+          const fila = { 'Producto': prod.nombre, 'Referencia': prod.referencia };
+          tallasMatriz.forEach(t => { fila[`Talla ${t}`] = prod.tallas[t] || 0; });
+          fila['Total Unidades'] = prod.totalCantidad;
+          fila['Total Ventas'] = prod.totalVentas;
+          return fila;
+        });
+        const filaTotal = { 'Producto': 'TOTALES', 'Referencia': '' };
+        tallasMatriz.forEach(t => { filaTotal[`Talla ${t}`] = totalesPorTalla[t] || 0; });
+        filaTotal['Total Unidades'] = totales.cantidadTotal;
+        filaTotal['Total Ventas'] = totales.ventasTotal;
+        dataParaExcel.push(filaTotal);
+      } else if (agrupacion === 'ninguna') {
+        dataParaExcel = datosOrdenados.map(venta => ({
           'Fecha': venta.fecha.toLocaleDateString('es-CO'),
           'Fuente': venta.fuente,
           'No. Documento': venta.numeroDocumento,
@@ -472,21 +747,7 @@ const ReporteVentas = () => {
           'Método Pago': venta.metodoPago,
           'Colegio': venta.colegioNombre
         }));
-      } else {
-        // Exportar datos agrupados
-        dataParaExcel = reportData.datos.map(grupo => ({
-          'Grupo': grupo.nombre,
-          'Cantidad Total': grupo.cantidad,
-          'Total Ventas': grupo.totalVentas,
-          'Recaudado': grupo.montoRecibido,
-          'Costo Total': grupo.costoTotal,
-          'Utilidad': grupo.utilidad,
-          'Margen %': grupo.margen.toFixed(2)
-        }));
-      }
 
-      // Agregar fila de totales
-      if (agrupacion === 'ninguna') {
         dataParaExcel.push({
           'Fecha': '',
           'Fuente': '',
@@ -495,26 +756,36 @@ const ReporteVentas = () => {
           'Producto': '',
           'Referencia': 'TOTALES',
           'Talla': '',
-          'Cantidad': reportData.totales.cantidadTotal,
+          'Cantidad': totales.cantidadTotal,
           'Precio Unit.': '',
-          'Subtotal': reportData.totales.ventasTotal,
-          'Recaudado': reportData.totales.montoRecibidoTotal,
+          'Subtotal': totales.ventasTotal,
+          'Recaudado': totales.montoRecibidoTotal,
           'Costo Unit.': '',
-          'Costo Total': reportData.totales.costoTotal,
-          'Utilidad': reportData.totales.utilidadTotal,
-          'Margen %': reportData.totales.margenPromedio.toFixed(2),
+          'Costo Total': totales.costoTotal,
+          'Utilidad': totales.utilidadTotal,
+          'Margen %': totales.margenPromedio.toFixed(2),
           'Método Pago': '',
           'Colegio': ''
         });
       } else {
+        dataParaExcel = datosOrdenados.map(grupo => ({
+          'Grupo': grupo.nombre,
+          'Cantidad Total': grupo.cantidad,
+          'Total Ventas': grupo.totalVentas,
+          'Recaudado': grupo.montoRecibido,
+          'Costo Total': grupo.costoTotal,
+          'Utilidad': grupo.utilidad,
+          'Margen %': grupo.margen.toFixed(2)
+        }));
+
         dataParaExcel.push({
           'Grupo': 'TOTALES',
-          'Cantidad Total': reportData.totales.cantidadTotal,
-          'Total Ventas': reportData.totales.ventasTotal,
-          'Recaudado': reportData.totales.montoRecibidoTotal,
-          'Costo Total': reportData.totales.costoTotal,
-          'Utilidad': reportData.totales.utilidadTotal,
-          'Margen %': reportData.totales.margenPromedio.toFixed(2)
+          'Cantidad Total': totales.cantidadTotal,
+          'Total Ventas': totales.ventasTotal,
+          'Recaudado': totales.montoRecibidoTotal,
+          'Costo Total': totales.costoTotal,
+          'Utilidad': totales.utilidadTotal,
+          'Margen %': totales.margenPromedio.toFixed(2)
         });
       }
 
@@ -531,6 +802,31 @@ const ReporteVentas = () => {
       alert('Error al exportar el reporte');
     }
   };
+
+  // Header sortable
+  const SortHeader = ({ columnKey, label, align = 'left' }) => {
+    const active = sortConfig.key === columnKey;
+    const Icon = active
+      ? (sortConfig.direction === 'asc' ? ArrowUp : ArrowDown)
+      : ArrowUpDown;
+    const alignClass = align === 'right' ? 'justify-end' : 'justify-start';
+    return (
+      <th
+        onClick={() => handleSort(columnKey)}
+        className={`px-4 py-3 text-${align} text-xs font-medium text-gray-500 uppercase cursor-pointer select-none hover:bg-gray-100`}
+      >
+        <div className={`flex items-center gap-1 ${alignClass}`}>
+          <span>{label}</span>
+          <Icon size={12} className={active ? '' : 'opacity-40'} />
+        </div>
+      </th>
+    );
+  };
+
+  const inicioPag = datosOrdenados.length === 0
+    ? 0
+    : (paginaActual - 1) * tamanoPagina + 1;
+  const finPag = Math.min(paginaActual * tamanoPagina, datosOrdenados.length);
 
   return (
     <div className="p-4 sm:p-6">
@@ -591,6 +887,12 @@ const ReporteVentas = () => {
               Hoy
             </button>
             <button
+              onClick={() => setPresetDate('ayer')}
+              className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium"
+            >
+              Ayer
+            </button>
+            <button
               onClick={() => setPresetDate('semana')}
               className="px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium"
             >
@@ -625,7 +927,7 @@ const ReporteVentas = () => {
           {/* Cliente */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Cliente (Opcional)
+              Cliente
             </label>
             <select
               value={clienteId}
@@ -633,7 +935,8 @@ const ReporteVentas = () => {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
             >
               <option value="">Todos los clientes</option>
-              {clientes.map(cliente => (
+              <option value={CLIENTE_GENERAL_KEY}>Cliente General (sin cliente)</option>
+              {clientesOrdenados.map(cliente => (
                 <option key={cliente.id} value={cliente.id}>
                   {cliente.nombre}
                 </option>
@@ -641,18 +944,47 @@ const ReporteVentas = () => {
             </select>
           </div>
 
-          {/* Producto */}
+          {/* Producto (buscador con autocomplete) */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Referencia Producto (Opcional)
+              Producto (ref o nombre)
             </label>
             <input
               type="text"
-              value={productoRef}
-              onChange={(e) => setProductoRef(e.target.value)}
-              placeholder="Ej: CH-001"
+              list="productos-list"
+              value={productoFiltro}
+              onChange={(e) => setProductoFiltro(e.target.value)}
+              placeholder="Ej: CH-001 o Camiseta"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
             />
+            <datalist id="productos-list">
+              {productosOrdenados.map(p => (
+                <option key={p.id} value={p.referencia || ''}>
+                  {p.nombre}
+                </option>
+              ))}
+            </datalist>
+          </div>
+
+          {/* Talla */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Talla
+            </label>
+            <select
+              value={talla}
+              onChange={(e) => setTalla(e.target.value)}
+              disabled={!ventasCrudas}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 disabled:bg-gray-100"
+            >
+              <option value="">Todas las tallas</option>
+              {tallasDisponibles.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            {!ventasCrudas && (
+              <p className="text-xs text-gray-500 mt-1">Genera el reporte para ver tallas</p>
+            )}
           </div>
 
           {/* Método de pago */}
@@ -677,7 +1009,7 @@ const ReporteVentas = () => {
           {/* Colegio */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Colegio (Opcional)
+              Colegio
             </label>
             <select
               value={colegioId}
@@ -685,7 +1017,7 @@ const ReporteVentas = () => {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
             >
               <option value="">Todos los colegios</option>
-              {colegios.map(colegio => (
+              {colegiosOrdenados.map(colegio => (
                 <option key={colegio.id} value={colegio.id}>
                   {colegio.nombre}
                 </option>
@@ -693,26 +1025,29 @@ const ReporteVentas = () => {
             </select>
           </div>
 
-          {/* Agrupación */}
+          {/* Vista */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Agrupar Por
+              Vista
             </label>
             <select
               value={agrupacion}
               onChange={(e) => setAgrupacion(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500"
             >
-              <option value="ninguna">Sin agrupar (Detalle)</option>
-              <option value="producto">Por Producto</option>
-              <option value="cliente">Por Cliente</option>
-              <option value="fecha">Por Fecha</option>
-              <option value="metodoPago">Por Método de Pago</option>
+              <option value="matrizProductoTalla">Matriz Producto × Talla (Producción)</option>
+              <option value="producto">Totales por Producto</option>
+              <option value="talla">Totales por Talla</option>
+              <option value="colegio">Totales por Colegio</option>
+              <option value="cliente">Totales por Cliente</option>
+              <option value="fecha">Totales por Fecha</option>
+              <option value="metodoPago">Totales por Método de Pago</option>
+              <option value="ninguna">Detalle (lista completa)</option>
             </select>
           </div>
         </div>
 
-        {/* Botones de acción */}
+        {/* Botones */}
         <div className="flex flex-col sm:flex-row gap-3 mt-6">
           <button
             onClick={generarReporte}
@@ -724,13 +1059,26 @@ const ReporteVentas = () => {
           </button>
           <button
             onClick={exportarAExcel}
-            disabled={!reportData || loading}
+            disabled={!ventasCrudas || loading || datosOrdenados.length === 0}
             className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg font-medium shadow-md hover:bg-green-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
           >
             <Download size={20} />
             Exportar a Excel
           </button>
         </div>
+
+        {filtrosConsultaCambiados && (
+          <div className="mt-4 px-4 py-3 bg-yellow-50 border border-yellow-300 rounded-lg flex items-center gap-3">
+            <span className="text-yellow-700 text-sm font-medium">
+              ⚠ Las fechas, fuente o colegio cambiaron. Presiona <strong>Generar Reporte</strong> para aplicar los nuevos valores.
+            </span>
+          </div>
+        )}
+        {ventasCrudas && !filtrosConsultaCambiados && (
+          <p className="text-xs text-gray-500 mt-3">
+            Producto, talla y método de pago se filtran en tiempo real sin volver a consultar la base de datos.
+          </p>
+        )}
       </div>
 
       {/* Resultados */}
@@ -740,13 +1088,13 @@ const ReporteVentas = () => {
         </div>
       )}
 
-      {!loading && !reportData && (
+      {!loading && ventasCrudas === null && (
         <div className="text-center py-20 bg-white rounded-lg shadow-md">
           <p className="text-gray-600">Configura los filtros y haz clic en "Generar Reporte"</p>
         </div>
       )}
 
-      {!loading && reportData && (
+      {!loading && ventasCrudas && (
         <>
           {/* Tarjetas de Resumen */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
@@ -755,7 +1103,7 @@ const ReporteVentas = () => {
                 <div>
                   <p className="text-sm text-gray-600">Cantidad Total</p>
                   <p className="text-2xl font-bold text-gray-800">
-                    {reportData.totales.cantidadTotal.toLocaleString()}
+                    {totales.cantidadTotal.toLocaleString()}
                   </p>
                 </div>
                 <Package size={32} className="text-blue-500" />
@@ -767,7 +1115,7 @@ const ReporteVentas = () => {
                 <div>
                   <p className="text-sm text-gray-600">Total Ventas</p>
                   <p className="text-2xl font-bold text-green-600">
-                    {formatCurrency(reportData.totales.ventasTotal)}
+                    {formatCurrency(totales.ventasTotal)}
                   </p>
                 </div>
                 <DollarSign size={32} className="text-green-500" />
@@ -779,7 +1127,7 @@ const ReporteVentas = () => {
                 <div>
                   <p className="text-sm text-gray-600">Recaudado</p>
                   <p className="text-2xl font-bold text-orange-600">
-                    {formatCurrency(reportData.totales.montoRecibidoTotal)}
+                    {formatCurrency(totales.montoRecibidoTotal)}
                   </p>
                 </div>
                 <DollarSign size={32} className="text-orange-500" />
@@ -791,7 +1139,7 @@ const ReporteVentas = () => {
                 <div>
                   <p className="text-sm text-gray-600">Utilidad</p>
                   <p className="text-2xl font-bold" style={{ color: '#D50565' }}>
-                    {formatCurrency(reportData.totales.utilidadTotal)}
+                    {formatCurrency(totales.utilidadTotal)}
                   </p>
                 </div>
                 <TrendingUp size={32} style={{ color: '#D50565' }} />
@@ -803,7 +1151,7 @@ const ReporteVentas = () => {
                 <div>
                   <p className="text-sm text-gray-600">Margen Promedio</p>
                   <p className="text-2xl font-bold text-purple-600">
-                    {reportData.totales.margenPromedio.toFixed(2)}%
+                    {totales.margenPromedio.toFixed(2)}%
                   </p>
                 </div>
                 <Calendar size={32} className="text-purple-500" />
@@ -811,83 +1159,264 @@ const ReporteVentas = () => {
             </div>
           </div>
 
-          {/* Tabla de Resultados */}
+          {/* Tabla */}
           <div className="bg-white rounded-lg shadow-md overflow-hidden">
+            {/* Contador + tamaño página */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 px-4 py-3 border-b bg-gray-50">
+              <p className="text-sm text-gray-600">
+                {datosOrdenados.length === 0
+                  ? 'Sin resultados con los filtros actuales'
+                  : `Mostrando ${inicioPag}–${finPag} de ${datosOrdenados.length.toLocaleString()} ${
+                      agrupacion === 'ninguna' ? 'registros' :
+                      agrupacion === 'matrizProductoTalla' ? 'productos' :
+                      'grupos'
+                    } · ${totales.cantidadTotal.toLocaleString()} prendas`}
+              </p>
+              <div className="flex items-center gap-2 text-sm">
+                <label className="text-gray-600">Por página:</label>
+                <select
+                  value={tamanoPagina}
+                  onChange={(e) => setTamanoPagina(Number(e.target.value))}
+                  className="px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-pink-500"
+                >
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value={200}>200</option>
+                </select>
+              </div>
+            </div>
+
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    {agrupacion === 'ninguna' ? (
-                      <>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fecha</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fuente</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">No. Doc</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Producto</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ref</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Talla</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Cant</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">P. Unit</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Subtotal</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Recaudado</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Utilidad</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Margen %</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Colegio</th>
-                      </>
-                    ) : (
-                      <>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                          {agrupacion === 'producto' ? 'Producto' :
-                           agrupacion === 'cliente' ? 'Cliente' :
-                           agrupacion === 'fecha' ? 'Fecha' :
-                           agrupacion === 'metodoPago' ? 'Método Pago' : 'Grupo'}
-                        </th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Cantidad</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Total Ventas</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Recaudado</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Costo Total</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Utilidad</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Margen %</th>
-                      </>
+
+                {/* ── MODO MATRIZ: Producto × Talla ── */}
+                {agrupacion === 'matrizProductoTalla' && (
+                  <>
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <SortHeader columnKey="nombre" label="Producto" />
+                        <SortHeader columnKey="referencia" label="Ref" />
+                        {tallasMatriz.map(t => (
+                          <th
+                            key={t}
+                            onClick={() => handleSort(`talla_${t}`)}
+                            className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase cursor-pointer select-none hover:bg-gray-100 whitespace-nowrap"
+                          >
+                            <div className="flex items-center justify-end gap-1">
+                              <span>{t}</span>
+                              {sortConfig.key === `talla_${t}`
+                                ? (sortConfig.direction === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)
+                                : <ArrowUpDown size={12} className="opacity-40" />}
+                            </div>
+                          </th>
+                        ))}
+                        <SortHeader columnKey="totalCantidad" label="Total" align="right" />
+                        <SortHeader columnKey="totalVentas" label="Ventas" align="right" />
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {datosPaginados.length === 0 ? (
+                        <tr>
+                          <td colSpan={2 + tallasMatriz.length + 2} className="px-4 py-10 text-center text-gray-500 text-sm">
+                            No hay datos que mostrar
+                          </td>
+                        </tr>
+                      ) : datosPaginados.map((prod, i) => (
+                        <tr key={i} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm font-medium text-gray-900">{prod.nombre}</td>
+                          <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">{prod.referencia}</td>
+                          {tallasMatriz.map(t => (
+                            <td key={t} className="px-3 py-3 text-sm text-right">
+                              {prod.tallas[t]
+                                ? <span className="font-medium text-gray-900">{prod.tallas[t].toLocaleString()}</span>
+                                : <span className="text-gray-300">—</span>}
+                            </td>
+                          ))}
+                          <td className="px-4 py-3 text-sm font-bold text-blue-700 text-right">
+                            {prod.totalCantidad.toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right whitespace-nowrap">
+                            {formatCurrency(prod.totalVentas)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    {datosPaginados.length > 0 && (
+                      <tfoot>
+                        <tr className="bg-blue-50 border-t-2 border-blue-200">
+                          <td colSpan={2} className="px-4 py-3 text-sm font-bold text-gray-700">TOTAL</td>
+                          {tallasMatriz.map(t => (
+                            <td key={t} className="px-3 py-3 text-sm font-bold text-blue-700 text-right">
+                              {(totalesPorTalla[t] || 0).toLocaleString()}
+                            </td>
+                          ))}
+                          <td className="px-4 py-3 text-sm font-bold text-blue-700 text-right">
+                            {totales.cantidadTotal.toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-700 text-right whitespace-nowrap">
+                            {formatCurrency(totales.ventasTotal)}
+                          </td>
+                        </tr>
+                      </tfoot>
                     )}
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {agrupacion === 'ninguna' ? (
-                    reportData.datos.map((venta, index) => (
-                      <tr key={index} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-sm text-gray-900">{venta.fecha.toLocaleDateString('es-CO')}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{venta.fuente}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{venta.numeroDocumento}</td>
-                        <td className="px-4 py-3 text-sm text-gray-900">{venta.clienteNombre}</td>
-                        <td className="px-4 py-3 text-sm text-gray-900">{venta.productoNombre}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{venta.referencia}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{venta.talla}</td>
-                        <td className="px-4 py-3 text-sm text-gray-900 text-right">{venta.cantidad}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600 text-right">{formatCurrency(venta.precioUnitario)}</td>
-                        <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right">{formatCurrency(venta.subtotal)}</td>
-                        <td className="px-4 py-3 text-sm font-medium text-orange-600 text-right">{formatCurrency(venta.montoRecibido)}</td>
-                        <td className="px-4 py-3 text-sm font-medium text-green-600 text-right">{formatCurrency(venta.utilidad)}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600 text-right">{venta.margen.toFixed(2)}%</td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{venta.colegioNombre || '-'}</td>
+                  </>
+                )}
+
+                {/* ── MODO DETALLE: lista completa ── */}
+                {agrupacion === 'ninguna' && (
+                  <>
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <SortHeader columnKey="fecha" label="Fecha" />
+                        <SortHeader columnKey="fuente" label="Fuente" />
+                        <SortHeader columnKey="numeroDocumento" label="No. Doc" />
+                        <SortHeader columnKey="clienteNombre" label="Cliente" />
+                        <SortHeader columnKey="productoNombre" label="Producto" />
+                        <SortHeader columnKey="referencia" label="Ref" />
+                        <SortHeader columnKey="talla" label="Talla" />
+                        <SortHeader columnKey="cantidad" label="Cant" align="right" />
+                        <SortHeader columnKey="precioUnitario" label="P. Unit" align="right" />
+                        <SortHeader columnKey="subtotal" label="Subtotal" align="right" />
+                        <SortHeader columnKey="montoRecibido" label="Recaudado" align="right" />
+                        <SortHeader columnKey="utilidad" label="Utilidad" align="right" />
+                        <SortHeader columnKey="margen" label="Margen %" align="right" />
+                        <SortHeader columnKey="colegioNombre" label="Colegio" />
                       </tr>
-                    ))
-                  ) : (
-                    reportData.datos.map((grupo, index) => (
-                      <tr key={index} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-sm font-medium text-gray-900">{grupo.nombre}</td>
-                        <td className="px-4 py-3 text-sm text-gray-900 text-right">{grupo.cantidad.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right">{formatCurrency(grupo.totalVentas)}</td>
-                        <td className="px-4 py-3 text-sm font-medium text-orange-600 text-right">{formatCurrency(grupo.montoRecibido)}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600 text-right">{formatCurrency(grupo.costoTotal)}</td>
-                        <td className="px-4 py-3 text-sm font-medium text-green-600 text-right">{formatCurrency(grupo.utilidad)}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600 text-right">{grupo.margen.toFixed(2)}%</td>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {datosPaginados.length === 0 ? (
+                        <tr>
+                          <td colSpan={14} className="px-4 py-10 text-center text-gray-500 text-sm">
+                            No hay datos que mostrar
+                          </td>
+                        </tr>
+                      ) : datosPaginados.map((venta, index) => (
+                        <tr key={index} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm text-gray-900 whitespace-nowrap">{venta.fecha.toLocaleDateString('es-CO')}</td>
+                          <td className="px-4 py-3 text-sm text-gray-600">{venta.fuente}</td>
+                          <td className="px-4 py-3 text-sm text-gray-600">{venta.numeroDocumento}</td>
+                          <td className="px-4 py-3 text-sm text-gray-900">{venta.clienteNombre}</td>
+                          <td className="px-4 py-3 text-sm text-gray-900">{venta.productoNombre}</td>
+                          <td className="px-4 py-3 text-sm text-gray-600">{venta.referencia}</td>
+                          <td className="px-4 py-3 text-sm text-gray-600">{venta.talla}</td>
+                          <td className="px-4 py-3 text-sm text-gray-900 text-right">{venta.cantidad}</td>
+                          <td className="px-4 py-3 text-sm text-gray-600 text-right whitespace-nowrap">{formatCurrency(venta.precioUnitario)}</td>
+                          <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right whitespace-nowrap">{formatCurrency(venta.subtotal)}</td>
+                          <td className="px-4 py-3 text-sm font-medium text-orange-600 text-right whitespace-nowrap">{formatCurrency(venta.montoRecibido)}</td>
+                          <td className="px-4 py-3 text-sm font-medium text-green-600 text-right whitespace-nowrap">{formatCurrency(venta.utilidad)}</td>
+                          <td className="px-4 py-3 text-sm text-gray-600 text-right">{venta.margen.toFixed(2)}%</td>
+                          <td className="px-4 py-3 text-sm text-gray-600">{venta.colegioNombre || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </>
+                )}
+
+                {/* ── MODO AGRUPADO: totales por dimensión ── */}
+                {agrupacion !== 'ninguna' && agrupacion !== 'matrizProductoTalla' && (
+                  <>
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <SortHeader
+                          columnKey="nombre"
+                          label={
+                            agrupacion === 'producto' ? 'Producto' :
+                            agrupacion === 'cliente' ? 'Cliente' :
+                            agrupacion === 'colegio' ? 'Colegio' :
+                            agrupacion === 'talla' ? 'Talla' :
+                            agrupacion === 'fecha' ? 'Fecha' :
+                            agrupacion === 'metodoPago' ? 'Método Pago' : 'Grupo'
+                          }
+                        />
+                        <SortHeader columnKey="cantidad" label="Unidades" align="right" />
+                        <SortHeader columnKey="totalVentas" label="Total Ventas" align="right" />
+                        <SortHeader columnKey="montoRecibido" label="Recaudado" align="right" />
+                        <SortHeader columnKey="costoTotal" label="Costo Total" align="right" />
+                        <SortHeader columnKey="utilidad" label="Utilidad" align="right" />
+                        <SortHeader columnKey="margen" label="Margen %" align="right" />
                       </tr>
-                    ))
-                  )}
-                </tbody>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {datosPaginados.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-10 text-center text-gray-500 text-sm">
+                            No hay datos que mostrar
+                          </td>
+                        </tr>
+                      ) : datosPaginados.map((grupo, index) => (
+                        <tr key={index} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm font-medium text-gray-900">{grupo.nombre}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-blue-700 text-right">{grupo.cantidad.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right whitespace-nowrap">{formatCurrency(grupo.totalVentas)}</td>
+                          <td className="px-4 py-3 text-sm font-medium text-orange-600 text-right whitespace-nowrap">{formatCurrency(grupo.montoRecibido)}</td>
+                          <td className="px-4 py-3 text-sm text-gray-600 text-right whitespace-nowrap">{formatCurrency(grupo.costoTotal)}</td>
+                          <td className="px-4 py-3 text-sm font-medium text-green-600 text-right whitespace-nowrap">{formatCurrency(grupo.utilidad)}</td>
+                          <td className="px-4 py-3 text-sm text-gray-600 text-right">{grupo.margen.toFixed(2)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    {datosPaginados.length > 0 && (
+                      <tfoot>
+                        <tr className="bg-gray-50 border-t-2 border-gray-300">
+                          <td className="px-4 py-3 text-sm font-bold text-gray-700">TOTAL</td>
+                          <td className="px-4 py-3 text-sm font-bold text-blue-700 text-right">{totales.cantidadTotal.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-700 text-right whitespace-nowrap">{formatCurrency(totales.ventasTotal)}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-orange-600 text-right whitespace-nowrap">{formatCurrency(totales.montoRecibidoTotal)}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-600 text-right whitespace-nowrap">{formatCurrency(totales.costoTotal)}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-green-600 text-right whitespace-nowrap">{formatCurrency(totales.utilidadTotal)}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-600 text-right">{totales.margenPromedio.toFixed(2)}%</td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </>
+                )}
+
               </table>
             </div>
+
+            {/* Controles paginación */}
+            {datosOrdenados.length > 0 && (
+              <div className="flex items-center justify-between px-4 py-3 border-t bg-gray-50">
+                <p className="text-sm text-gray-600">
+                  Página {paginaActual} de {totalPaginas}
+                </p>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setPaginaActual(1)}
+                    disabled={paginaActual === 1}
+                    className="p-2 rounded hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="Primera página"
+                  >
+                    <ChevronsLeft size={18} />
+                  </button>
+                  <button
+                    onClick={() => setPaginaActual(p => Math.max(1, p - 1))}
+                    disabled={paginaActual === 1}
+                    className="p-2 rounded hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="Página anterior"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <button
+                    onClick={() => setPaginaActual(p => Math.min(totalPaginas, p + 1))}
+                    disabled={paginaActual >= totalPaginas}
+                    className="p-2 rounded hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="Página siguiente"
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                  <button
+                    onClick={() => setPaginaActual(totalPaginas)}
+                    disabled={paginaActual >= totalPaginas}
+                    className="p-2 rounded hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                    title="Última página"
+                  >
+                    <ChevronsRight size={18} />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}

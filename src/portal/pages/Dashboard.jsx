@@ -52,16 +52,20 @@ const Dashboard = () => {
       }));
 
       // Calcular estadísticas
-      const totalPedidos = pedidos.length;
-      const pedidosActivos = pedidos.filter(
-        p => p.estado !== 'Entregado' && p.estado !== 'Cancelado'
+      // Los pedidos anulados se excluyen de TODOS los totales (deuda fantasma)
+      const esAnulado = (p) => p.estado === 'Anulado' || p.anulado === true;
+      const pedidosNoAnulados = pedidos.filter(p => !esAnulado(p));
+
+      const totalPedidos = pedidosNoAnulados.length;
+      const pedidosActivos = pedidosNoAnulados.filter(
+        p => p.estado !== 'Entregado' && p.estado !== 'Completado'
       ).length;
 
       let totalComprado = 0;
       let totalAbonado = 0;
       let ultimosAbonos = [];
 
-      pedidos.forEach(pedido => {
+      pedidosNoAnulados.forEach(pedido => {
         totalComprado += pedido.total || 0;
 
         if (pedido.abonos && pedido.abonos.length > 0) {
@@ -88,11 +92,12 @@ const Dashboard = () => {
 
       const totalAdeudado = totalComprado - totalAbonado;
 
-      // Pedidos recientes (últimos 5)
+      // Pedidos recientes (últimos 5) — se muestran todos, incluyendo anulados,
+      // para que el cliente vea el histórico completo.
       const pedidosRecientes = pedidos.slice(0, 5);
 
-      // Calcular pedidos por mes (últimos 6 meses)
-      const pedidosPorMes = calcularPedidosPorMes(pedidos);
+      // Calcular pedidos por mes (últimos 6 meses) — sin anulados
+      const pedidosPorMes = calcularPedidosPorMes(pedidosNoAnulados);
 
       setStats({
         totalPedidos,
@@ -165,10 +170,17 @@ const Dashboard = () => {
         return 'bg-yellow-100 text-yellow-800 border-yellow-300';
       case 'En Preparación':
         return 'bg-blue-100 text-blue-800 border-blue-300';
+      case 'Enviado Parcial':
+        return 'bg-orange-100 text-orange-800 border-orange-300';
+      case 'Enviado':
       case 'Despachado':
         return 'bg-purple-100 text-purple-800 border-purple-300';
       case 'Entregado':
         return 'bg-green-100 text-green-800 border-green-300';
+      case 'Completado':
+        return 'bg-emerald-100 text-emerald-800 border-emerald-300';
+      case 'Anulado':
+        return 'bg-red-100 text-red-800 border-red-300';
       default:
         return 'bg-gray-100 text-gray-800 border-gray-300';
     }

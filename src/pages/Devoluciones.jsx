@@ -278,7 +278,7 @@ const Devoluciones = () => {
     return itemsSeleccionados.reduce((total, index) => {
       const item = facturaEncontrada.items[index];
       const cantidadDevuelta = cantidadesDevueltas[index] || item.cantidad;
-      return total + (cantidadDevuelta * (item.precioUnitario || 0));
+      return total + (cantidadDevuelta * (item.precioUnitario || item.precio || 0));
     }, 0);
   };
 
@@ -400,8 +400,8 @@ const Devoluciones = () => {
           referencia: item.referencia || item.product?.referencia,
           talla: item.talla,
           cantidad: item.cantidad,
-          precioUnitario: item.precioUnitario || 0,
-          subtotal: item.cantidad * (item.precioUnitario || 0),
+          precioUnitario: item.precioUnitario || item.precio || 0,
+          subtotal: item.cantidad * (item.precioUnitario || item.precio || 0),
           razon: item.razon
         })),
         notas: notasDevolucion,
@@ -522,7 +522,7 @@ const Devoluciones = () => {
     return itemsSeleccionados.reduce((total, index) => {
       const item = facturaEncontrada.items[index];
       const cantidadDevuelta = cantidadesDevueltas[index] || item.cantidad;
-      return total + (cantidadDevuelta * (item.precioUnitario || 0));
+      return total + (cantidadDevuelta * (item.precioUnitario || item.precio || 0));
     }, 0);
   };
 
@@ -719,8 +719,8 @@ const Devoluciones = () => {
             referencia: item.referencia || item.product?.referencia,
             talla: item.talla,
             cantidad: item.cantidad,
-            precioUnitario: item.precioUnitario || 0,
-            subtotal: item.cantidad * (item.precioUnitario || 0),
+            precioUnitario: item.precioUnitario || item.precio || 0,
+            subtotal: item.cantidad * (item.precioUnitario || item.precio || 0),
             razon: item.razon
           })),
           itemsNuevos: productosNuevos.map(p => ({
@@ -924,11 +924,11 @@ const Devoluciones = () => {
                         </div>
                         <div>
                           <span className="text-gray-500 text-xs">Precio:</span>
-                          <p className="font-medium text-gray-900">${(item.precioUnitario || 0).toLocaleString()}</p>
+                          <p className="font-medium text-gray-900">${(item.precioUnitario || item.precio || 0).toLocaleString()}</p>
                         </div>
                         <div>
                           <span className="text-gray-500 text-xs">Subtotal:</span>
-                          <p className="font-bold text-gray-900">${(item.subtotal || (item.cantidad * (item.precioUnitario || 0))).toLocaleString()}</p>
+                          <p className="font-bold text-gray-900">${(item.subtotal || (item.cantidad * (item.precioUnitario || item.precio || 0))).toLocaleString()}</p>
                         </div>
                       </div>
 
@@ -1042,10 +1042,10 @@ const Devoluciones = () => {
                             )}
                           </td>
                           <td className="px-4 py-3 text-right text-gray-700">
-                            ${(item.precioUnitario || 0).toLocaleString()}
+                            ${(item.precioUnitario || item.precio || 0).toLocaleString()}
                           </td>
                           <td className="px-4 py-3 text-right font-semibold text-gray-800">
-                            ${(item.subtotal || (item.cantidad * (item.precioUnitario || 0))).toLocaleString()}
+                            ${(item.subtotal || (item.cantidad * (item.precioUnitario || item.precio || 0))).toLocaleString()}
                           </td>
                           <td className="px-4 py-3">
                             {itemsSeleccionados.includes(index) && !yaProc && (
@@ -1326,7 +1326,7 @@ const Devoluciones = () => {
                               </td>
                               <td className="px-4 py-2 text-center">{cantidadDevuelta}</td>
                               <td className="px-4 py-2 text-right">
-                                ${(cantidadDevuelta * (item.precioUnitario || 0)).toLocaleString()}
+                                ${(cantidadDevuelta * (item.precioUnitario || item.precio || 0)).toLocaleString()}
                               </td>
                               <td className="px-4 py-2 text-sm text-gray-600">{razones[index]}</td>
                             </tr>
@@ -1461,7 +1461,7 @@ const Devoluciones = () => {
                                 </td>
                                 <td className="px-3 py-2 text-center text-sm">{cantidadDevuelta}</td>
                                 <td className="px-3 py-2 text-right text-sm font-semibold">
-                                  ${(cantidadDevuelta * (item.precioUnitario || 0)).toLocaleString()}
+                                  ${(cantidadDevuelta * (item.precioUnitario || item.precio || 0)).toLocaleString()}
                                 </td>
                               </tr>
                             );
@@ -1792,7 +1792,7 @@ const Devoluciones = () => {
                         <div key={index} className="border-b border-gray-200 pb-2">
                           <div className="flex justify-between">
                             <span className="font-medium">{item.nombre || item.product?.nombre}</span>
-                            <span>${(item.subtotal || (item.cantidad * (item.precioUnitario || 0))).toLocaleString()}</span>
+                            <span>${(item.subtotal || (item.cantidad * (item.precioUnitario || item.precio || 0))).toLocaleString()}</span>
                           </div>
                           <div className="text-gray-600">
                             Talla: {item.talla} | Cant: {item.cantidad}
@@ -2108,7 +2108,7 @@ const Devoluciones = () => {
                                         {item.cantidad}
                                       </td>
                                       <td className="px-3 py-2 text-right font-medium">
-                                        ${(item.precioUnitario || 0).toLocaleString()}
+                                        ${(item.precioUnitario || item.precio || 0).toLocaleString()}
                                       </td>
                                       <td className="px-3 py-2 text-xs text-gray-600">
                                         {item.razon}

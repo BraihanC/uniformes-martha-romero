@@ -14,7 +14,7 @@ export const useNotificaciones = () => {
 };
 
 export const NotificacionesProvider = ({ children }) => {
-  const { user, clienteCorporativo } = usePortalAuth();
+  const { clienteCorporativo } = usePortalAuth();
   const [notificaciones, setNotificaciones] = useState([]);
   const [noLeidas, setNoLeidas] = useState(0);
 

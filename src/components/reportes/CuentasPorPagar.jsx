@@ -467,78 +467,119 @@ ${entrada.asignaciones.map(asig =>
       const batch = writeBatch(db);
 
       // 1. Revertir cambios en el producto
+      // Bug 3: solo revertir lo que realmente entró al stockTotal — las defectuosas
+      // nunca se sumaron. Para entradas legacy (sin cantidadBuena) caemos a cantidad.
+      const cantidadParaRevertir = entrada.cantidadBuena ?? entrada.cantidad;
       const productRef = doc(db, 'products', entrada.productId);
       const productUpdate = {
-        stockTotal: increment(-entrada.cantidad),
+        stockTotal: increment(-cantidadParaRevertir),
         updatedAt: serverTimestamp()
       };
 
-      // Si hubo asignaciones a pedidos, revertir stockReservadoPedidos
-      if (entrada.cantidadAsignada > 0) {
-        productUpdate.stockReservadoPedidos = increment(-entrada.cantidadAsignada);
+      // Bug 4: revertir TODAS las asignaciones (parciales + completas) y agregar
+      // por tipo, igual que la ruta de anulación del módulo de Inventario.
+      let cantidadReservadaPedidos = 0;
+      let cantidadReservadaB2B = 0;
+
+      if (entrada.asignaciones && entrada.asignaciones.length > 0) {
+        entrada.asignaciones.forEach(asig => {
+          // Las entradas legacy sin tipo se asumen POS
+          const tipo = asig.tipo || 'pedido';
+          if (tipo === 'pedido') {
+            cantidadReservadaPedidos += asig.cantidad;
+          } else if (tipo === 'pedido_b2b') {
+            cantidadReservadaB2B += asig.cantidad;
+          }
+        });
+
+        if (cantidadReservadaPedidos > 0) {
+          productUpdate.stockReservadoPedidos = increment(-cantidadReservadaPedidos);
+        }
+        if (cantidadReservadaB2B > 0) {
+          productUpdate.stockReservadoB2B = increment(-cantidadReservadaB2B);
+        }
       }
 
       batch.update(productRef, productUpdate);
 
-      // 2. Revertir cambios en los pedidos (si hubo asignaciones)
+      // 2. Revertir cambios en los pedidos — todas las asignaciones, no solo las completas.
       if (entrada.asignaciones && entrada.asignaciones.length > 0) {
         for (const asig of entrada.asignaciones) {
-          // Solo procesar asignaciones completas (que cambiaron el estado)
-          if (asig.esCompleto) {
-            if (asig.tipo === 'pedido' || !asig.tipo) { // 'pedido' o sin tipo (legacy)
-              // PEDIDO REGULAR (POS)
-              const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
-              const pedidoSnap = await getDoc(pedidoRef);
+          const tipo = asig.tipo || 'pedido';
 
-              if (pedidoSnap.exists()) {
-                const pedidoData = pedidoSnap.data();
-                const itemsActualizados = [...pedidoData.items];
+          if (tipo === 'pedido') {
+            // PEDIDO POS — buscar item por referencia+talla y recalcular estado
+            const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
+            const pedidoSnap = await getDoc(pedidoRef);
+            if (!pedidoSnap.exists()) continue;
 
-                // Cambiar el item de vuelta a "En Producción"
-                if (itemsActualizados[asig.itemIndex]) {
-                  itemsActualizados[asig.itemIndex] = {
-                    ...itemsActualizados[asig.itemIndex],
-                    estadoItem: 'En Producción'
-                  };
+            const pedidoData = pedidoSnap.data();
+            const updatedItems = [...(pedidoData.items || [])];
 
-                  batch.update(pedidoRef, {
-                    items: itemsActualizados,
-                    updatedAt: serverTimestamp()
-                  });
-                }
-              }
-            } else if (asig.tipo === 'pedido_b2b') {
-              // PEDIDO B2B (PORTAL)
-              const pedidoRef = doc(db, 'pedidos_b2b', asig.pedidoId);
-              const pedidoSnap = await getDoc(pedidoRef);
+            const itemIndex = updatedItems.findIndex(item =>
+              item.referencia === entrada.referencia &&
+              item.talla === entrada.talla
+            );
+            if (itemIndex === -1) continue;
 
-              if (pedidoSnap.exists()) {
-                const pedidoData = pedidoSnap.data();
-                const productosActualizados = [...pedidoData.productos];
+            const item = updatedItems[itemIndex];
+            const nuevaCantidadLista = Math.max(0, (item.cantidadLista || 0) - asig.cantidad);
+            const cantidadEntregada = item.cantidadEntregada || 0;
 
-                // Revertir cantidad alistada y estado — actualizar los 3 campos
-                if (productosActualizados[asig.itemIndex]) {
-                  const producto = productosActualizados[asig.itemIndex];
-                  const cantidadEnviadaProd = producto.cantidadEnviada || 0;
-                  const nuevaAlistadaActual = Math.max(0, (producto.cantidadAlistadaActual ?? Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviadaProd)) - asig.cantidad);
-                  const nuevaAlistadaTotal = Math.max(0, (producto.cantidadAlistadaTotal ?? (producto.cantidadAlistada || 0)) - asig.cantidad);
-                  const totalPreparado = nuevaAlistadaActual + cantidadEnviadaProd;
-                  productosActualizados[asig.itemIndex] = {
-                    ...producto,
-                    cantidadAlistadaActual: nuevaAlistadaActual,
-                    cantidadAlistadaTotal: nuevaAlistadaTotal,
-                    cantidadAlistada: totalPreparado, // compat
-                    estadoProduccion: totalPreparado >= producto.cantidad ? 'alistado' : 'en_produccion',
-                    fechaAlistado: null
-                  };
-
-                  batch.update(pedidoRef, {
-                    productos: productosActualizados,
-                    updatedAt: serverTimestamp()
-                  });
-                }
-              }
+            let nuevoEstado;
+            if (cantidadEntregada === item.cantidad) {
+              nuevoEstado = 'Entregado';
+            } else if (nuevaCantidadLista + cantidadEntregada === item.cantidad) {
+              nuevoEstado = 'Listo para Entrega';
+            } else if (nuevaCantidadLista > 0) {
+              nuevoEstado = 'Parcialmente Listo';
+            } else {
+              nuevoEstado = 'En Producción';
             }
+
+            updatedItems[itemIndex] = {
+              ...item,
+              cantidadLista: nuevaCantidadLista,
+              estadoItem: nuevoEstado
+            };
+
+            batch.update(pedidoRef, {
+              items: updatedItems,
+              updatedAt: serverTimestamp()
+            });
+          } else if (tipo === 'pedido_b2b') {
+            // PEDIDO B2B (PORTAL)
+            const pedidoRef = doc(db, 'pedidos_b2b', asig.pedidoId);
+            const pedidoSnap = await getDoc(pedidoRef);
+            if (!pedidoSnap.exists()) continue;
+
+            const pedidoData = pedidoSnap.data();
+            const productosActualizados = [...(pedidoData.productos || [])];
+
+            const prodIndex = productosActualizados.findIndex(prod =>
+              (prod.codigo === entrada.referencia || prod.productoId === entrada.productId) &&
+              prod.talla === entrada.talla
+            );
+            if (prodIndex === -1) continue;
+
+            const producto = productosActualizados[prodIndex];
+            const cantidadEnviadaProd = producto.cantidadEnviada || 0;
+            const nuevaAlistadaActual = Math.max(0, (producto.cantidadAlistadaActual ?? Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviadaProd)) - asig.cantidad);
+            const nuevaAlistadaTotal = Math.max(0, (producto.cantidadAlistadaTotal ?? (producto.cantidadAlistada || 0)) - asig.cantidad);
+            const totalPreparado = nuevaAlistadaActual + cantidadEnviadaProd;
+
+            productosActualizados[prodIndex] = {
+              ...producto,
+              cantidadAlistadaActual: nuevaAlistadaActual,
+              cantidadAlistadaTotal: nuevaAlistadaTotal,
+              cantidadAlistada: totalPreparado, // compat
+              estadoProduccion: totalPreparado >= producto.cantidad ? 'alistado' : (totalPreparado > 0 ? 'en_produccion' : 'pendiente')
+            };
+
+            batch.update(pedidoRef, {
+              productos: productosActualizados,
+              updatedAt: serverTimestamp()
+            });
           }
         }
       }

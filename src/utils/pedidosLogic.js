@@ -42,13 +42,15 @@ export const calcularValorDeEntrega = (items, selectedIndices) =>
       const cantidadLista = item.cantidadLista || 0;
       return sum + (cantidadLista * precioUnit);
     } else {
-      return sum + (item.subtotal || (item.cantidad * precioUnit) || 0);
+      const cantidadPendiente = item.cantidad - (item.cantidadEntregada || 0);
+      return sum + (cantidadPendiente * precioUnit);
     }
   }, 0);
 
 /**
- * Calcula el valor de ítems que ya fueron entregados en operaciones ANTERIORES
- * (excluye los ítems seleccionados para entrega hoy y los ítems inactivos).
+ * Calcula el valor de TODAS las unidades ya entregadas en operaciones ANTERIORES.
+ * Incluye entregas previas de items seleccionados (ej: un item con entrega parcial
+ * que se selecciona para entregar el resto).
  *
  * @param {Array}  items           - Array completo de ítems del pedido
  * @param {Array}  selectedIndices - Índices de los ítems seleccionados para entrega hoy
@@ -56,7 +58,7 @@ export const calcularValorDeEntrega = (items, selectedIndices) =>
  */
 export const calcularValorYaEntregado = (items, selectedIndices) =>
   items.reduce((sum, item, index) => {
-    if (item.anulado || selectedIndices.includes(index)) return sum;
+    if (item.anulado) return sum;
     const cantidadEntregada = item.cantidadEntregada || 0;
     if (cantidadEntregada > 0) {
       return sum + (cantidadEntregada * (item.precio || item.precioUnitario || 0));

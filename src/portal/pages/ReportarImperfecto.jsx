@@ -5,7 +5,7 @@ import { usePortalAuth } from '../context/PortalAuthContext';
 import { AlertCircle, Package, CheckCircle, Download, FileText, Clock, CheckCircle2, XCircle } from 'lucide-react';
 
 const ReportarImperfecto = () => {
-  const { user, clienteCorporativo } = usePortalAuth();
+  const { currentUser, clienteCorporativo } = usePortalAuth();
   const [pedidos, setPedidos] = useState([]);
   const [reportes, setReportes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -234,7 +234,7 @@ const ReportarImperfecto = () => {
         descripcionProblema: descripcionProblema.trim() || '',
         estado: 'Pendiente', // Pendiente, En Revisión, Aprobado, Rechazado
         createdAt: serverTimestamp(),
-        reportadoPor: user?.email || clienteCorporativo?.nombre || 'Usuario',
+        reportadoPor: currentUser?.email || clienteCorporativo?.nombre || 'Usuario',
         resuelto: false
       };
 

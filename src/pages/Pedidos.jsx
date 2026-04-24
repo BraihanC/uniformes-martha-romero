@@ -155,6 +155,7 @@ const Pedidos = () => {
   // Estados para prevenir doble clic en operaciones críticas
   const [guardandoPedido, setGuardandoPedido] = useState(false);
   const [registrandoEntrega, setRegistrandoEntrega] = useState(false);
+  const [reintentandoFactura, setReintentandoFactura] = useState(false);
   const [registrandoAbonoAdicional, setRegistrandoAbonoAdicional] = useState(false);
   const [restaurandoProducto, setRestaurandoProducto] = useState(false);
   const [creandoCliente, setCreandoCliente] = useState(false);
@@ -564,9 +565,10 @@ const Pedidos = () => {
         talla: item.product.talla,
         cantidad: item.cantidad,
         precio: item.precio,
+        precioUnitario: item.precio, // alias normalizado que usan Devoluciones y Apartados
         subtotal: item.cantidad * item.precio,
-        estadoItem: 'En Producción', // Estado inicial
-        fechaSolicitud: fechaSolicitudInicial // Fecha de solicitud para reporte de corte
+        estadoItem: 'En Producción',
+        fechaSolicitud: fechaSolicitudInicial
       }));
 
       const totalPedido = calculateTotal();
@@ -963,7 +965,7 @@ const Pedidos = () => {
         if (item.anulado) continue;
 
         const esParcial = item.estadoItem === 'Parcialmente Listo';
-        const cantidadAEntregar = esParcial ? (item.cantidadLista || 0) : item.cantidad;
+        const cantidadAEntregar = esParcial ? (item.cantidadLista || 0) : (item.cantidad - (item.cantidadEntregada || 0));
 
         if (!item.productoId) {
           productosNoEncontrados.push({
@@ -1065,12 +1067,24 @@ const Pedidos = () => {
         }
 
         // ── FASE WRITES: todos los updates al final ──────────────────────────
+        // Bug 5: capear los decrementos a lo realmente disponible para evitar
+        // dejar stockTotal / stockReservadoPedidos / totalPrendasPedidas en negativo
+        // si los datos venían descuadrados por alguna ruta legacy.
         for (const { productDoc, productRef, cantidadAEntregar } of productDocsLeidos) {
           if (!productDoc.exists()) continue;
+          const dataProd = productDoc.data() || {};
+          const stockActual = dataProd.stockTotal || 0;
+          const reservaActual = dataProd.stockReservadoPedidos || 0;
+          const totalPedidasActual = dataProd.totalPrendasPedidas || 0;
+
+          const stockABajar = Math.min(cantidadAEntregar, stockActual);
+          const reservaABajar = Math.min(cantidadAEntregar, reservaActual);
+          const pendidasABajar = Math.min(cantidadAEntregar, totalPedidasActual);
+
           transaction.update(productRef, {
-            stockTotal: increment(-cantidadAEntregar),
-            stockReservadoPedidos: increment(-cantidadAEntregar),
-            totalPrendasPedidas: increment(-cantidadAEntregar),
+            stockTotal: increment(-stockABajar),
+            stockReservadoPedidos: increment(-reservaABajar),
+            totalPrendasPedidas: increment(-pendidasABajar),
             updatedAt: serverTimestamp()
           });
         }
@@ -1205,7 +1219,9 @@ const Pedidos = () => {
 
         } catch (error) {
           console.error('Error al generar factura:', error);
-          alert(`⚠️ La entrega se completó pero hubo un error al generar la factura: ${error.message || error}`);
+          // Marcar el pedido para que el botón "Reintentar factura" aparezca en la UI
+          try { await updateDoc(pedidoRef, { facturaFallida: true }); } catch (_) {}
+          alert(`⚠️ La entrega se completó correctamente, pero hubo un error al generar la factura.\n\nUsa el botón "Reintentar factura" que aparecerá en el pedido para generarla.\n\nDetalle: ${error.message || error}`);
         }
       }
 
@@ -1423,39 +1439,50 @@ const Pedidos = () => {
       const nuevoSaldoPendiente = Math.max(0, nuevoTotal - (selectedPedido.totalAbonado || 0));
 
       // Ajustar inventario
+      // Bug 11: la "cantidad reservada" debe basarse en cantidadLista real, y como
+      // fallback en lo realmente pendiente (cantidad − cantidadEntregada), nunca en
+      // cantidad total — eso libera/reserva más de la cuenta para items con entregas.
+      const cantidadEntregadaCorr = itemActual.cantidadEntregada || 0;
+      const cantidadPendienteCorr = Math.max(0, cantidadAnterior - cantidadEntregadaCorr);
+      const cantidadPendienteNueva = Math.max(0, cantidadNueva - cantidadEntregadaCorr);
       const itemTieneStockReservado = estadoItemActual === 'Listo para Entrega' || estadoItemActual === 'Parcialmente Listo';
-      const cantidadReservadaActual = itemTieneStockReservado ? (itemActual.cantidadLista || itemActual.cantidad) : 0;
+      const cantidadReservadaActual = itemTieneStockReservado ? (itemActual.cantidadLista || cantidadPendienteCorr) : 0;
 
       if (!cambioDeProducto) {
         // Mismo producto, solo cambió la cantidad
-        const diferenciaCantidad = cantidadNueva - cantidadAnterior;
-        if (diferenciaCantidad !== 0 && itemActual.productoId) {
+        // El delta de totalPrendasPedidas es el cambio en cantidad pendiente
+        const diferenciaPendiente = cantidadPendienteNueva - cantidadPendienteCorr;
+        if (diferenciaPendiente !== 0 && itemActual.productoId) {
           const productoRef = doc(db, 'products', itemActual.productoId);
           const updateData = {
-            totalPrendasPedidas: increment(diferenciaCantidad),
+            totalPrendasPedidas: increment(diferenciaPendiente),
             updatedAt: serverTimestamp()
           };
 
-          // Si tiene stock reservado, ajustar la reserva (pero NO el stockTotal)
-          // Las prendas ya existen en el inventario, solo cambiamos cuántas están reservadas
+          // Si tiene stock reservado y la nueva cantidad pendiente cambia el límite
+          // de lo que puede estar reservado, ajustar
           if (itemTieneStockReservado) {
-            updateData.stockReservadoPedidos = increment(diferenciaCantidad);
+            // La nueva cantidadLista no puede exceder la cantidad pendiente nueva
+            const nuevaCantidadReservada = Math.min(cantidadReservadaActual, cantidadPendienteNueva);
+            const diferenciaReserva = nuevaCantidadReservada - cantidadReservadaActual;
+            if (diferenciaReserva !== 0) {
+              updateData.stockReservadoPedidos = increment(diferenciaReserva);
+            }
           }
 
           batch.update(productoRef, updateData);
         }
       } else {
         // Productos diferentes
-        // Liberar del producto anterior (solo si tiene productoId válido)
-        if (itemActual.productoId) {
+        // Liberar del producto anterior (solo lo pendiente — lo entregado ya se descontó al entregar)
+        if (itemActual.productoId && (cantidadPendienteCorr > 0 || cantidadReservadaActual > 0)) {
           const productoAnteriorRef = doc(db, 'products', itemActual.productoId);
-          const updateDataAnterior = {
-            totalPrendasPedidas: increment(-cantidadAnterior),
-            updatedAt: serverTimestamp()
-          };
+          const updateDataAnterior = { updatedAt: serverTimestamp() };
 
-          // Liberar reserva del producto anterior (si tenía)
-          if (itemTieneStockReservado) {
+          if (cantidadPendienteCorr > 0) {
+            updateDataAnterior.totalPrendasPedidas = increment(-cantidadPendienteCorr);
+          }
+          if (itemTieneStockReservado && cantidadReservadaActual > 0) {
             updateDataAnterior.stockReservadoPedidos = increment(-cantidadReservadaActual);
           }
 
@@ -1463,16 +1490,21 @@ const Pedidos = () => {
         }
 
         // Incrementar del producto nuevo (solo si tiene productoId válido)
-        if (productoNuevoId) {
+        // El nuevo producto entra "fresco" en producción — toma el cantidadPendienteNueva
+        if (productoNuevoId && cantidadPendienteNueva > 0) {
           const productoNuevoRef = doc(db, 'products', productoNuevoId);
           const updateDataNuevo = {
-            totalPrendasPedidas: increment(cantidadNueva),
+            totalPrendasPedidas: increment(cantidadPendienteNueva),
             updatedAt: serverTimestamp()
           };
 
-          // Reservar en el producto nuevo (si estaba listo)
+          // Si el item original estaba listo y se reemplaza, las reservas trasladan
+          // a lo realmente listo (capeado por la nueva cantidad pendiente)
           if (itemTieneStockReservado) {
-            updateDataNuevo.stockReservadoPedidos = increment(cantidadNueva);
+            const reservaTrasladada = Math.min(cantidadReservadaActual, cantidadPendienteNueva);
+            if (reservaTrasladada > 0) {
+              updateDataNuevo.stockReservadoPedidos = increment(reservaTrasladada);
+            }
           }
 
           batch.update(productoNuevoRef, updateDataNuevo);
@@ -1598,15 +1630,33 @@ const Pedidos = () => {
       return;
     }
 
+    // Bug 7: Advertir si hay entregas registradas — anular no devuelve esa mercancía a stock
+    const cantidadEntregadaItem = itemToAnular.cantidadEntregada || 0;
+    if (cantidadEntregadaItem > 0) {
+      const continuarConEntregadas = window.confirm(
+        `⚠️ ESTE PRODUCTO YA TIENE ENTREGAS REGISTRADAS\n\n` +
+        `Cantidad entregada al cliente: ${cantidadEntregadaItem}\n` +
+        `Cantidad total del ítem: ${itemToAnular.cantidad}\n\n` +
+        `Anular el ítem NO devolverá al stock las prendas que el cliente ya tiene en su poder. ` +
+        `Solo se liberará la parte aún pendiente.\n\n` +
+        `Si el cliente va a devolver físicamente la mercancía, usa el módulo de "Devoluciones" en su lugar.\n\n` +
+        `¿Deseas continuar de todas formas?`
+      );
+      if (!continuarConEntregadas) return;
+    }
+
+    const cantidadPendienteItem = Math.max(0, (itemToAnular.cantidad || 0) - cantidadEntregadaItem);
+
     const confirmar = window.confirm(
       `⚠️ ANULAR PRODUCTO\n\n` +
       `Pedido #${selectedPedido.numeroPedido}\n` +
       `Producto: ${itemToAnular.nombre}\n` +
       `Talla: ${itemToAnular.talla}\n` +
-      `Cantidad: ${itemToAnular.cantidad}\n` +
+      `Cantidad total: ${itemToAnular.cantidad}\n` +
+      (cantidadEntregadaItem > 0 ? `Ya entregadas: ${cantidadEntregadaItem}\nUnidades a liberar: ${cantidadPendienteItem}\n` : '') +
       `Subtotal: $${itemToAnular.subtotal?.toLocaleString()}\n\n` +
       `Esta acción:\n` +
-      `• Liberará ${itemToAnular.cantidad} unidad(es) del inventario reservado\n` +
+      `• Liberará ${cantidadPendienteItem} unidad(es) pendientes del inventario\n` +
       `• Reducirá el total del pedido\n` +
       `• El producto quedará marcado como ANULADO (visible para auditoría)\n\n` +
       `¿Continuar?`
@@ -1648,19 +1698,24 @@ const Pedidos = () => {
         .reduce((sum, item) => sum + (item.subtotal || 0), 0);
 
       // Decrementar inventario
+      // Bug 2: solo descontar de totalPrendasPedidas las unidades aún pendientes — las
+      // ya entregadas se descontaron al registrar la entrega, no debemos restarlas otra vez.
       const itemTeniaStockReservado = estadoItemActual === 'Listo para Entrega' || estadoItemActual === 'Parcialmente Listo';
-      const cantidadReservada = itemTeniaStockReservado ? (itemToAnular.cantidadLista || itemToAnular.cantidad) : 0;
+      const cantidadReservada = itemTeniaStockReservado ? (itemToAnular.cantidadLista || cantidadPendienteItem) : 0;
       // Solo actualizar inventario si el item tiene productoId válido
-      if (itemToAnular.productoId) {
+      if (itemToAnular.productoId && (cantidadPendienteItem > 0 || cantidadReservada > 0)) {
         const productoRef = doc(db, 'products', itemToAnular.productoId);
         const updateData = {
-          totalPrendasPedidas: increment(-itemToAnular.cantidad),
           updatedAt: serverTimestamp()
         };
 
+        if (cantidadPendienteItem > 0) {
+          updateData.totalPrendasPedidas = increment(-cantidadPendienteItem);
+        }
+
         // Si tenía stock reservado, liberar la reserva (pero NO tocar stockTotal)
         // Las prendas siguen existiendo en el inventario, solo ya no están reservadas
-        if (itemTeniaStockReservado) {
+        if (itemTeniaStockReservado && cantidadReservada > 0) {
           updateData.stockReservadoPedidos = increment(-cantidadReservada);
         }
 
@@ -1782,19 +1837,26 @@ const Pedidos = () => {
         .reduce((sum, item) => sum + (item.subtotal || 0), 0);
 
       // Incrementar inventario (solo si tiene productoId válido)
+      // Bug 2: simétrico a la anulación — solo restituir lo que estaba pendiente.
+      // Lo ya entregado nunca formó parte de totalPrendasPedidas al momento de anular.
+      const cantidadEntregadaRest = itemToRestaurar.cantidadEntregada || 0;
+      const cantidadPendienteRest = Math.max(0, (itemToRestaurar.cantidad || 0) - cantidadEntregadaRest);
       const itemTieneStockReservado = itemToRestaurar.estadoItem === 'Listo para Entrega' || itemToRestaurar.estadoItem === 'Parcialmente Listo';
-      const cantidadReservada = itemTieneStockReservado ? (itemToRestaurar.cantidadLista || itemToRestaurar.cantidad) : 0;
+      const cantidadReservada = itemTieneStockReservado ? (itemToRestaurar.cantidadLista || cantidadPendienteRest) : 0;
 
-      if (itemToRestaurar.productoId) {
+      if (itemToRestaurar.productoId && (cantidadPendienteRest > 0 || cantidadReservada > 0)) {
         const productoRef = doc(db, 'products', itemToRestaurar.productoId);
         const updateData = {
-          totalPrendasPedidas: increment(itemToRestaurar.cantidad),
           updatedAt: serverTimestamp()
         };
 
+        if (cantidadPendienteRest > 0) {
+          updateData.totalPrendasPedidas = increment(cantidadPendienteRest);
+        }
+
         // Si tiene stock reservado, volver a reservar (pero NO tocar stockTotal)
         // Las prendas ya existen en el inventario, solo volvemos a reservarlas
-        if (itemTieneStockReservado) {
+        if (itemTieneStockReservado && cantidadReservada > 0) {
           updateData.stockReservadoPedidos = increment(cantidadReservada);
         }
 
@@ -2056,29 +2118,35 @@ const Pedidos = () => {
 
       const nuevoSaldoPendiente = Math.max(0, nuevoTotal - (selectedPedido.totalAbonado || 0));
 
-      // Actualizar inventario
-      // 1. Liberar el producto anterior
+      // Actualizar inventario del producto anterior
+      // Bug 6: el ítem puede tener tres "porciones" simultáneas:
+      //   - cantidadEntregada → ya está con el cliente (físicamente devuelve a stockTotal)
+      //   - cantidadLista     → reservada en bodega (libera stockReservadoPedidos)
+      //   - cantidadPendiente → aún en producción (sale de totalPrendasPedidas)
+      const cantidadEntregadaItemCT = itemActual.cantidadEntregada || 0;
+      const cantidadPendienteItemCT = Math.max(0, (itemActual.cantidad || 0) - cantidadEntregadaItemCT);
       const itemYaEntregado = itemActual.estadoItem === 'Entregado';
       const itemTeniaReserva = itemActual.estadoItem === 'Listo para Entrega' || itemActual.estadoItem === 'Parcialmente Listo';
-      const cantidadReservada = itemTeniaReserva ? (itemActual.cantidadLista || itemActual.cantidad) : 0;
+      const cantidadReservada = itemTeniaReserva ? (itemActual.cantidadLista || cantidadPendienteItemCT) : 0;
 
       const productoAnteriorRef = doc(db, 'products', itemActual.productoId);
       const updateAnterior = {
         updatedAt: serverTimestamp()
       };
 
-      if (itemYaEntregado) {
-        // Si ya fue entregado, devolver al stock total (cliente lo devuelve)
-        updateAnterior.stockTotal = increment(itemActual.cantidad);
-        // No modificar totalPrendasPedidas ni stockReservadoPedidos (ya se decrementaron al entregar)
-      } else {
-        // Si NO fue entregado, liberar las reservas normalmente
-        updateAnterior.totalPrendasPedidas = increment(-itemActual.cantidad);
+      // Devolver al stockTotal lo que el cliente regresa físicamente
+      if (cantidadEntregadaItemCT > 0) {
+        updateAnterior.stockTotal = increment(cantidadEntregadaItemCT);
+      }
 
-        if (itemTeniaReserva) {
-          // Liberar la reserva y devolver a stock disponible
-          updateAnterior.stockReservadoPedidos = increment(-cantidadReservada);
-        }
+      // Liberar la parte pendiente de totalPrendasPedidas (lo entregado ya se descontó al entregar)
+      if (cantidadPendienteItemCT > 0) {
+        updateAnterior.totalPrendasPedidas = increment(-cantidadPendienteItemCT);
+      }
+
+      // Liberar la reserva si la hubiere
+      if (cantidadReservada > 0) {
+        updateAnterior.stockReservadoPedidos = increment(-cantidadReservada);
       }
 
       batch.update(productoAnteriorRef, updateAnterior);
@@ -2178,8 +2246,8 @@ const Pedidos = () => {
       // Obtener el historial actual de observaciones
       const observacionesActuales = selectedPedido.observacionesHistorial || [];
 
-      // Agregar la nueva observación al inicio del array
-      const observacionesActualizadas = [nuevaObs, ...observacionesActuales];
+      // Agregar la nueva observación al inicio del array (cap a 100 para no superar 1MB de doc)
+      const observacionesActualizadas = [nuevaObs, ...observacionesActuales].slice(0, 100);
 
       // Actualizar en Firestore
       await updateDoc(pedidoRef, {
@@ -2489,6 +2557,101 @@ const Pedidos = () => {
     }
   };
 
+  // ===== REINTENTAR FACTURA (red de seguridad si el paso de facturación falló tras la entrega) =====
+  const handleReintentarFactura = async () => {
+    if (!selectedPedido || reintentandoFactura) return;
+    setReintentandoFactura(true);
+    try {
+      const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
+
+      // Verificar si ya existe una factura para este pedido (evitar duplicado)
+      const ventasExistentes = await getDocs(
+        query(collection(db, 'sales'), where('pedidoId', '==', selectedPedido.id))
+      );
+      if (!ventasExistentes.empty) {
+        const facturaExistente = ventasExistentes.docs[0].data();
+        await updateDoc(pedidoRef, {
+          facturado: true,
+          numeroFactura: facturaExistente.numeroFactura,
+          fechaFacturacion: serverTimestamp(),
+          facturaFallida: false
+        });
+        const pedidoSnap = await getDoc(pedidoRef);
+        setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
+        alert(`✅ Factura #${facturaExistente.numeroFactura} ya existía y se vinculó al pedido.`);
+        return;
+      }
+
+      // Generar nuevo número de factura
+      const counterRef = doc(db, 'counters', 'facturas');
+      const numeroFactura = await runTransaction(db, async (transaction) => {
+        const counterDoc = await transaction.get(counterRef);
+        let newNumber;
+        if (!counterDoc.exists()) {
+          const q = query(collection(db, 'sales'), orderBy('numeroFactura', 'desc'), limit(1));
+          const snapshot = await getDocs(q);
+          newNumber = (snapshot.empty ? 0 : (snapshot.docs[0].data().numeroFactura || 0)) + 1;
+          transaction.set(counterRef, { lastNumber: newNumber });
+        } else {
+          newNumber = (counterDoc.data().lastNumber || 0) + 1;
+          transaction.update(counterRef, { lastNumber: newNumber });
+        }
+        return newNumber;
+      });
+
+      const transSnap = await getDocs(
+        query(collection(db, 'transactions'), where('pedidoId', '==', pedidoRef.id), where('tipo', '==', 'abono_pedido'))
+      );
+
+      const itemsLimpios = (selectedPedido.items || [])
+        .filter(item => !item.anulado && item.estadoItem !== 'Cambio de Talla')
+        .map(item => {
+          const itemLimpio = { ...item, precioUnitario: item.precioUnitario || item.precio || 0, subtotal: item.subtotal || (item.cantidad * (item.precioUnitario || item.precio || 0)) };
+          Object.keys(itemLimpio).forEach(k => itemLimpio[k] === undefined && delete itemLimpio[k]);
+          return itemLimpio;
+        });
+
+      await addDoc(collection(db, 'sales'), {
+        numeroFactura,
+        tipo: 'pedido',
+        pedidoId: pedidoRef.id,
+        numeroPedido: selectedPedido.numeroPedido,
+        clienteId: selectedPedido.clienteId,
+        clienteNombre: selectedPedido.clienteNombre,
+        clienteDocumento: selectedPedido.clienteDocumento || '',
+        items: itemsLimpios,
+        subtotal: selectedPedido.total,
+        total: selectedPedido.total,
+        totalAbonado: selectedPedido.totalAbonado || 0,
+        saldoPendiente: 0,
+        abonos: selectedPedido.abonos || [],
+        transaccionesIds: transSnap.docs.map(d => d.id),
+        yaRegistradoEnCaja: true,
+        metodoPago: 'Abonos',
+        fecha: serverTimestamp(),
+        userId: currentUser.uid,
+        ...(selectedPedido.colegioId != null ? { colegioId: selectedPedido.colegioId } : {}),
+        ...(selectedPedido.colegioNombre != null ? { colegioNombre: selectedPedido.colegioNombre } : {})
+      });
+
+      await updateDoc(pedidoRef, {
+        facturado: true,
+        numeroFactura,
+        fechaFacturacion: serverTimestamp(),
+        facturaFallida: false
+      });
+
+      const pedidoSnap = await getDoc(pedidoRef);
+      setSelectedPedido({ id: pedidoSnap.id, ...pedidoSnap.data() });
+      alert(`✅ Factura #${numeroFactura} generada correctamente.`);
+    } catch (error) {
+      console.error('Error al reintentar factura:', error);
+      alert(`❌ No se pudo generar la factura: ${error.message || error}`);
+    } finally {
+      setReintentandoFactura(false);
+    }
+  };
+
   // ===== ANULAR PEDIDO COMPLETO =====
   const handleOpenAnularPedido = () => {
     setShowAnularPedidoModal(true);
@@ -2535,9 +2698,13 @@ const Pedidos = () => {
       const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
 
       // 1. Marcar pedido como anulado
+      // saldoPendiente: 0 para que reportes no muestren deuda fantasma.
+      // totalAbonado se conserva como evidencia histórica de lo pagado antes de anular
+      // (los egresos de devolución se crean a partir de ese número más abajo).
       batch.update(pedidoRef, {
         anulado: true,
         estadoGeneral: 'Anulado',
+        saldoPendiente: 0,
         fechaAnulacion: serverTimestamp(),
         motivoAnulacion: motivoAnularPedido,
         usuarioAnulacion: currentUser?.email || 'Admin',
@@ -2545,24 +2712,31 @@ const Pedidos = () => {
       });
 
       // 2. Revertir inventario de items activos
+      // Bug 1: solo descontar de totalPrendasPedidas la parte aún pendiente —
+      // las unidades ya entregadas se descontaron al registrar la entrega.
       for (const item of itemsActivos) {
-        if (item.productoId) {
-          const productoRef = doc(db, 'products', item.productoId);
-          const updateData = {
-            totalPrendasPedidas: increment(-item.cantidad),
-            updatedAt: serverTimestamp()
-          };
+        if (!item.productoId) continue;
 
-          // Si estaba "Listo para Entrega", también liberar stock reservado
-          if (item.estadoItem === 'Listo para Entrega' || item.estadoItem === 'Parcialmente Listo') {
-            const cantidadLista = item.cantidadLista || (item.estadoItem === 'Listo para Entrega' ? item.cantidad : 0);
-            if (cantidadLista > 0) {
-              updateData.stockReservadoPedidos = increment(-cantidadLista);
-            }
-          }
+        const cantidadEntregadaItem = item.cantidadEntregada || 0;
+        const cantidadPendienteItem = Math.max(0, (item.cantidad || 0) - cantidadEntregadaItem);
+        const tieneReserva = item.estadoItem === 'Listo para Entrega' || item.estadoItem === 'Parcialmente Listo';
+        const cantidadLista = tieneReserva
+          ? (item.cantidadLista || (item.estadoItem === 'Listo para Entrega' ? cantidadPendienteItem : 0))
+          : 0;
 
-          batch.update(productoRef, updateData);
+        if (cantidadPendienteItem === 0 && cantidadLista === 0) continue;
+
+        const productoRef = doc(db, 'products', item.productoId);
+        const updateData = { updatedAt: serverTimestamp() };
+
+        if (cantidadPendienteItem > 0) {
+          updateData.totalPrendasPedidas = increment(-cantidadPendienteItem);
         }
+        if (cantidadLista > 0) {
+          updateData.stockReservadoPedidos = increment(-cantidadLista);
+        }
+
+        batch.update(productoRef, updateData);
       }
 
       // 3. Buscar y anular transacciones asociadas
@@ -3504,6 +3678,18 @@ const Pedidos = () => {
                     </svg>
                     Imprimir Tirilla
                   </button>
+                  {isAdmin && selectedPedido.facturaFallida && !selectedPedido.facturado && (
+                    <button
+                      onClick={handleReintentarFactura}
+                      disabled={reintentandoFactura}
+                      className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors flex items-center gap-2 disabled:opacity-50"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      {reintentandoFactura ? 'Generando...' : 'Reintentar factura'}
+                    </button>
+                  )}
                   {isAdmin && selectedPedido.estadoGeneral !== 'Anulado' && (
                     <button
                       onClick={handleOpenAnularPedido}
@@ -3726,8 +3912,12 @@ const Pedidos = () => {
                         </thead>
                         <tbody className="divide-y divide-gray-200">
                           {selectedPedido.items.map((item, index) => {
-                            const cantidadLista = item.cantidadLista || item.cantidad;
                             const esParcial = item.estadoItem === 'Parcialmente Listo';
+                            const cantidadEntregada = item.cantidadEntregada || 0;
+                            const precioUnit = item.precio || item.precioUnitario || 0;
+                            // Cantidad que se entregará: parcial usa cantidadLista, completo usa lo pendiente
+                            const cantidadAEntregar = esParcial ? (item.cantidadLista || 0) : (item.cantidad - cantidadEntregada);
+                            const subtotalEntrega = cantidadAEntregar * precioUnit;
 
                             // IMPORTANTE: No mostrar productos anulados para entrega
                             return !item.anulado && (item.estadoItem === 'Listo para Entrega' || item.estadoItem === 'Parcialmente Listo') && (
@@ -3745,21 +3935,20 @@ const Pedidos = () => {
                                   <p className="text-sm text-gray-600">Ref: {item.referencia} | Talla: {item.talla}</p>
                                   {esParcial && (
                                     <p className="text-xs text-orange-600 mt-1">
-                                      ⚠️ Entrega Parcial: {cantidadLista} de {item.cantidad} listas
+                                      ⚠️ Entrega Parcial: {cantidadAEntregar} de {item.cantidad} listas
+                                    </p>
+                                  )}
+                                  {cantidadEntregada > 0 && (
+                                    <p className="text-xs text-green-600 mt-1">
+                                      Ya entregadas: {cantidadEntregada} de {item.cantidad}
                                     </p>
                                   )}
                                 </td>
                                 <td className="px-4 py-3 text-center">
-                                  {esParcial ? (
-                                    <span className="font-medium text-orange-600">
-                                      {cantidadLista}/{item.cantidad}
-                                    </span>
-                                  ) : (
-                                    item.cantidad
-                                  )}
+                                  {cantidadAEntregar}
                                 </td>
                                 <td className="px-4 py-3 text-right font-medium">
-                                  ${item.subtotal?.toLocaleString('es-CO')}
+                                  ${subtotalEntrega.toLocaleString('es-CO')}
                                 </td>
                               </tr>
                             );

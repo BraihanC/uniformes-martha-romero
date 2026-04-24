@@ -263,9 +263,12 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
       const batch = writeBatch(db);
 
       // 1. Revertir stock del producto
+      // Bug 3: solo revertir lo que realmente entró al stockTotal — las defectuosas
+      // nunca se sumaron. Para entradas legacy (sin cantidadBuena) caemos a cantidad.
+      const cantidadParaRevertir = entrada.cantidadBuena ?? entrada.cantidad;
       const productRef = doc(db, 'products', entrada.productId);
       const productUpdate = {
-        stockTotal: increment(-entrada.cantidad),
+        stockTotal: increment(-cantidadParaRevertir),
         updatedAt: serverTimestamp()
       };
 
@@ -275,9 +278,11 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
 
       if (entrada.asignaciones && entrada.asignaciones.length > 0) {
         entrada.asignaciones.forEach(asig => {
-          if (asig.tipo === 'pedido') {
+          // Bug 9: entradas legacy no tienen `tipo` — eran todas POS antes de B2B.
+          const tipo = asig.tipo || 'pedido';
+          if (tipo === 'pedido') {
             cantidadReservadaPedidos += asig.cantidad;
-          } else if (asig.tipo === 'pedido_b2b') {
+          } else if (tipo === 'pedido_b2b') {
             cantidadReservadaB2B += asig.cantidad;
           }
         });
@@ -295,7 +300,8 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
       // 2. Revertir asignaciones a pedidos
       if (entrada.asignaciones && entrada.asignaciones.length > 0) {
         for (const asig of entrada.asignaciones) {
-          if (asig.tipo === 'pedido') {
+          const tipo = asig.tipo || 'pedido'; // Bug 9: legacy
+          if (tipo === 'pedido') {
             // PEDIDO POS
             const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
             const pedidoSnap = await getDoc(pedidoRef);
@@ -339,7 +345,7 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
                 });
               }
             }
-          } else if (asig.tipo === 'pedido_b2b') {
+          } else if (tipo === 'pedido_b2b') {
             // PEDIDO B2B
             const pedidoRef = doc(db, 'pedidos_b2b', asig.pedidoId);
             const pedidoSnap = await getDoc(pedidoRef);
@@ -532,9 +538,10 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
           else if (estadoItem === 'Listo para Entrega') itemsListoParaEntrega++;
           else if (estadoItem === 'Entregado') itemsEntregados++;
 
-          // Calcular totalPrendasPedidas: unidades pendientes de entrega (no incluye Entregados)
+          // totalPrendasPedidas = unidades aún en producción (no alistadas todavía).
+          // cantidadLista ya tiene stock físico asignado → va a stockReservadoPedidos, no aquí.
           if (estadoItem !== 'Entregado') {
-            const cantidadPendiente = Math.max(0, cantidadTotal - cantidadEntregada);
+            const cantidadPendiente = Math.max(0, cantidadTotal - cantidadEntregada - cantidadLista);
             if (!totalPrendasPedidasPorProducto[productoId]) {
               totalPrendasPedidasPorProducto[productoId] = 0;
             }
@@ -590,11 +597,16 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
 
       pedidosB2BSnapshot.forEach(docSnap => {
         const pedido = docSnap.data();
-        const estadoGeneral = pedido.estadoGeneral;
+        // B2B usa 'estado' (no 'estadoGeneral'). También respetar el flag 'anulado'.
+        const estado = pedido.estado;
         const productos = pedido.productos || [];
 
-        // Saltar pedidos anulados, cancelados o completados
-        if (estadoGeneral === 'Anulado' || estadoGeneral === 'Cancelado' || estadoGeneral === 'Completado' || estadoGeneral === 'Entregado') {
+        // Saltar pedidos anulados o ya finalizados
+        if (pedido.anulado === true ||
+            estado === 'Anulado' ||
+            estado === 'Cancelado' ||
+            estado === 'Completado' ||
+            estado === 'Entregado') {
           return;
         }
 
@@ -666,7 +678,6 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
 
       // PASO 4: Actualizar todos los productos (SOLO RESERVAS, NO stockTotal)
       console.log('\n📦 PASO 4: Actualizando reservas en la base de datos...');
-      const batch = writeBatch(db);
       const productosSnapshot = await getDocs(collection(db, 'products'));
 
       let productosActualizados = 0;
@@ -675,6 +686,10 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
       let stockReservadoCorregido = 0;
       let stockB2BCorregido = 0;
       let stockApartadosCorregido = 0;
+
+      // Acumular todas las operaciones antes de hacer commit
+      // Firestore permite máx 500 writes por batch → dividir en chunks de 499
+      const operaciones = [];
 
       productosSnapshot.forEach(docSnap => {
         const productoId = docSnap.id;
@@ -719,7 +734,7 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
             stockApartadosCorregido++;
           }
 
-          batch.update(productoRef, updates);
+          operaciones.push({ productoRef, updates });
           productosActualizados++;
 
           // Guardar para el reporte
@@ -751,8 +766,14 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
         }
       });
 
-      // Commit
-      await batch.commit();
+      // Commit en chunks de 499 para respetar el límite de Firestore
+      const CHUNK_SIZE = 499;
+      for (let i = 0; i < operaciones.length; i += CHUNK_SIZE) {
+        const chunk = operaciones.slice(i, i + CHUNK_SIZE);
+        const batchChunk = writeBatch(db);
+        chunk.forEach(({ productoRef, updates }) => batchChunk.update(productoRef, updates));
+        await batchChunk.commit();
+      }
 
       // Mostrar reporte detallado en consola
       console.log(`\n📝 REPORTE DE CAMBIOS (${productosConCambios.length} productos):`);
@@ -865,11 +886,16 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
     });
   };
 
-  // Verificar si la referencia ya existe (solo al crear)
-  const checkReferenciaExists = async (referencia) => {
+  // Verificar si la referencia ya existe.
+  // Bug 10: al editar también hay que validar — si no, se pueden crear duplicados
+  // ref+talla cambiando la referencia de un producto existente. excludeId permite
+  // ignorar el propio producto al editar.
+  const checkReferenciaExists = async (referencia, excludeId = null) => {
     const q = query(collection(db, 'products'), where('referencia', '==', referencia));
     const querySnapshot = await getDocs(q);
-    return !querySnapshot.empty;
+    if (querySnapshot.empty) return false;
+    if (!excludeId) return true;
+    return querySnapshot.docs.some(d => d.id !== excludeId);
   };
 
   // Guardar producto (crear o actualizar)
@@ -889,6 +915,17 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
     setLoading(true);
     try {
       if (editingProduct) {
+        // Bug 10: si la referencia cambió, validar que no choque con otro producto
+        const referenciaTrimmed = formData.referencia.trim();
+        if (referenciaTrimmed !== (editingProduct.referencia || '').trim()) {
+          const existsOther = await checkReferenciaExists(referenciaTrimmed, editingProduct.id);
+          if (existsOther) {
+            alert(`Ya existe otro producto con la referencia "${referenciaTrimmed}". No se puede crear un duplicado — esto causaría descuadres en el inventario.`);
+            setLoading(false);
+            setGuardandoProducto(false);
+            return;
+          }
+        }
         // Actualizar producto existente
         const productRef = doc(db, 'products', editingProduct.id);
         await updateDoc(productRef, {

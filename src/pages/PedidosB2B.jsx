@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { db } from '../services/firebase';
 import { collection, getDocs, doc, updateDoc, serverTimestamp, query, orderBy, addDoc, where, limit, getDoc, getDocFromServer, writeBatch, increment, runTransaction, Timestamp, arrayUnion } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
-import { Package, CheckCircle, Eye, Calendar, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer, Loader2, DollarSign, Plus } from 'lucide-react';
+import { Package, CheckCircle, Eye, Calendar, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer, Loader2, DollarSign, Plus, Edit3, X } from 'lucide-react';
 import jsPDF from 'jspdf';
 
 const PedidosB2B = () => {
@@ -54,6 +54,14 @@ const PedidosB2B = () => {
   const [notasAbono, setNotasAbono] = useState('');
   const [metodoPagoAbono, setMetodoPagoAbono] = useState('Transferencia');
   const [registrandoAbono, setRegistrandoAbono] = useState(false);
+
+  // Estados para modal de edición de productos del pedido
+  const [showEditarProductosModal, setShowEditarProductosModal] = useState(false);
+  const [productosEditados, setProductosEditados] = useState([]); // Copia editable de selectedPedido.productos
+  const [guardandoEdicion, setGuardandoEdicion] = useState(false);
+  const [busquedaAgregarProducto, setBusquedaAgregarProducto] = useState('');
+  const [productosCatalogoEdicion, setProductosCatalogoEdicion] = useState([]);
+  const [cargandoCatalogoEdicion, setCargandoCatalogoEdicion] = useState(false);
 
   useEffect(() => {
     fetchPedidos();
@@ -115,7 +123,7 @@ const PedidosB2B = () => {
   };
 
   const obtenerTotalPedido = (pedido) => {
-    if (pedido.total && pedido.total > 0) {
+    if (pedido.total !== undefined && pedido.total !== null) {
       return pedido.total;
     }
     return (pedido.productos || []).reduce((sum, prod) => {
@@ -126,6 +134,7 @@ const PedidosB2B = () => {
   };
 
   const calcularSaldoPendiente = (pedido) => {
+    if (pedido.estado === 'Anulado' || pedido.anulado) return 0;
     const total = obtenerTotalPedido(pedido);
     const abonado = calcularTotalAbonado(pedido.abonos);
     return total - abonado;
@@ -200,7 +209,7 @@ const PedidosB2B = () => {
 
       const nuevoAbono = {
         monto: monto,
-        fecha: Timestamp.now(),
+        fecha: new Date().toISOString(),
         metodoPago: metodoPagoAbono,
         registradoPor: user?.displayName || user?.email || 'Administrador',
         notas: notasAbono.trim()
@@ -269,12 +278,20 @@ const PedidosB2B = () => {
       const batch = writeBatch(db);
 
       // 1. Marcar pedido como anulado
+      // Preservamos total y abonos originales para histórico, y dejamos los activos en 0/[]
+      // para que ninguna vista que calcule "total - abonos" siga mostrando deuda fantasma.
       const pedidoRef = doc(db, 'pedidos_b2b', pedido.id);
+      const totalOriginal = obtenerTotalPedido(pedido);
+      const abonosOriginales = pedido.abonos || [];
       batch.update(pedidoRef, {
         estado: 'Anulado',
         anulado: true,
         fechaAnulacion: serverTimestamp(),
         anuladoPor: user?.displayName || user?.email || 'Administrador',
+        totalOriginal: totalOriginal,
+        abonosOriginales: abonosOriginales,
+        total: 0,
+        abonos: [],
         updatedAt: serverTimestamp()
       });
 
@@ -379,8 +396,432 @@ const PedidosB2B = () => {
     }
   };
 
+  // ─────────────────────────────────────────────────────────────
+  // EDICIÓN DE PRODUCTOS DEL PEDIDO
+  // Permite modificar cantidad/precio, eliminar y agregar productos.
+  // ─────────────────────────────────────────────────────────────
+
+  // Abre el modal de edición pre-cargando los productos del pedido seleccionado.
+  const abrirModalEditarProductos = async () => {
+    if (!selectedPedido) return;
+    // Copia editable: añadimos un id local para track UI y un flag esNuevo para identificar agregados.
+    const productosClonados = (selectedPedido.productos || []).map((p, idx) => ({
+      ...p,
+      _localId: `existing-${idx}`,
+      _esNuevo: false
+    }));
+    setProductosEditados(productosClonados);
+    setBusquedaAgregarProducto('');
+    // Cargar catálogo del colegio para poder agregar productos nuevos
+    try {
+      setCargandoCatalogoEdicion(true);
+      const productosRef = collection(db, 'products');
+      const codigoColegio = selectedPedido.codigoColegio || '';
+      const productosColegioSnap = await getDocs(query(
+        productosRef,
+        where('colegio', '==', codigoColegio),
+        where('esB2B', '==', true)
+      ));
+      const productosOTSnap = await getDocs(query(
+        productosRef,
+        where('colegio', '==', 'OT'),
+        where('esB2B', '==', true)
+      ));
+      const productosBase = [
+        ...productosColegioSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        ...productosOTSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+      ];
+      // Aplicar precios corporativos si existen
+      let preciosMap = {};
+      if (selectedPedido.clienteId) {
+        const preciosSnap = await getDocs(query(
+          collection(db, 'precios_corporativos'),
+          where('clienteId', '==', selectedPedido.clienteId)
+        ));
+        preciosSnap.forEach(d => {
+          const data = d.data();
+          preciosMap[data.productoId] = data.precioEspecial;
+        });
+      }
+      const conPrecios = productosBase.map(p => ({
+        ...p,
+        precioMostrar: preciosMap[p.id] !== undefined ? preciosMap[p.id] : (p.precioB2B || p.precio || 0)
+      }));
+      setProductosCatalogoEdicion(conPrecios);
+    } catch (error) {
+      console.error('Error al cargar catálogo:', error);
+      alert('No se pudo cargar el catálogo del colegio: ' + error.message);
+      setProductosCatalogoEdicion([]);
+    } finally {
+      setCargandoCatalogoEdicion(false);
+    }
+    setShowEditarProductosModal(true);
+  };
+
+  const cerrarModalEditarProductos = () => {
+    setShowEditarProductosModal(false);
+    setProductosEditados([]);
+    setBusquedaAgregarProducto('');
+    setProductosCatalogoEdicion([]);
+  };
+
+  // Calcula la cantidad mínima permitida para un producto:
+  // - Productos existentes: piso = max(cantidadEnviada, cantidadAlistadaActual + cantidadEnviada)
+  //   (no podemos pedir menos de lo enviado ni desalistar prendas que no están en stock todavía).
+  //   En realidad permitimos bajar hasta cantidadEnviada y descontamos alistadas si hace falta.
+  // - Productos nuevos: piso = 1
+  const cantidadMinimaProducto = (producto) => {
+    if (producto._esNuevo) return 1;
+    return producto.cantidadEnviada || 0;
+  };
+
+  // Determina si un producto se puede eliminar fisicamente del array.
+  // Si tiene cualquier tipo de movimiento (alistado, enviado, recibido), se anula en lugar de eliminar.
+  const productoTieneMovimiento = (producto) => {
+    if (producto._esNuevo) return false;
+    return (producto.cantidadAlistadaActual || 0) > 0 ||
+           (producto.cantidadAlistadaTotal || producto.cantidadAlistada || 0) > 0 ||
+           (producto.cantidadEnviada || 0) > 0 ||
+           (producto.cantidadRecibida || 0) > 0;
+  };
+
+  // Cambia la cantidad de un producto en el estado local
+  const handleCambiarCantidadProducto = (localId, nuevaCantidad) => {
+    const cantidad = parseInt(nuevaCantidad, 10);
+    setProductosEditados(prev => prev.map(p => {
+      if (p._localId !== localId) return p;
+      const min = cantidadMinimaProducto(p);
+      if (isNaN(cantidad) || cantidad < min) {
+        // No bajamos del mínimo desde la UI; si el input está vacío, mantenemos la cantidad
+        return p;
+      }
+      return { ...p, cantidad, subtotal: cantidad * (p.precioUnitario || 0) };
+    }));
+  };
+
+  // Cambia el precio unitario de un producto
+  const handleCambiarPrecioProducto = (localId, nuevoPrecio) => {
+    const precio = parseFloat(nuevoPrecio);
+    setProductosEditados(prev => prev.map(p => {
+      if (p._localId !== localId) return p;
+      if (isNaN(precio) || precio < 0) return p;
+      return { ...p, precioUnitario: precio, subtotal: (p.cantidad || 0) * precio };
+    }));
+  };
+
+  // Elimina un producto del array local. Si tiene movimiento, lo marca anulado.
+  const handleEliminarProductoLocal = (localId) => {
+    setProductosEditados(prev => prev.map(p => {
+      if (p._localId !== localId) return p;
+      if (p._esNuevo) return null; // Se filtra después
+      if (productoTieneMovimiento(p)) {
+        return { ...p, _marcarAnulado: true };
+      }
+      return null; // Producto existente sin movimiento → se elimina del array
+    }).filter(Boolean));
+  };
+
+  // Restaura un producto que estaba marcado para anular (por si se arrepienten)
+  const handleRestaurarProductoLocal = (localId) => {
+    setProductosEditados(prev => prev.map(p => {
+      if (p._localId !== localId) return p;
+      const { _marcarAnulado, ...resto } = p;
+      return resto;
+    }));
+  };
+
+  // Agrega un producto del catálogo al pedido (en el estado local)
+  const handleAgregarProductoLocal = (productoCatalogo, cantidad) => {
+    const cant = parseInt(cantidad, 10);
+    if (!cant || cant <= 0) {
+      alert('Ingresa una cantidad válida');
+      return;
+    }
+    // Si ya existe el mismo productoId+talla en el array (no anulado), sumamos cantidad
+    const existenteIdx = productosEditados.findIndex(p =>
+      !p._marcarAnulado &&
+      p.productoId === productoCatalogo.id &&
+      String(p.talla) === String(productoCatalogo.talla)
+    );
+    if (existenteIdx >= 0) {
+      const existente = productosEditados[existenteIdx];
+      const nuevaCantidad = (existente.cantidad || 0) + cant;
+      handleCambiarCantidadProducto(existente._localId, nuevaCantidad);
+      return;
+    }
+    const precio = productoCatalogo.precioMostrar || productoCatalogo.precioB2B || productoCatalogo.precio || 0;
+    const nuevo = {
+      _localId: `new-${Date.now()}-${Math.random()}`,
+      _esNuevo: true,
+      productoId: productoCatalogo.id || '',
+      codigo: productoCatalogo.codigo || productoCatalogo.referencia || '',
+      descripcion: productoCatalogo.nombre || productoCatalogo.descripcion || '',
+      talla: productoCatalogo.talla || '',
+      cantidad: cant,
+      precioUnitario: precio,
+      subtotal: precio * cant,
+      tipo: productoCatalogo.tipo || '',
+      categoria: productoCatalogo.categoria || '',
+      cantidadAlistada: 0,
+      cantidadAlistadaActual: 0,
+      cantidadAlistadaTotal: 0,
+      cantidadEnviada: 0,
+      cantidadRecibida: 0,
+      estadoProduccion: 'pendiente',
+      historialRecepciones: [],
+      historialEnvios: []
+    };
+    setProductosEditados(prev => [...prev, nuevo]);
+  };
+
+  // Total recalculado a partir del estado local de edición (excluye anulados)
+  const calcularTotalEditado = () => {
+    return productosEditados
+      .filter(p => !p._marcarAnulado)
+      .reduce((sum, p) => sum + ((p.cantidad || 0) * (p.precioUnitario || 0)), 0);
+  };
+
+  // Guarda los cambios en Firestore. Maneja:
+  // - Reducción de cantidad: ajusta cantidadAlistadaActual/Total y libera stockReservadoB2B.
+  // - Eliminación física (sin movimiento): saca del array.
+  // - Marcar anulado (con movimiento): pone anulado:true y libera stockReservadoB2B alistado.
+  // - Producto nuevo: queda con tracking en 0 para que entradas futuras lo asignen.
+  // - Cambio de precio: solo recalcula subtotal y total.
+  const handleGuardarEdicionProductos = async () => {
+    if (!selectedPedido) return;
+
+    const nuevoTotal = calcularTotalEditado();
+    const totalAbonado = calcularTotalAbonado(selectedPedido.abonos);
+    if (nuevoTotal < totalAbonado) {
+      alert(
+        `No se puede guardar: el nuevo total (${formatCurrency(nuevoTotal)}) es menor que ` +
+        `lo ya abonado (${formatCurrency(totalAbonado)}).\n\n` +
+        `Primero registra una devolución parcial al cliente o aumenta la cantidad/precio de algún producto.`
+      );
+      return;
+    }
+
+    if (!window.confirm(
+      `¿Confirmar cambios al pedido?\n\n` +
+      `• Productos finales: ${productosEditados.filter(p => !p._marcarAnulado).length}\n` +
+      `• Nuevo total: ${formatCurrency(nuevoTotal)}\n` +
+      `• Total anterior: ${formatCurrency(obtenerTotalPedido(selectedPedido))}`
+    )) return;
+
+    setGuardandoEdicion(true);
+    try {
+      const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
+
+      // Pre-resolver productos del inventario (necesarios para liberar stock).
+      // Hacemos esto fuera de la transacción porque usamos buscarProductoEnInventario que hace queries.
+      const liberacionesStock = []; // { productRef, cantidad }
+      for (const pEditado of productosEditados) {
+        const original = (selectedPedido.productos || []).find((o, idx) =>
+          `existing-${idx}` === pEditado._localId
+        );
+        if (!original) continue; // producto nuevo, no hay nada que liberar
+
+        const alistadaOriginal = getAlistadaActual(original);
+
+        if (pEditado._marcarAnulado && alistadaOriginal > 0) {
+          // Anular producto con alistado → liberar TODO el alistado actual
+          const productoEnInv = await buscarProductoEnInventario(original.productoId, original.codigo, original.talla);
+          if (productoEnInv) {
+            liberacionesStock.push({
+              productRef: doc(db, 'products', productoEnInv.id),
+              cantidad: alistadaOriginal
+            });
+          }
+        } else if (!pEditado._marcarAnulado) {
+          // Reducción de cantidad: si la nueva cantidad - enviada < alistadaActual, liberar diferencia
+          const cantEnviada = original.cantidadEnviada || 0;
+          const maxAlistableNueva = Math.max(0, (pEditado.cantidad || 0) - cantEnviada);
+          if (alistadaOriginal > maxAlistableNueva) {
+            const diferencia = alistadaOriginal - maxAlistableNueva;
+            const productoEnInv = await buscarProductoEnInventario(original.productoId, original.codigo, original.talla);
+            if (productoEnInv) {
+              liberacionesStock.push({
+                productRef: doc(db, 'products', productoEnInv.id),
+                cantidad: diferencia
+              });
+            }
+          }
+        }
+      }
+
+      await runTransaction(db, async (transaction) => {
+        const pedidoSnap = await transaction.get(pedidoRef);
+        if (!pedidoSnap.exists()) throw new Error('El pedido ya no existe.');
+
+        // Re-validar contra datos frescos: si la cantidadEnviada/recibida cambió, abortar.
+        const pedidoFresco = pedidoSnap.data();
+        const productosFrescos = pedidoFresco.productos || [];
+        for (const pEditado of productosEditados) {
+          if (pEditado._esNuevo) continue;
+          const idxOriginal = parseInt(pEditado._localId.replace('existing-', ''), 10);
+          const fresco = productosFrescos[idxOriginal];
+          if (!fresco) {
+            throw new Error('La estructura del pedido cambió. Recarga y vuelve a intentar.');
+          }
+          if ((fresco.cantidadEnviada || 0) !== ((selectedPedido.productos || [])[idxOriginal].cantidadEnviada || 0) ||
+              (fresco.cantidadRecibida || 0) !== ((selectedPedido.productos || [])[idxOriginal].cantidadRecibida || 0)) {
+            throw new Error(
+              `El producto "${fresco.descripcion}" cambió mientras editabas (envío o recepción).\n` +
+              `Cierra el modal y vuelve a abrirlo para ver los datos frescos.`
+            );
+          }
+        }
+
+        // Construir el nuevo array de productos y el historial de modificación
+        const cambios = [];
+        const productosFinales = [];
+        for (const pEditado of productosEditados) {
+          if (pEditado._marcarAnulado) {
+            // Mantener el producto pero con anulado:true; ajustar cantidadAlistadaActual a 0
+            const idxOriginal = parseInt(pEditado._localId.replace('existing-', ''), 10);
+            const original = productosFrescos[idxOriginal];
+            cambios.push({
+              tipo: 'anulado',
+              descripcion: original.descripcion,
+              talla: original.talla,
+              cantidadOriginal: original.cantidad
+            });
+            productosFinales.push({
+              ...original,
+              anulado: true,
+              cantidadAlistadaActual: 0,
+              fechaAnulacionProducto: Timestamp.now()
+            });
+            continue;
+          }
+
+          if (pEditado._esNuevo) {
+            cambios.push({
+              tipo: 'agregado',
+              descripcion: pEditado.descripcion,
+              talla: pEditado.talla,
+              cantidad: pEditado.cantidad,
+              precioUnitario: pEditado.precioUnitario
+            });
+            // Limpieza: quitar campos UI antes de guardar
+            const { _localId, _esNuevo, _marcarAnulado, ...limpio } = pEditado;
+            productosFinales.push(limpio);
+            continue;
+          }
+
+          // Producto existente, posiblemente modificado en cantidad/precio
+          const idxOriginal = parseInt(pEditado._localId.replace('existing-', ''), 10);
+          const original = productosFrescos[idxOriginal];
+          const cantOriginal = original.cantidad || 0;
+          const precioOriginal = original.precioUnitario || 0;
+          const cantNueva = pEditado.cantidad || 0;
+          const precioNuevo = pEditado.precioUnitario || 0;
+
+          // Si baja la cantidad por debajo de lo alistado actual, ajustar cantidadAlistadaActual
+          const alistadaOriginal = getAlistadaActual(original);
+          const cantEnviada = original.cantidadEnviada || 0;
+          const maxAlistable = Math.max(0, cantNueva - cantEnviada);
+          let nuevaAlistadaActual = alistadaOriginal;
+          let nuevaAlistadaTotal = original.cantidadAlistadaTotal !== undefined
+            ? original.cantidadAlistadaTotal
+            : (original.cantidadAlistada || 0);
+          if (alistadaOriginal > maxAlistable) {
+            const diferencia = alistadaOriginal - maxAlistable;
+            nuevaAlistadaActual = maxAlistable;
+            nuevaAlistadaTotal = Math.max(0, nuevaAlistadaTotal - diferencia);
+          }
+
+          if (cantOriginal !== cantNueva || precioOriginal !== precioNuevo) {
+            cambios.push({
+              tipo: 'modificado',
+              descripcion: original.descripcion,
+              talla: original.talla,
+              cantidadAnterior: cantOriginal,
+              cantidadNueva: cantNueva,
+              precioAnterior: precioOriginal,
+              precioNuevo: precioNuevo
+            });
+          }
+
+          const totalPreparado = nuevaAlistadaActual + cantEnviada;
+          let nuevoEstadoProd = original.estadoProduccion || 'pendiente';
+          if (totalPreparado >= cantNueva && cantNueva > 0) nuevoEstadoProd = totalPreparado === cantEnviada ? 'enviado' : 'alistado';
+          else if (totalPreparado > 0) nuevoEstadoProd = 'en_produccion';
+          else nuevoEstadoProd = 'pendiente';
+
+          productosFinales.push({
+            ...original,
+            cantidad: cantNueva,
+            precioUnitario: precioNuevo,
+            subtotal: cantNueva * precioNuevo,
+            cantidadAlistadaActual: nuevaAlistadaActual,
+            cantidadAlistadaTotal: nuevaAlistadaTotal,
+            cantidadAlistada: totalPreparado, // compat
+            estadoProduccion: nuevoEstadoProd
+          });
+        }
+
+        // Liberar stockReservadoB2B donde corresponda
+        for (const { productRef, cantidad } of liberacionesStock) {
+          if (cantidad > 0) {
+            transaction.update(productRef, {
+              stockReservadoB2B: increment(-cantidad),
+              updatedAt: serverTimestamp()
+            });
+          }
+        }
+
+        // Construir entrada del historial de modificaciones
+        const registroModificacion = {
+          fecha: Timestamp.now(),
+          modificadoPor: user?.displayName || user?.email || 'Administrador',
+          totalAnterior: pedidoFresco.total || 0,
+          totalNuevo: nuevoTotal,
+          cambios
+        };
+
+        transaction.update(pedidoRef, {
+          productos: productosFinales,
+          total: nuevoTotal,
+          historialModificaciones: arrayUnion(registroModificacion),
+          updatedAt: serverTimestamp()
+        });
+      });
+
+      // Notificar al cliente
+      await crearNotificacion(
+        selectedPedido,
+        'pedido_modificado',
+        'Pedido Modificado',
+        `Tu pedido #${String(selectedPedido.numeroPedido || 0).padStart(4, '0')} fue actualizado por el administrador. Nuevo total: ${formatCurrency(nuevoTotal)}.`
+      );
+
+      alert('Pedido actualizado exitosamente.');
+      cerrarModalEditarProductos();
+
+      // Refrescar el pedido seleccionado con datos del servidor
+      const pedidoActualizadoSnap = await getDocFromServer(pedidoRef);
+      if (pedidoActualizadoSnap.exists()) {
+        flushSync(() => {
+          setSelectedPedido({ id: pedidoActualizadoSnap.id, ...pedidoActualizadoSnap.data() });
+        });
+      }
+      fetchPedidos();
+    } catch (error) {
+      console.error('Error al guardar edición:', error);
+      alert('Error al guardar cambios: ' + error.message);
+    } finally {
+      setGuardandoEdicion(false);
+    }
+  };
+
   // Filtrar pedidos según los criterios seleccionados
   const pedidosFiltrados = pedidos.filter(pedido => {
+    // Los filtros especiales (pendientes, discrepancias) nunca deben mostrar anulados
+    if ((filtroEspecial === 'pendientes' || filtroEspecial === 'discrepancias') && pedido.anulado) {
+      return false;
+    }
+
     // Filtro por búsqueda (número de pedido, cliente o productos)
     if (busquedaPedido.trim()) {
       const busqueda = busquedaPedido.toLowerCase().trim();
@@ -677,6 +1118,17 @@ const PedidosB2B = () => {
           if (esElProducto && !productoEncontrado) {
             // Solo actualizar el primer producto que coincida (evitar duplicados)
             productoEncontrado = true;
+
+            // Revalidar con datos FRESCOS de Firestore (no los del modal que pueden ser viejos)
+            const maxAlistarFresco = calcularMaxAlistar(p);
+            if (cantidad > maxAlistarFresco) {
+              throw new Error(
+                `La cantidad máxima cambió desde que abriste el modal.\n` +
+                `Máximo disponible ahora: ${maxAlistarFresco} unidades.\n` +
+                `Cierra el modal y vuelve a intentar.`
+              );
+            }
+
             const productoActualizado = limpiarProducto(p);
 
             // Incrementar alistamiento del ciclo actual y total histórico
@@ -1369,8 +1821,8 @@ const PedidosB2B = () => {
     } else {
       setCarritoTienda([...carritoTienda, {
         productoId: producto.id,
-        codigo: producto.codigo,
-        descripcion: producto.nombre, // Usar 'nombre' en lugar de 'descripcion'
+        codigo: producto.codigo || producto.referencia || '',
+        descripcion: producto.nombre || producto.descripcion || '',
         talla: talla,
         cantidad: cantidad,
         precioUnitario: precioFinal,
@@ -1419,27 +1871,36 @@ const PedidosB2B = () => {
       const pedidoData = {
         numeroPedido: nextNumero,
         clienteId: clienteSeleccionado.id,
-        clienteNombre: clienteSeleccionado.nombre,
-        codigoColegio: clienteSeleccionado.codigoColegio,
+        clienteNombre: clienteSeleccionado.nombre || '',
+        codigoColegio: clienteSeleccionado.codigoColegio || '',
         productos: carritoTienda.map(item => ({
-          ...item,
+          productoId: item.productoId || '',
+          codigo: item.codigo || '',
+          descripcion: item.descripcion || '',
+          talla: item.talla || '',
+          cantidad: item.cantidad || 0,
+          precioUnitario: item.precioUnitario || 0,
+          subtotal: item.subtotal || 0,
+          tipo: item.tipo || '',
+          categoria: item.categoria || '',
           cantidadAlistada: 0,
           cantidadAlistadaActual: 0,
           cantidadAlistadaTotal: 0,
           cantidadEnviada: 0,
           cantidadRecibida: 0,
           estadoProduccion: 'pendiente',
-          fechaAlistado: null,
-          fechaEnvio: null,
-          fechaRecepcion: null,
           historialRecepciones: [],
           historialEnvios: [],
-          observacionesRecepcion: null
         })),
         total: calcularTotalCarrito(),
-        notas: notasPedidoTienda.trim(),
-        estado: 'Pendiente',
-        origenPedido: 'tienda', // Distintivo especial
+        notas: notasPedidoTienda.trim() || '',
+        // Auto-aprobación: pedidos creados desde tienda quedan listos para que las entradas
+        // de producto los reciban automáticamente.
+        estado: 'En Preparación',
+        aprobado: true,
+        aprobadoPor: user?.displayName || user?.email || 'Admin (auto-aprobación tienda)',
+        fechaAprobacion: serverTimestamp(),
+        origenPedido: 'tienda',
         creadoPor: user?.displayName || user?.email || 'Admin',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
@@ -1962,6 +2423,18 @@ const PedidosB2B = () => {
                       >
                         <CheckCircle size={16} />
                         Completar Pedido
+                      </button>
+                    )}
+
+                    {/* Botón Editar Productos (modificar/agregar/eliminar productos del pedido) */}
+                    {selectedPedido.estado !== 'Anulado' && selectedPedido.estado !== 'Completado' && (
+                      <button
+                        onClick={abrirModalEditarProductos}
+                        className="flex items-center gap-2 px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                        title="Modificar cantidades, precios o agregar/quitar productos del pedido"
+                      >
+                        <Edit3 size={16} />
+                        Editar Productos
                       </button>
                     )}
 
@@ -2841,6 +3314,245 @@ const PedidosB2B = () => {
                   ) : (
                     'Registrar Abono'
                   )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Editar Productos del Pedido */}
+      {showEditarProductosModal && selectedPedido && (
+        <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}>
+          <div className="bg-white rounded-lg shadow-xl max-w-5xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b px-4 md:px-6 py-4 flex justify-between items-center z-10">
+              <div>
+                <h2 className="text-lg md:text-xl font-bold text-gray-800 flex items-center gap-2">
+                  <Edit3 size={22} className="text-amber-600" />
+                  Editar Productos — Pedido #{String(selectedPedido.numeroPedido || 0).padStart(4, '0')}
+                </h2>
+                <p className="text-xs text-gray-500 mt-1">
+                  Modifica cantidades, precios o agrega/quita productos. Las prendas ya enviadas no se pueden quitar.
+                </p>
+              </div>
+              <button
+                onClick={cerrarModalEditarProductos}
+                disabled={guardandoEdicion}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 md:p-6 space-y-6">
+              {/* Lista de productos editables */}
+              <div>
+                <h3 className="font-semibold text-gray-800 mb-3">Productos del Pedido</h3>
+                <div className="space-y-2">
+                  {productosEditados.length === 0 && (
+                    <p className="text-sm text-gray-500 italic text-center py-4">
+                      No hay productos en el pedido.
+                    </p>
+                  )}
+                  {productosEditados.map(p => {
+                    const min = cantidadMinimaProducto(p);
+                    const enviada = p.cantidadEnviada || 0;
+                    const alistadaActual = p._esNuevo ? 0 : getAlistadaActual(p);
+                    return (
+                      <div
+                        key={p._localId}
+                        className={`p-3 rounded-lg border ${
+                          p._marcarAnulado ? 'bg-red-50 border-red-200 opacity-70' :
+                          p._esNuevo ? 'bg-green-50 border-green-200' :
+                          'bg-gray-50 border-gray-200'
+                        }`}
+                      >
+                        <div className="flex flex-col md:flex-row md:items-center gap-3">
+                          {/* Info del producto */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className={`font-semibold text-sm ${p._marcarAnulado ? 'line-through text-gray-500' : 'text-gray-800'}`}>
+                                {p.descripcion}
+                              </p>
+                              {p._esNuevo && (
+                                <span className="px-2 py-0.5 text-xs font-semibold bg-green-200 text-green-800 rounded-full">NUEVO</span>
+                              )}
+                              {p._marcarAnulado && (
+                                <span className="px-2 py-0.5 text-xs font-semibold bg-red-200 text-red-800 rounded-full">A ANULAR</span>
+                              )}
+                              {!p._esNuevo && !p._marcarAnulado && (enviada > 0 || alistadaActual > 0) && (
+                                <span className="px-2 py-0.5 text-xs font-semibold bg-blue-100 text-blue-800 rounded-full">
+                                  Enviadas: {enviada} · Alistadas: {alistadaActual}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Talla: {p.talla} · Código: {p.codigo}
+                              {min > 0 && !p._marcarAnulado && (
+                                <span className="text-amber-600 ml-2">· Mínimo: {min} (ya enviadas)</span>
+                              )}
+                            </p>
+                          </div>
+
+                          {/* Cantidad */}
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs text-gray-600">Cantidad:</label>
+                            <input
+                              type="number"
+                              min={min}
+                              value={p.cantidad || 0}
+                              onChange={(e) => handleCambiarCantidadProducto(p._localId, e.target.value)}
+                              disabled={p._marcarAnulado}
+                              className="w-20 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-gray-100"
+                            />
+                          </div>
+
+                          {/* Precio */}
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs text-gray-600">Precio:</label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="100"
+                              value={p.precioUnitario || 0}
+                              onChange={(e) => handleCambiarPrecioProducto(p._localId, e.target.value)}
+                              disabled={p._marcarAnulado}
+                              className="w-28 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-gray-100"
+                            />
+                          </div>
+
+                          {/* Subtotal */}
+                          <div className="text-sm font-semibold text-gray-800 w-28 text-right">
+                            {formatCurrency((p.cantidad || 0) * (p.precioUnitario || 0))}
+                          </div>
+
+                          {/* Acción */}
+                          {p._marcarAnulado ? (
+                            <button
+                              onClick={() => handleRestaurarProductoLocal(p._localId)}
+                              className="px-2 py-1 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+                              title="Restaurar producto"
+                            >
+                              Deshacer
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleEliminarProductoLocal(p._localId)}
+                              className="text-red-600 hover:text-red-800 p-1"
+                              title={productoTieneMovimiento(p) ? 'Anular producto (mantiene historial)' : 'Eliminar producto'}
+                            >
+                              {productoTieneMovimiento(p) ? <X size={18} /> : <Trash2 size={18} />}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Sección Agregar Producto del catálogo */}
+              <div className="border-t pt-6">
+                <h3 className="font-semibold text-gray-800 mb-3">Agregar Producto al Pedido</h3>
+                {cargandoCatalogoEdicion ? (
+                  <p className="text-sm text-gray-500 flex items-center gap-2">
+                    <Loader2 size={16} className="animate-spin" /> Cargando catálogo...
+                  </p>
+                ) : productosCatalogoEdicion.length === 0 ? (
+                  <p className="text-sm text-gray-500">No hay productos B2B disponibles para este colegio.</p>
+                ) : (
+                  <>
+                    <div className="relative mb-3">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={16} />
+                      <input
+                        type="text"
+                        value={busquedaAgregarProducto}
+                        onChange={(e) => setBusquedaAgregarProducto(e.target.value)}
+                        placeholder="Busca por nombre, talla o categoría..."
+                        className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+                    {busquedaAgregarProducto.trim() && (() => {
+                      const q = busquedaAgregarProducto.toLowerCase().trim();
+                      const filtrados = productosCatalogoEdicion.filter(prod =>
+                        (prod.nombre || '').toLowerCase().includes(q) ||
+                        (prod.talla || '').toLowerCase().includes(q) ||
+                        (prod.categoria || '').toLowerCase().includes(q) ||
+                        (prod.referencia || '').toLowerCase().includes(q)
+                      );
+                      if (filtrados.length === 0) {
+                        return <p className="text-sm text-gray-500">No se encontraron productos con "{busquedaAgregarProducto}".</p>;
+                      }
+                      return (
+                        <div className="border border-gray-200 rounded-lg max-h-64 overflow-y-auto">
+                          {filtrados.map(prod => (
+                            <div key={prod.id} className="flex items-center gap-2 p-2 border-b last:border-b-0 hover:bg-gray-50">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-gray-800 truncate">{prod.nombre}</p>
+                                <p className="text-xs text-gray-500">
+                                  Talla: {prod.talla} · {formatCurrency(prod.precioMostrar || prod.precio || 0)}
+                                </p>
+                              </div>
+                              <input
+                                type="number"
+                                min="1"
+                                defaultValue="1"
+                                id={`cant-add-${prod.id}`}
+                                className="w-16 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-amber-500"
+                              />
+                              <button
+                                onClick={() => {
+                                  const input = document.getElementById(`cant-add-${prod.id}`);
+                                  const cant = parseInt(input?.value || '1', 10);
+                                  handleAgregarProductoLocal(prod, cant);
+                                  if (input) input.value = '1';
+                                }}
+                                className="px-3 py-1 text-xs text-white rounded bg-amber-600 hover:bg-amber-700 flex items-center gap-1"
+                              >
+                                <Plus size={14} /> Agregar
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </>
+                )}
+              </div>
+
+              {/* Resumen y Acciones */}
+              <div className="bg-amber-50 border border-amber-200 p-4 rounded-lg">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-sm text-gray-600">Total anterior:</span>
+                  <span className="text-sm text-gray-700 line-through">{formatCurrency(obtenerTotalPedido(selectedPedido))}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-base font-semibold text-gray-800">Nuevo total:</span>
+                  <span className="text-2xl font-bold text-amber-700">{formatCurrency(calcularTotalEditado())}</span>
+                </div>
+                {calcularTotalEditado() < calcularTotalAbonado(selectedPedido.abonos) && (
+                  <p className="mt-2 text-xs text-red-700 bg-red-50 p-2 rounded">
+                    ⚠️ El nuevo total es menor que lo abonado ({formatCurrency(calcularTotalAbonado(selectedPedido.abonos))}).
+                    Antes de guardar, registra una devolución parcial al cliente.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                <button
+                  onClick={cerrarModalEditarProductos}
+                  disabled={guardandoEdicion}
+                  className="w-full sm:flex-1 px-4 py-2 text-sm bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleGuardarEdicionProductos}
+                  disabled={guardandoEdicion || calcularTotalEditado() < calcularTotalAbonado(selectedPedido.abonos)}
+                  className="w-full sm:flex-1 px-4 py-2 text-sm bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {guardandoEdicion && <Loader2 size={16} className="animate-spin" />}
+                  {guardandoEdicion ? 'Guardando...' : 'Guardar Cambios'}
                 </button>
               </div>
             </div>

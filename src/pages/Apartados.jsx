@@ -842,6 +842,21 @@ const Apartados = () => {
   const handleCancelarApartado = async () => {
     if (!selectedApartado) return;
 
+    // Bug 12: cancelar un apartado Completado dejaría stockReservadoApartados negativo
+    // (ya se liberó al completarse y la mercancía ya salió a venta).
+    if (selectedApartado.estadoGeneral === 'Completado') {
+      alert(
+        '⚠️ Este apartado ya está COMPLETADO (convertido a venta).\n\n' +
+        'No puede cancelarse desde aquí — la mercancía ya salió del inventario.\n\n' +
+        'Si necesitas revertir la venta, usa "Devoluciones" sobre la factura asociada.'
+      );
+      return;
+    }
+    if (selectedApartado.estadoGeneral === 'Cancelado') {
+      alert('⚠️ Este apartado ya estaba cancelado.');
+      return;
+    }
+
     const confirmar = window.confirm(
       `¿Estás seguro de cancelar este apartado?\n\n` +
       `Cliente: ${selectedApartado.clienteNombre}\n` +
@@ -2916,7 +2931,7 @@ const Apartados = () => {
                             {item.cantidad}
                           </td>
                           <td className={`px-4 py-2 text-right text-sm ${item.anulado ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
-                            ${item.precioUnitario?.toLocaleString()}
+                            ${(item.precioUnitario || item.precio || 0).toLocaleString()}
                           </td>
                           <td className={`px-4 py-2 text-right text-sm font-semibold ${item.anulado ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
                             {item.anulado ? '[ANULADO]' : `$${item.subtotal?.toLocaleString()}`}
@@ -3257,7 +3272,7 @@ const Apartados = () => {
                           <div className="font-medium">{item.nombre}</div>
                           <div className="text-gray-600 text-[10px]">
                             {item.talla && `Talla: ${item.talla} | `}
-                            ${(item.precioUnitario || 0).toLocaleString('es-CO')}
+                            ${(item.precioUnitario || item.precio || 0).toLocaleString('es-CO')}
                           </div>
                         </td>
                         <td className="text-center">{item.cantidad}</td>
@@ -3602,7 +3617,7 @@ const Apartados = () => {
                           </td>
                           <td style={{ padding: '6px 4px', textAlign: 'center' }}>{item.cantidad}</td>
                           <td style={{ padding: '6px 4px', textAlign: 'right' }}>
-                            ${item.precioUnitario?.toLocaleString()}
+                            ${(item.precioUnitario || item.precio || 0).toLocaleString()}
                           </td>
                           <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 'bold' }}>
                             ${item.subtotal?.toLocaleString()}
