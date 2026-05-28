@@ -184,13 +184,15 @@ const ReporteVentas = () => {
 
       const todasLasVentas = [];
 
-      // Mapas de costos (productoId tiene prioridad, referencia como fallback)
+      // Mapas de productos (productoId tiene prioridad, referencia como fallback)
+      // Incluimos colegio para poder filtrar items POS por colegio del producto.
       const productosByIdMap = {};
       const productosByRefMap = {};
       productos.forEach(p => {
         const info = {
           costoCompra: p.costoCompra || 0,
-          costoSatelite: p.costoSatelite || 0
+          costoSatelite: p.costoSatelite || 0,
+          colegio: p.colegio || '' // código del colegio (ej. 'MA', 'GD')
         };
         if (p.id) productosByIdMap[p.id] = info;
         if (p.referencia && !productosByRefMap[p.referencia]) {
@@ -228,8 +230,10 @@ const ReporteVentas = () => {
       const colegioSel = colegioId ? colegios.find(c => c.id === colegioId) : null;
       const codigoColegioSel = colegioSel?.codigo || '';
 
-      // Si hay colegio filtrado, POS no aplica (no tiene colegio asociado)
-      const consultarPOS = !colegioId && (fuenteVenta === 'todas' || fuenteVenta === 'pos');
+      // VENTAS POS: SÍ se consultan aunque haya colegio filtrado.
+      // Las facturas POS no guardan colegio, pero los PRODUCTOS sí — así que
+      // filtramos cada ítem por el colegio del producto (lookup en el mapa).
+      const consultarPOS = fuenteVenta === 'todas' || fuenteVenta === 'pos';
 
       // 1. VENTAS POS
       if (consultarPOS) {
@@ -248,6 +252,16 @@ const ReporteVentas = () => {
           const metodo = sale.metodoPago || 'Efectivo';
 
           sale.items?.forEach(item => {
+            // Resolver colegio del producto via el mapa (productoId o referencia)
+            const prodInfo = productosByIdMap[item.productoId]
+              || productosByRefMap[item.referencia]
+              || {};
+            const prodColegio = prodInfo.colegio || '';
+
+            // Si el usuario filtró un colegio, solo incluir items cuyo producto
+            // pertenezca a ese colegio. Si no hay filtro, incluir todo.
+            if (codigoColegioSel && prodColegio !== codigoColegioSel) return;
+
             const subtotalItem = item.subtotal || 0;
             const base = {
               fecha: sale.createdAt.toDate(),
@@ -266,8 +280,8 @@ const ReporteVentas = () => {
               metodoPago: metodo,
               metodosPagoArr: [metodo],
               colegioId: '',
-              colegioCodigo: '',
-              colegioNombre: ''
+              colegioCodigo: prodColegio,
+              colegioNombre: colegioCodigoANombre[prodColegio] || ''
             };
             todasLasVentas.push({ ...base, ...calcularCosto(base) });
           });
@@ -286,8 +300,11 @@ const ReporteVentas = () => {
         pedidosSnap.forEach(doc => {
           const pedido = doc.data();
 
-          // Excluir pedidos completamente anulados
-          if (pedido.estado === 'Anulado' || pedido.anulado === true) return;
+          // Excluir pedidos completamente anulados/cancelados.
+          // Pedidos POS usan `estadoGeneral` (no `estado`).
+          if (pedido.estadoGeneral === 'Anulado' ||
+              pedido.estadoGeneral === 'Cancelado' ||
+              pedido.anulado === true) return;
 
           const totalPedido = pedido.total || 0;
           const totalAbonado = pedido.totalAbonado || 0;
@@ -392,7 +409,12 @@ const ReporteVentas = () => {
         apartadosSnap.forEach(doc => {
           const apartado = doc.data();
 
-          if (apartado.estado === 'Anulado' || apartado.anulado === true) return;
+          // Apartados usan `estadoGeneral` (no `estado`). Excluir cancelados
+          // y eliminados — esos no representan ventas reales.
+          if (apartado.estadoGeneral === 'Cancelado' ||
+              apartado.estadoGeneral === 'Eliminado' ||
+              apartado.estadoGeneral === 'Anulado' ||
+              apartado.anulado === true) return;
 
           const totalApartado = apartado.totalApartado || 0;
           const totalAbonado = apartado.totalAbonado || 0;
