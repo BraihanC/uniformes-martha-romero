@@ -43,6 +43,20 @@
       ]
     },
     {
+      "collectionGroup": "pedidos_b2b",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "codigoColegio",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "reportes_imperfectos",
       "queryScope": "COLLECTION",
       "fields": [
