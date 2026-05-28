@@ -3322,19 +3322,42 @@ const Pedidos = () => {
                     <span className="hidden sm:inline">Anterior</span>
                     <span className="sm:hidden">&larr;</span>
                   </button>
-                  <div className="hidden sm:flex gap-2">
-                    {Array.from({ length: totalPaginas }, (_, i) => i + 1).map((numero) => (
-                      <button
-                        key={numero}
-                        onClick={() => setPaginaActual(numero)}
-                        className={`px-3 py-1 text-sm border rounded-lg transition-colors ${paginaActual === numero
-                            ? 'bg-primary text-white border-primary'
-                            : 'border-gray-300 hover:bg-gray-50'
-                          }`}
-                      >
-                        {numero}
-                      </button>
-                    ))}
+                  <div className="hidden sm:flex gap-2 items-center">
+                    {(() => {
+                      // Paginación compacta: primera, última, y ±2 alrededor de la actual.
+                      // Elipsis cuando hay gap (>1 página de distancia).
+                      const paginas = new Set([1, totalPaginas]);
+                      for (let i = -2; i <= 2; i++) {
+                        const p = paginaActual + i;
+                        if (p >= 1 && p <= totalPaginas) paginas.add(p);
+                      }
+                      const lista = Array.from(paginas).sort((a, b) => a - b);
+                      const elementos = [];
+                      lista.forEach((numero, idx) => {
+                        // Insertar elipsis si hay gap con la página anterior en la lista
+                        if (idx > 0 && numero - lista[idx - 1] > 1) {
+                          elementos.push(
+                            <span key={`gap-${numero}`} className="px-2 text-gray-400 select-none">
+                              …
+                            </span>
+                          );
+                        }
+                        elementos.push(
+                          <button
+                            key={numero}
+                            onClick={() => setPaginaActual(numero)}
+                            className={`px-3 py-1 text-sm border rounded-lg transition-colors ${
+                              paginaActual === numero
+                                ? 'bg-primary text-white border-primary'
+                                : 'border-gray-300 hover:bg-gray-50'
+                            }`}
+                          >
+                            {numero}
+                          </button>
+                        );
+                      });
+                      return elementos;
+                    })()}
                   </div>
                   <span className="sm:hidden text-sm font-medium text-gray-700">
                     Pág. {paginaActual} de {totalPaginas}
