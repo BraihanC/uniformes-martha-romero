@@ -2,16 +2,108 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Permitir lectura pública del logo de la empresa (para la página de login)
-    match /config/company {
-      allow read: if true;
-      allow write: if request.auth != null;
+    // ─── Helpers ────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function hasRole(r) {
+      return isSignedIn() && request.auth.token.role == r;
+    }
+    function isAdmin() { return hasRole('admin'); }
+    function isVendedor() { return hasRole('vendedor'); }
+    function isStaff() { return isAdmin() || isVendedor(); }
+
+    // ─── Configuración pública ──────────────────────────────
+    // El logo de la empresa se renderiza en /login (sin sesión).
+    // Subcolecciones sensibles bajo /config deben heredar via match anidado si las hubiera.
+    match /config/{docId} {
+      allow read: if true;          // logo público
+      allow write: if isAdmin();
     }
 
-    // Permitir lectura y escritura a todos los usuarios autenticados
-    // en todas las colecciones (incluyendo B2B)
+    // ─── Catálogo (B2B portal + staff) ──────────────────────
+    // Productos / colegios / precios corporativos: cualquier usuario autenticado
+    // puede LEER (catálogo del portal). Solo staff escribe.
+    match /products/{id} {
+      allow read: if isSignedIn();
+      allow write: if isStaff();
+    }
+    match /colegios/{id} {
+      allow read: if isSignedIn();
+      allow write: if isStaff();
+    }
+    match /precios_corporativos/{id} {
+      allow read: if isSignedIn();
+      allow write: if isStaff();
+    }
+
+    // ─── Identidad de clientes corporativos ─────────────────
+    // El AuthContext (esClienteCorporativo) lee esta colección al login para
+    // decidir si el usuario va al portal o a la app principal. Por eso lectura
+    // queda abierta a autenticados. Solo admin escribe.
+    //
+    // Phase 2 (recomendado): keyear los docs por uid y exponer solo el doc
+    // propio: `allow read: if isSignedIn() && (isStaff() || resource.id == request.auth.uid)`
+    match /clientes_corporativos/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ─── Pedidos B2B (portal) ───────────────────────────────
+    // - create: cualquier autenticado (portal lo hace al confirmar carrito).
+    // - read: staff total, o el cliente dueño (matcheado por clienteEmail).
+    //   Pedidos legacy sin clienteEmail solo son legibles por staff (esperado tras backfill).
+    // - update / delete: solo staff (B2B no edita sus pedidos tras crearlos).
+    match /pedidos_b2b/{id} {
+      allow create: if isSignedIn();
+      allow read: if isStaff() ||
+        (isSignedIn() && resource.data.clienteEmail == request.auth.token.email);
+      allow update, delete: if isStaff();
+    }
+
+    // ─── Notificaciones ─────────────────────────────────────
+    // notificaciones_admin: B2B las crea al hacer pedido, staff las lee.
+    match /notificaciones_admin/{id} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if isStaff();
+    }
+    // notificaciones_portal: staff las crea, B2B las lee (filtro por uid en cliente).
+    // Phase 2: campo `clienteUid` para restringir por dueño en rules.
+    match /notificaciones_portal/{id} {
+      allow create: if isStaff();
+      allow read: if isSignedIn();
+      allow update, delete: if isStaff();
+    }
+
+    // ─── Reportes de imperfectos (portal) ───────────────────
+    // B2B reporta, staff gestiona.
+    match /reportes_imperfectos/{id} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if isStaff();
+    }
+
+    // ─── Resto: solo staff (operación interna) ──────────────
+    // Datos sensibles: ventas, finanzas, clientes, inventario, stock.
+    // Antes: cualquier autenticado podía leer y escribir TODO.
+    match /apartados/{id}              { allow read, write: if isStaff(); }
+    match /bases_caja/{id}             { allow read, write: if isStaff(); }
+    match /cambiosYDevoluciones/{id}   { allow read, write: if isStaff(); }
+    match /clientes/{id}               { allow read, write: if isStaff(); }
+    match /clients/{id}                { allow read, write: if isStaff(); }
+    match /counters/{id}               { allow read, write: if isStaff(); }
+    match /pedidos/{id}                { allow read, write: if isStaff(); }
+    match /productosReparacion/{id}    { allow read, write: if isStaff(); }
+    match /proveedores/{id}            { allow read, write: if isStaff(); }
+    match /sales/{id}                  { allow read, write: if isStaff(); }
+    match /satelites/{id}              { allow read, write: if isStaff(); }
+    match /stockEntries/{id}           { allow read, write: if isStaff(); }
+    match /transactions/{id}           { allow read, write: if isStaff(); }
+
+    // ─── Default deny ───────────────────────────────────────
+    // Cualquier colección NO listada arriba queda bloqueada por defecto.
+    // Si se añade una nueva colección, hay que decidir explícitamente sus reglas.
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if false;
     }
   }
 }

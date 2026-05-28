@@ -635,6 +635,20 @@ const Config = () => {
       return;
     }
 
+    // Security: solo exigir password al crear cuentas nuevas — la edición no toca el password.
+    // Bloquea passwords débiles para evitar cuentas B2B con credenciales triviales.
+    if (!editingB2BId) {
+      const pwd = formDataB2B.password || '';
+      if (pwd.length < 8) {
+        alert('La contraseña debe tener al menos 8 caracteres.');
+        return;
+      }
+      if (!/[A-Za-z]/.test(pwd) || !/\d/.test(pwd)) {
+        alert('La contraseña debe contener al menos una letra y un número.');
+        return;
+      }
+    }
+
     setLoadingB2B(true);
     try {
       if (editingB2BId) {
@@ -659,7 +673,7 @@ const Config = () => {
         const createUserFunction = httpsCallable(functions, 'createUser');
         const userResult = await createUserFunction({
           email: formDataB2B.email.trim(),
-          password: formDataB2B.password || '123456', // Password por defecto si no se proporciona
+          password: formDataB2B.password, // Validado arriba: mín 8 chars con letra y número
           role: 'b2b' // Aunque no se usa, lo marcamos
         });
 
@@ -1966,9 +1980,11 @@ const Config = () => {
                       name="password"
                       value={formDataB2B.password}
                       onChange={handleB2BFormChange}
-                      placeholder={editingB2BId ? "Dejar vacío para no cambiar" : "Mínimo 6 caracteres"}
+                      placeholder="Mínimo 8 caracteres, con letra y número"
+                      minLength={8}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
                       required={!editingB2BId}
+                      autoComplete="new-password"
                     />
                   </div>
                 )}

@@ -8,7 +8,7 @@ import { ShoppingBag, Package, ArrowLeft, Send } from 'lucide-react';
 
 const CrearPedido = () => {
   const navigate = useNavigate();
-  const { clienteCorporativo } = usePortalAuth();
+  const { clienteCorporativo, currentUser } = usePortalAuth();
   const { cartItems, getTotalPrice, clearCart } = useCart();
   const [notas, setNotas] = useState('');
   const [loading, setLoading] = useState(false);
@@ -75,6 +75,10 @@ const CrearPedido = () => {
         numeroPedido: nextNumero,
         clienteId: clienteCorporativo?.id || '',
         clienteNombre: clienteCorporativo?.nombre || '',
+        // Security (Phase 2): persistir email + uid para que las reglas de Firestore
+        // puedan restringir la lectura solo al dueño del pedido.
+        clienteEmail: clienteCorporativo?.credenciales?.email || currentUser?.email || '',
+        creatorUid: currentUser?.uid || '',
         codigoColegio: clienteCorporativo?.codigoColegio || '',
         productos: cartItems.map(item => ({
           productoId: item.id || '',
