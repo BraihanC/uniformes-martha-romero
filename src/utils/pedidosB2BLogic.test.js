@@ -7,6 +7,8 @@ import {
   simularEnvio,
   simularRecepcion,
   productoCoincide,
+  productoB2BCoincideConInventario,
+  productoB2BCoincideConAsignacion,
   tienePendientes,
   esEnvioCompleto,
   calcularSaldoPendienteB2B
@@ -384,6 +386,250 @@ describe('tienePendientes', () => {
 
   it('producto anulado no tiene pendientes', () => {
     expect(tienePendientes({ cantidad: 10, anulado: true })).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// productoB2BCoincideConInventario
+// Matching usado en EntradaSatelite/EntradaProveedor para localizar
+// productos de un pedido B2B que correspondan al producto que entra al
+// inventario. Extiende productoCoincide con un fallback por descripción.
+// ─────────────────────────────────────────────────────────────
+describe('productoB2BCoincideConInventario', () => {
+  it('coincide por codigo === referencia del inventario', () => {
+    expect(productoB2BCoincideConInventario(
+      { codigo: 'REF001', talla: 'M' },
+      { referencia: 'REF001', talla: 'M' }
+    )).toBe(true);
+  });
+
+  it('coincide por productoId === id del inventario', () => {
+    expect(productoB2BCoincideConInventario(
+      { productoId: 'abc123', talla: '10' },
+      { id: 'abc123', talla: '10' }
+    )).toBe(true);
+  });
+
+  it('coincide por codigo === codigo del inventario', () => {
+    expect(productoB2BCoincideConInventario(
+      { codigo: 'COD001', talla: 'S' },
+      { codigo: 'COD001', talla: 'S' }
+    )).toBe(true);
+  });
+
+  it('coincide por descripcion === nombre (fallback legacy)', () => {
+    // Pedido B2B viejo sin codigo ni productoId, solo descripcion
+    expect(productoB2BCoincideConInventario(
+      { descripcion: 'Camisa Manga Larga Azul', talla: 'M' },
+      { nombre: 'Camisa Manga Larga Azul', talla: 'M' }
+    )).toBe(true);
+  });
+
+  it('NO coincide si talla difiere — el fallback de descripción no la rescata', () => {
+    expect(productoB2BCoincideConInventario(
+      { descripcion: 'Camisa Manga Larga', talla: 'M' },
+      { nombre: 'Camisa Manga Larga', talla: 'L' }
+    )).toBe(false);
+  });
+
+  it('no coincide si ningún identificador matchea aunque la talla sea la misma', () => {
+    expect(productoB2BCoincideConInventario(
+      { codigo: 'REF001', descripcion: 'A', talla: 'M' },
+      { referencia: 'REF002', nombre: 'B', talla: 'M' }
+    )).toBe(false);
+  });
+
+  it('excluye productos anulados aun cuando el identificador coincida', () => {
+    expect(productoB2BCoincideConInventario(
+      { codigo: 'REF001', talla: 'M', anulado: true },
+      { referencia: 'REF001', talla: 'M' }
+    )).toBe(false);
+  });
+
+  it('coerciona talla número vs string', () => {
+    expect(productoB2BCoincideConInventario(
+      { codigo: 'REF001', talla: 10 },
+      { referencia: 'REF001', talla: '10' }
+    )).toBe(true);
+  });
+
+  it('no coincide sin ningún identificador en el pedido', () => {
+    expect(productoB2BCoincideConInventario(
+      { talla: 'M' },
+      { referencia: 'REF001', nombre: 'X', talla: 'M' }
+    )).toBe(false);
+  });
+
+  it('paridad con productoCoincide cuando no aplica el fallback de descripción', () => {
+    // Si el match clásico funciona, ambos deben dar true.
+    const productoPedido = { codigo: 'REF001', talla: 'M' };
+    const productoInventario = { referencia: 'REF001', talla: 'M' };
+    expect(productoB2BCoincideConInventario(productoPedido, productoInventario))
+      .toBe(productoCoincide(productoPedido, productoInventario));
+  });
+
+  it('extiende productoCoincide en el caso de descripción legacy', () => {
+    // productoCoincide rechaza (sin fallback), productoB2BCoincideConInventario acepta.
+    const productoPedido = { descripcion: 'Falda Plisada', talla: 'S' };
+    const productoInventario = { nombre: 'Falda Plisada', talla: 'S' };
+    expect(productoCoincide(productoPedido, productoInventario)).toBe(false);
+    expect(productoB2BCoincideConInventario(productoPedido, productoInventario)).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// productoB2BCoincideConAsignacion
+// Matching usado en la fase de batch (PASO 4 de EntradaSatelite/Proveedor)
+// para re-localizar el item del pedido contra los identificadores
+// guardados en la asignación calculada en PASO 1.
+// ─────────────────────────────────────────────────────────────
+describe('productoB2BCoincideConAsignacion', () => {
+  it('coincide por productoId guardado en la asignación', () => {
+    expect(productoB2BCoincideConAsignacion(
+      { productoId: 'abc123', talla: 'M' },
+      { productoId: 'abc123', talla: 'M' }
+    )).toBe(true);
+  });
+
+  it('coincide por codigo (producto) === referencia (asignación)', () => {
+    // En la asignación guardamos `referencia` (puede venir de item.referencia
+    // o item.codigo en EntradaSatelite:322). El item B2B guarda `codigo`.
+    expect(productoB2BCoincideConAsignacion(
+      { codigo: 'REF001', talla: 'M' },
+      { referencia: 'REF001', talla: 'M' }
+    )).toBe(true);
+  });
+
+  it('coincide por descripcion === descripcion (fallback)', () => {
+    expect(productoB2BCoincideConAsignacion(
+      { descripcion: 'Saco Cuello V', talla: 'L' },
+      { descripcion: 'Saco Cuello V', talla: 'L' }
+    )).toBe(true);
+  });
+
+  it('rechaza productos anulados', () => {
+    expect(productoB2BCoincideConAsignacion(
+      { codigo: 'REF001', talla: 'M', anulado: true },
+      { referencia: 'REF001', talla: 'M' }
+    )).toBe(false);
+  });
+
+  it('coerciona talla cuando viene número vs string entre asignación y pedido', () => {
+    // Persistimos `talla: String(a.talla)` en stockEntries.asignaciones para
+    // tolerar pedidos que guardaron talla como número.
+    expect(productoB2BCoincideConAsignacion(
+      { codigo: 'REF001', talla: 10 },
+      { referencia: 'REF001', talla: '10' }
+    )).toBe(true);
+  });
+
+  it('no coincide si la talla difiere aunque el identificador esté', () => {
+    expect(productoB2BCoincideConAsignacion(
+      { codigo: 'REF001', talla: 'M' },
+      { referencia: 'REF001', talla: 'L' }
+    )).toBe(false);
+  });
+
+  it('no coincide cuando asignación legacy no trae ningún identificador', () => {
+    // stockEntries legacy persistían solo pedidoId/numeroPedido/cantidad/tipo.
+    // Sin productoId/referencia/descripcion, esta función no debería matchear.
+    // El caller en Inventory/CuentasPorPagar reconstruye el asig desde
+    // entrada.referencia/talla/productId/nombre antes de invocar.
+    expect(productoB2BCoincideConAsignacion(
+      { codigo: 'REF001', talla: 'M' },
+      { talla: 'M' }
+    )).toBe(false);
+  });
+
+  it('ignora identificadores undefined/null en la asignación', () => {
+    // Asignación con productoId vacío pero referencia válida — sólo
+    // debe matchear por el campo que sí tiene valor.
+    expect(productoB2BCoincideConAsignacion(
+      { codigo: 'REF001', talla: 'M' },
+      { productoId: '', referencia: 'REF001', talla: 'M' }
+    )).toBe(true);
+  });
+
+  it('un identificador correcto basta — no exige que todos coincidan', () => {
+    // Si productoId NO coincide pero codigo SÍ, debe matchear.
+    expect(productoB2BCoincideConAsignacion(
+      { productoId: 'distinto', codigo: 'REF001', talla: 'M' },
+      { productoId: 'abc123', referencia: 'REF001', talla: 'M' }
+    )).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Regresión: selección con capacidad pendiente
+// Cubre el "Bug A" — al re-localizar el item en el batch, el findIndex
+// debe rechazar rows duplicados sin capacidad (cantidadAlistadaActual
+// ya cubre todo lo pendiente) para no caer en el row equivocado.
+// Esta combinación se usa en EntradaSatelite.jsx:441 y EntradaProveedor.jsx:423.
+// ─────────────────────────────────────────────────────────────
+describe('regresión: lookup con capacidad pendiente (Bug A)', () => {
+  const findRowConCapacidad = (productos, asig) =>
+    productos.findIndex(p =>
+      productoB2BCoincideConAsignacion(p, asig) && calcularMaxAlistar(p) > 0
+    );
+
+  it('prefiere el row con pendientes cuando hay duplicado completo y duplicado parcial', () => {
+    const productos = [
+      // Row 0: mismo codigo+talla pero ya completamente alistado/enviado
+      { codigo: 'REF001', talla: 'M', cantidad: 5, cantidadAlistadaActual: 5, cantidadEnviada: 0 },
+      // Row 1: mismo codigo+talla con pendientes
+      { codigo: 'REF001', talla: 'M', cantidad: 10, cantidadAlistadaActual: 0, cantidadEnviada: 0 }
+    ];
+    const asig = { referencia: 'REF001', talla: 'M', cantidad: 3 };
+
+    expect(findRowConCapacidad(productos, asig)).toBe(1);
+  });
+
+  it('devuelve -1 si todos los matches están completos (caller hace fallback)', () => {
+    const productos = [
+      { codigo: 'REF001', talla: 'M', cantidad: 5, cantidadAlistadaActual: 5, cantidadEnviada: 0 },
+      { codigo: 'REF001', talla: 'M', cantidad: 10, cantidadAlistadaActual: 10, cantidadEnviada: 0 }
+    ];
+    const asig = { referencia: 'REF001', talla: 'M', cantidad: 3 };
+
+    expect(findRowConCapacidad(productos, asig)).toBe(-1);
+  });
+
+  it('ignora rows que no matchean el identificador aunque tengan capacidad', () => {
+    const productos = [
+      { codigo: 'OTRO', talla: 'M', cantidad: 10, cantidadAlistadaActual: 0 }, // matchea talla pero no codigo
+      { codigo: 'REF001', talla: 'M', cantidad: 10, cantidadAlistadaActual: 0 }
+    ];
+    const asig = { referencia: 'REF001', talla: 'M', cantidad: 3 };
+
+    expect(findRowConCapacidad(productos, asig)).toBe(1);
+  });
+
+  it('respeta capacidad por discrepancia: row "completo" en alistada pero con discrepancia activa sigue teniendo capacidad', () => {
+    const productos = [
+      // Ya alistó todo localmente, pero el cliente reportó discrepancia → hay
+      // capacidad para reponer las unidades faltantes.
+      {
+        codigo: 'REF001',
+        talla: 'M',
+        cantidad: 10,
+        cantidadAlistadaActual: 0,
+        cantidadEnviada: 10,
+        cantidadRecibida: 7 // 3 de discrepancia
+      }
+    ];
+    const asig = { referencia: 'REF001', talla: 'M', cantidad: 2 };
+
+    expect(findRowConCapacidad(productos, asig)).toBe(0);
+  });
+
+  it('rechaza rows anulados aunque tengan capacidad numérica', () => {
+    const productos = [
+      { codigo: 'REF001', talla: 'M', cantidad: 10, cantidadAlistadaActual: 0, anulado: true },
+      { codigo: 'REF001', talla: 'M', cantidad: 5, cantidadAlistadaActual: 0 }
+    ];
+    const asig = { referencia: 'REF001', talla: 'M', cantidad: 3 };
+
+    expect(findRowConCapacidad(productos, asig)).toBe(1);
   });
 });
 

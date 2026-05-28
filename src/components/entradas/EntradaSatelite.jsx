@@ -13,6 +13,13 @@ import {
   getDoc
 } from 'firebase/firestore';
 import { useAuth } from '../../context/AuthContext';
+import {
+  getAlistadaActual,
+  calcularMaxAlistar,
+  tienePendientes,
+  productoB2BCoincideConInventario,
+  productoB2BCoincideConAsignacion
+} from '../../utils/pedidosB2BLogic';
 
 const EntradaSatelite = () => {
   const { currentUser } = useAuth();
@@ -217,41 +224,14 @@ const EntradaSatelite = () => {
         if (pedidoData.estado === 'Completado' || pedidoData.estado === 'Entregado') continue;
         if (pedidoData.aprobado !== true) continue;
 
-        // Buscar productos que coincidan exactamente con el producto y estén pendientes
+        // Buscar productos que coincidan con el inventario entrante y tengan pendientes.
+        // Lógica consolidada en src/utils/pedidosB2BLogic.js.
         const productosPendientes = (pedidoData.productos || [])
           .map((producto, index) => ({ ...producto, index }))
-          .filter(producto => {
-            if (producto.anulado === true) return false;
-
-            const codigoMatch =
-              (producto.codigo && producto.codigo === selectedProduct.referencia) ||
-              (producto.productoId && producto.productoId === selectedProduct.id) ||
-              (producto.codigo && selectedProduct.codigo && producto.codigo === selectedProduct.codigo) ||
-              (producto.descripcion && selectedProduct.nombre && producto.descripcion === selectedProduct.nombre);
-            const tallaMatch = String(producto.talla) === String(selectedProduct.talla);
-
-            if (!codigoMatch || !tallaMatch) return false;
-
-            const cantidadEnviada = producto.cantidadEnviada || 0;
-            const cantidadRecibida = producto.cantidadRecibida || 0;
-            let alistadaActual = producto.cantidadAlistadaActual !== undefined
-              ? producto.cantidadAlistadaActual
-              : Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviada);
-            let maxPosible = Math.max(0, producto.cantidad - cantidadEnviada);
-            const hayDiscrepanciaActiva = cantidadRecibida > 0 &&
-                                          cantidadRecibida < cantidadEnviada &&
-                                          cantidadRecibida < producto.cantidad;
-            if (hayDiscrepanciaActiva) {
-              maxPosible += (cantidadEnviada - cantidadRecibida);
-            }
-            alistadaActual = Math.min(alistadaActual, maxPosible);
-            const pendientesOriginal = Math.max(0, producto.cantidad - cantidadEnviada - alistadaActual);
-            const discrepanciaTotal = hayDiscrepanciaActiva ? (cantidadEnviada - cantidadRecibida) : 0;
-            const alistadaSobrante = Math.max(0, alistadaActual - Math.max(0, producto.cantidad - cantidadEnviada));
-            const pendientesPorDiscrepancia = Math.max(0, discrepanciaTotal - alistadaSobrante);
-
-            return (pendientesOriginal + pendientesPorDiscrepancia) > 0;
-          });
+          .filter(producto =>
+            productoB2BCoincideConInventario(producto, selectedProduct) &&
+            tienePendientes(producto)
+          );
 
         if (productosPendientes.length > 0) {
           pedidosPendientes.push({
@@ -265,6 +245,19 @@ const EntradaSatelite = () => {
           });
         }
       }
+
+      // FIFO real: ordenar todos los pedidos (POS + B2B) por createdAt asc.
+      // Los queries de Firestore vienen ordenados solo dentro de cada colección,
+      // por lo que sin este sort los POS siempre llegan antes que cualquier B2B
+      // y los B2B nunca reciben prendas si hay POS pendientes.
+      const getCreatedAtMs = (createdAt) => {
+        if (!createdAt) return Number.MAX_SAFE_INTEGER;
+        if (typeof createdAt.toMillis === 'function') return createdAt.toMillis();
+        if (typeof createdAt.seconds === 'number') return createdAt.seconds * 1000;
+        if (createdAt instanceof Date) return createdAt.getTime();
+        return Number.MAX_SAFE_INTEGER;
+      };
+      pedidosPendientes.sort((a, b) => getCreatedAtMs(a.createdAt) - getCreatedAtMs(b.createdAt));
 
       // PASO 2: Asignar prendas a pedidos (del más antiguo al más reciente)
       // IMPORTANTE: Solo asignamos las prendas buenas (sin defectos)
@@ -283,26 +276,7 @@ const EntradaSatelite = () => {
           let cantidadPendiente;
 
           if (pedido.tipo === 'pedido_b2b') {
-            // Para pedidos B2B: pendientes = lo que falta por enviar - lo ya alistado + discrepancia no cubierta
-            const cantidadEnviada = itemPendiente.cantidadEnviada || 0;
-            const cantidadRecibida = itemPendiente.cantidadRecibida || 0;
-            let alistadaActual = itemPendiente.cantidadAlistadaActual !== undefined
-              ? itemPendiente.cantidadAlistadaActual
-              : Math.max(0, (itemPendiente.cantidadAlistada || 0) - cantidadEnviada);
-            // Cap: nunca más que pendientes + reposición por discrepancia
-            let maxPosible = Math.max(0, cantidadTotal - cantidadEnviada);
-            const hayDiscrepancia = cantidadRecibida > 0 &&
-                                    cantidadRecibida < cantidadEnviada &&
-                                    cantidadRecibida < cantidadTotal;
-            if (hayDiscrepancia) {
-              maxPosible += (cantidadEnviada - cantidadRecibida);
-            }
-            alistadaActual = Math.min(alistadaActual, maxPosible);
-            const pendientesOriginal = Math.max(0, cantidadTotal - cantidadEnviada - alistadaActual);
-            const discrepanciaTotal = hayDiscrepancia ? (cantidadEnviada - cantidadRecibida) : 0;
-            const alistadaSobrante = Math.max(0, alistadaActual - Math.max(0, cantidadTotal - cantidadEnviada));
-            const pendientesPorDiscrepancia = Math.max(0, discrepanciaTotal - alistadaSobrante);
-            cantidadPendiente = pendientesOriginal + pendientesPorDiscrepancia;
+            cantidadPendiente = calcularMaxAlistar(itemPendiente);
           } else {
             // Para pedidos POS usar cantidadLista + cantidadEntregada
             const cantidadLista = itemPendiente.cantidadLista || 0;
@@ -460,14 +434,13 @@ const EntradaSatelite = () => {
           const pedidoData = pedidoSnap.data();
           const updatedProductos = [...(pedidoData.productos || [])];
 
-          const productoIndex = updatedProductos.findIndex(p => {
-            if (p.anulado) return false;
-            if (String(p.talla) !== String(asig.talla)) return false;
-            const matchId = (p.productoId && asig.productoId && p.productoId === asig.productoId) ||
-                            (p.codigo && asig.referencia && p.codigo === asig.referencia) ||
-                            (p.descripcion && asig.descripcion && p.descripcion === asig.descripcion);
-            return !!matchId;
-          });
+          // Bug A: el findIndex original solo verificaba codigo/talla, así que en pedidos
+          // con rows duplicados (uno ya completo y otro con pendientes) podía caer en el
+          // row sin capacidad y la asignación se silenciaba. Ahora exigimos también que
+          // el row tenga capacidad real de alistamiento.
+          const productoIndex = updatedProductos.findIndex(p =>
+            productoB2BCoincideConAsignacion(p, asig) && calcularMaxAlistar(p) > 0
+          );
 
           if (productoIndex === -1) {
             console.warn(`Producto no encontrado en pedido B2B ${asig.numeroPedido}: ${asig.referencia} ${asig.talla}`);
@@ -476,19 +449,10 @@ const EntradaSatelite = () => {
 
           const producto = updatedProductos[productoIndex];
           const cantidadEnviadaProd = producto.cantidadEnviada || 0;
-          const cantidadRecibidaProd = producto.cantidadRecibida || 0;
-          let alistadaActualVieja = producto.cantidadAlistadaActual !== undefined
-            ? producto.cantidadAlistadaActual
-            : Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviadaProd);
-          // Cap con discrepancia
-          let maxPosibleProd = Math.max(0, producto.cantidad - cantidadEnviadaProd);
-          if (cantidadRecibidaProd > 0 && cantidadRecibidaProd < cantidadEnviadaProd && cantidadRecibidaProd < producto.cantidad) {
-            maxPosibleProd += (cantidadEnviadaProd - cantidadRecibidaProd);
-          }
-          alistadaActualVieja = Math.min(alistadaActualVieja, maxPosibleProd);
+          const alistadaActualVieja = getAlistadaActual(producto);
 
-          // Capacidad real disponible AHORA
-          const capacidadFrescaB2B = Math.max(0, maxPosibleProd - alistadaActualVieja);
+          // Capacidad real disponible AHORA (fresca, post-read)
+          const capacidadFrescaB2B = calcularMaxAlistar(producto);
           const cantidadEfectiva = Math.min(asig.cantidadAsignada, capacidadFrescaB2B);
 
           if (cantidadEfectiva <= 0) {
@@ -573,7 +537,13 @@ const EntradaSatelite = () => {
           clienteNombre: a.clienteNombre || '',
           cantidad: a.cantidadAsignada || 0,
           tipo: a.tipo || 'pedido',
-          esCompleto: a.esCompleto || false
+          esCompleto: a.esCompleto || false,
+          // Identificadores para que la anulación pueda re-localizar el row exacto
+          // dentro del pedido sin depender solo de entrada.referencia/talla.
+          referencia: a.referencia || '',
+          talla: a.talla !== undefined && a.talla !== null ? String(a.talla) : '',
+          productoId: a.productoId || '',
+          descripcion: a.descripcion || ''
         })),
         costoUnitario: costoSatelite || 0,
         costoTotal: (costoSatelite || 0) * (numCantidad || 0),

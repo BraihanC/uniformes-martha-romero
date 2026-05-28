@@ -4,6 +4,7 @@ import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, w
 import * as XLSX from 'xlsx';
 import { useAuth } from '../context/AuthContext';
 import { Loader2 } from 'lucide-react';
+import { getAlistadaActual, productoB2BCoincideConAsignacion } from '../utils/pedidosB2BLogic';
 
 const Inventory = () => {
   const { isAdmin, currentUser } = useAuth();
@@ -301,6 +302,18 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
       if (entrada.asignaciones && entrada.asignaciones.length > 0) {
         for (const asig of entrada.asignaciones) {
           const tipo = asig.tipo || 'pedido'; // Bug 9: legacy
+          // Reconstruye los identificadores para el matching. Las entradas viejas no
+          // los persistían, así que caemos a los datos top-level de la entrada.
+          const asigForMatching = (asig.referencia || asig.productoId || asig.descripcion)
+            ? asig
+            : {
+                ...asig,
+                referencia: entrada.referencia,
+                talla: entrada.talla,
+                productoId: entrada.productId,
+                descripcion: entrada.nombre
+              };
+
           if (tipo === 'pedido') {
             // PEDIDO POS
             const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
@@ -310,11 +323,19 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
               const pedidoData = pedidoSnap.data();
               const updatedItems = [...pedidoData.items];
 
-              // Buscar el item que coincide con el producto
-              const itemIndex = updatedItems.findIndex(item =>
-                item.referencia === entrada.referencia &&
-                item.talla === entrada.talla
+              // Match con talla coercida + filtro anulado. Preferimos el row con
+              // cantidadLista pendiente de revertir; si no hay, cae al primer match.
+              const matchItem = (item) =>
+                !item.anulado &&
+                item.referencia === asigForMatching.referencia &&
+                String(item.talla) === String(asigForMatching.talla);
+
+              let itemIndex = updatedItems.findIndex(item =>
+                matchItem(item) && (item.cantidadLista || 0) > 0
               );
+              if (itemIndex === -1) {
+                itemIndex = updatedItems.findIndex(matchItem);
+              }
 
               if (itemIndex !== -1) {
                 const item = updatedItems[itemIndex];
@@ -354,11 +375,18 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
               const pedidoData = pedidoSnap.data();
               const updatedProductos = [...pedidoData.productos];
 
-              // Buscar el producto que coincide
-              const prodIndex = updatedProductos.findIndex(prod =>
-                (prod.codigo === entrada.referencia || prod.productoId === entrada.productId) &&
-                prod.talla === entrada.talla
+              // Preferimos el row con alistamiento pendiente de revertir. Si todos
+              // los matches están en 0 (porque ya se hizo envío que consumió la
+              // alistada), cae al primer match para mantener compat.
+              let prodIndex = updatedProductos.findIndex(p =>
+                productoB2BCoincideConAsignacion(p, asigForMatching) &&
+                getAlistadaActual(p) > 0
               );
+              if (prodIndex === -1) {
+                prodIndex = updatedProductos.findIndex(p =>
+                  productoB2BCoincideConAsignacion(p, asigForMatching)
+                );
+              }
 
               if (prodIndex !== -1) {
                 const producto = updatedProductos[prodIndex];
@@ -928,6 +956,38 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
         }
         // Actualizar producto existente
         const productRef = doc(db, 'products', editingProduct.id);
+
+        // Chequeo de concurrencia optimista: si el producto fue mutado por otro
+        // flujo (POS, satélite, entrega, anulación…) mientras este modal estaba
+        // abierto, abortamos para no pisar el stockTotal/reservas con valores
+        // viejos del formulario. Solo aplica si tenemos updatedAt confiable.
+        const originalUpdatedAt = editingProduct.updatedAt;
+        if (originalUpdatedAt?.toMillis) {
+          const freshSnap = await getDoc(productRef);
+          if (!freshSnap.exists()) {
+            alert('Este producto ya no existe en el sistema.');
+            setLoading(false);
+            setGuardandoProducto(false);
+            return;
+          }
+          const freshData = freshSnap.data();
+          const freshUpdatedAt = freshData.updatedAt;
+          if (freshUpdatedAt?.toMillis && freshUpdatedAt.toMillis() !== originalUpdatedAt.toMillis()) {
+            const stockCambio = freshData.stockTotal !== editingProduct.stockTotal
+              ? `\n\nstockTotal cambió de ${editingProduct.stockTotal} a ${freshData.stockTotal} mientras editabas.`
+              : '';
+            alert(
+              '⚠️ Otro usuario o un proceso (POS, entrada de satélite, entrega, anulación) modificó este producto mientras lo estabas editando.\n\n' +
+              'No se guardaron los cambios para no sobrescribir valores actuales.' +
+              stockCambio +
+              '\n\nCierra el modal, refresca la página y vuelve a intentar.'
+            );
+            setLoading(false);
+            setGuardandoProducto(false);
+            return;
+          }
+        }
+
         await updateDoc(productRef, {
           referencia: formData.referencia.trim(),
           nombre: formData.nombre.trim(),
@@ -991,6 +1051,33 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
 
     setLoading(true);
     try {
+      // Chequeo de referencias activas antes de borrar. Si el producto está
+      // dentro de un pedido / apartado / B2B vivo, no podemos eliminarlo —
+      // dejaría productoId huérfanos en items que romperían anulaciones,
+      // entregas, devoluciones y recálculos de stock.
+      const referenciasActivas = await encontrarReferenciasActivas(id);
+      if (referenciasActivas.total > 0) {
+        const detalles = [];
+        if (referenciasActivas.pedidos.length > 0) {
+          detalles.push(`• ${referenciasActivas.pedidos.length} pedido(s) POS activo(s): ${referenciasActivas.pedidos.slice(0, 5).join(', ')}${referenciasActivas.pedidos.length > 5 ? '…' : ''}`);
+        }
+        if (referenciasActivas.pedidosB2B.length > 0) {
+          detalles.push(`• ${referenciasActivas.pedidosB2B.length} pedido(s) B2B activo(s): ${referenciasActivas.pedidosB2B.slice(0, 5).join(', ')}${referenciasActivas.pedidosB2B.length > 5 ? '…' : ''}`);
+        }
+        if (referenciasActivas.apartados.length > 0) {
+          detalles.push(`• ${referenciasActivas.apartados.length} apartado(s) activo(s): ${referenciasActivas.apartados.slice(0, 5).join(', ')}${referenciasActivas.apartados.length > 5 ? '…' : ''}`);
+        }
+        alert(
+          `❌ No se puede eliminar "${nombre}".\n\n` +
+          `Está referenciado en operaciones activas:\n\n` +
+          detalles.join('\n') +
+          `\n\nDebes anular/cancelar/completar esas operaciones antes de eliminar el producto.\n\n` +
+          `Si necesitas "ocultar" el producto sin afectar el historial, considera marcarlo como inactivo en lugar de eliminarlo.`
+        );
+        setLoading(false);
+        return;
+      }
+
       await deleteDoc(doc(db, 'products', id));
       alert('Producto eliminado correctamente.');
       fetchProducts();
@@ -1002,8 +1089,66 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
     }
   };
 
+  // Busca pedidos / pedidos_b2b / apartados activos que contengan referencias
+  // al producto. Devuelve los numeroPedido/numeroApartado encontrados.
+  const encontrarReferenciasActivas = async (productoId) => {
+    const pedidosRef = [];
+    const pedidosB2BRef = [];
+    const apartadosRef = [];
+
+    // Pedidos POS — excluir Anulado/Cancelado
+    const pedidosSnap = await getDocs(collection(db, 'pedidos'));
+    pedidosSnap.forEach(docSnap => {
+      const pedido = docSnap.data();
+      if (pedido.estadoGeneral === 'Anulado' || pedido.estadoGeneral === 'Cancelado') return;
+      const items = pedido.items || [];
+      const tieneRef = items.some(item =>
+        item.productoId === productoId && !item.anulado && item.estadoItem !== 'Entregado'
+      );
+      if (tieneRef) pedidosRef.push(`#${String(pedido.numeroPedido || '?').padStart(4, '0')}`);
+    });
+
+    // Pedidos B2B — excluir Anulado/Cancelado/Completado/Entregado
+    const b2bSnap = await getDocs(collection(db, 'pedidos_b2b'));
+    b2bSnap.forEach(docSnap => {
+      const pedido = docSnap.data();
+      if (pedido.anulado === true) return;
+      const estado = pedido.estado;
+      if (estado === 'Anulado' || estado === 'Cancelado' || estado === 'Completado' || estado === 'Entregado') return;
+      const productos = pedido.productos || [];
+      const tieneRef = productos.some(p => p.productoId === productoId && !p.anulado);
+      if (tieneRef) pedidosB2BRef.push(`#${String(pedido.numeroPedido || '?').padStart(4, '0')}`);
+    });
+
+    // Apartados — solo Activo/Vencido
+    const apartadosSnap = await getDocs(collection(db, 'apartados'));
+    apartadosSnap.forEach(docSnap => {
+      const apartado = docSnap.data();
+      if (apartado.estadoGeneral !== 'Activo' && apartado.estadoGeneral !== 'Vencido') return;
+      const items = apartado.items || [];
+      const tieneRef = items.some(item => item.productoId === productoId && !item.anulado);
+      if (tieneRef) apartadosRef.push(`#${String(apartado.numeroApartado || '?').padStart(4, '0')}`);
+    });
+
+    return {
+      pedidos: pedidosRef,
+      pedidosB2B: pedidosB2BRef,
+      apartados: apartadosRef,
+      total: pedidosRef.length + pedidosB2BRef.length + apartadosRef.length
+    };
+  };
+
   // Activar input de archivo
   const handleImportClick = () => {
+    // Security: la librería xlsx tiene CVEs sin parche (prototype pollution + ReDoS).
+    // El parseo solo es seguro si confiamos en el origen del archivo.
+    const confirmar = window.confirm(
+      '⚠️ IMPORTACIÓN DE INVENTARIO\n\n' +
+      'Por seguridad, importa únicamente archivos .xlsx generados por este sistema o por una fuente de confianza.\n\n' +
+      'No abras archivos enviados por terceros o descargados de internet sin verificar — un archivo malicioso podría afectar tu navegador.\n\n' +
+      '¿Continuar?'
+    );
+    if (!confirmar) return;
     fileInputRef.current?.click();
   };
 

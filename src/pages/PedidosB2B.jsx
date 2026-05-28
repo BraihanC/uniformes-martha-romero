@@ -5,6 +5,7 @@ import { collection, getDocs, doc, updateDoc, serverTimestamp, query, orderBy, a
 import { useAuth } from '../context/AuthContext';
 import { Package, CheckCircle, Eye, Calendar, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer, Loader2, DollarSign, Plus, Edit3, X } from 'lucide-react';
 import jsPDF from 'jspdf';
+import { getAlistadaActual, calcularMaxAlistar } from '../utils/pedidosB2BLogic';
 
 const PedidosB2B = () => {
   const { user } = useAuth();
@@ -126,9 +127,11 @@ const PedidosB2B = () => {
     if (pedido.total !== undefined && pedido.total !== null) {
       return pedido.total;
     }
+    // Fallback para pedidos legacy sin campo `total`. Incluimos `prod.precio` para
+    // datos viejos que solo guardan ese campo (consistente con renders y export PDF).
     return (pedido.productos || []).reduce((sum, prod) => {
       const cantidad = prod.cantidad || 0;
-      const precio = prod.precioVenta || prod.precioUnitario || 0;
+      const precio = prod.precioVenta || prod.precioUnitario || prod.precio || 0;
       return sum + (cantidad * precio);
     }, 0);
   };
@@ -138,45 +141,6 @@ const PedidosB2B = () => {
     const total = obtenerTotalPedido(pedido);
     const abonado = calcularTotalAbonado(pedido.abonos);
     return total - abonado;
-  };
-
-  // Helper: obtiene la cantidad alistada para el envío ACTUAL (no acumulada)
-  // Compatible con pedidos viejos que solo tienen cantidadAlistada (acumulativa)
-  const getAlistadaActual = (producto) => {
-    let valor;
-    if (producto.cantidadAlistadaActual !== undefined) {
-      valor = producto.cantidadAlistadaActual;
-    } else {
-      valor = Math.max(0, (producto.cantidadAlistada || 0) - (producto.cantidadEnviada || 0));
-    }
-    // Cap: nunca más que pendientes + reposición por discrepancia
-    if (producto.cantidad !== undefined) {
-      const cantidadEnviada = producto.cantidadEnviada || 0;
-      let maxPosible = Math.max(0, producto.cantidad - cantidadEnviada);
-      // Si hay discrepancia, permitir alistamiento extra para reponer
-      const cantidadRecibida = producto.cantidadRecibida || 0;
-      if (cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada && cantidadRecibida < producto.cantidad) {
-        maxPosible += (cantidadEnviada - cantidadRecibida);
-      }
-      return Math.min(valor, maxPosible);
-    }
-    return valor;
-  };
-
-  // Calcula cuántas unidades se pueden alistar para ESTE envío:
-  // pendientes originales (no enviadas ni alistadas) + reposición por discrepancias
-  const calcularMaxAlistar = (producto) => {
-    const cantidadEnviada = producto.cantidadEnviada || 0;
-    const cantidadRecibida = producto.cantidadRecibida || 0;
-    const alistadaActual = getAlistadaActual(producto);
-    const hayDiscrepancia = cantidadRecibida > 0 && cantidadRecibida < cantidadEnviada && cantidadRecibida < producto.cantidad;
-    const pendientesOriginal = Math.max(0, producto.cantidad - cantidadEnviada - alistadaActual);
-    const discrepanciaTotal = hayDiscrepancia
-      ? cantidadEnviada - cantidadRecibida
-      : 0;
-    const alistadaSobrante = Math.max(0, alistadaActual - Math.max(0, producto.cantidad - cantidadEnviada));
-    const pendientesPorDiscrepancia = Math.max(0, discrepanciaTotal - alistadaSobrante);
-    return pendientesOriginal + pendientesPorDiscrepancia;
   };
 
   // Abrir modal de abono
@@ -1872,6 +1836,10 @@ const PedidosB2B = () => {
         numeroPedido: nextNumero,
         clienteId: clienteSeleccionado.id,
         clienteNombre: clienteSeleccionado.nombre || '',
+        // Security (Phase 2): copiar el email del cliente desde clientes_corporativos
+        // para que las reglas puedan restringir la lectura al dueño del pedido.
+        // Admin tienda crea para el cliente, así que clienteEmail !== email del admin.
+        clienteEmail: clienteSeleccionado.credenciales?.email || '',
         codigoColegio: clienteSeleccionado.codigoColegio || '',
         productos: carritoTienda.map(item => ({
           productoId: item.productoId || '',

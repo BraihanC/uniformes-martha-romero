@@ -157,12 +157,20 @@ const ProductosReparacion = () => {
         reparadoPor: currentUser.uid
       });
 
-      // 2. Devolver las unidades al stock total del producto
+      // 2. Devolver las unidades al stock vendible + cerrar el ciclo en
+      // stockDefectuoso si fue incrementado al crear este registro.
+      // - origen 'devolucion' o 'cambio' (Devoluciones.jsx): stockDefectuoso += al crear → ahora −.
+      // - origen 'satelite' (EntradaSatelite.jsx): stockDefectuoso nunca se tocó → no decrementar
+      //   (decrementarlo dejaría el campo negativo).
       const productoRef = doc(db, 'products', selectedProducto.productId);
-      await updateDoc(productoRef, {
+      const updates = {
         stockTotal: increment(selectedProducto.cantidad),
         updatedAt: serverTimestamp()
-      });
+      };
+      if (selectedProducto.origen === 'devolucion' || selectedProducto.origen === 'cambio') {
+        updates.stockDefectuoso = increment(-selectedProducto.cantidad);
+      }
+      await updateDoc(productoRef, updates);
 
       alert(`✅ ${selectedProducto.cantidad} unidades de "${selectedProducto.nombre}" fueron marcadas como reparadas y devueltas al inventario`);
       setShowModal(false);
@@ -196,6 +204,17 @@ const ProductosReparacion = () => {
         observacionesBaja: observaciones,
         bajaPor: currentUser.uid
       });
+
+      // 2. Cerrar el ciclo en stockDefectuoso si aplica. Las unidades de baja
+      // salen definitivamente del sistema (no vuelven a stockTotal).
+      // Solo decrementar para los orígenes que habían incrementado el campo.
+      if (selectedProducto.origen === 'devolucion' || selectedProducto.origen === 'cambio') {
+        const productoRef = doc(db, 'products', selectedProducto.productId);
+        await updateDoc(productoRef, {
+          stockDefectuoso: increment(-selectedProducto.cantidad),
+          updatedAt: serverTimestamp()
+        });
+      }
 
       alert(`❌ ${selectedProducto.cantidad} unidades de "${selectedProducto.nombre}" fueron dadas de baja del inventario`);
       setShowModal(false);

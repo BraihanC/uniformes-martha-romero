@@ -187,6 +187,39 @@ export const productoCoincide = (productoPedido, productoInventario) => {
 };
 
 /**
+ * Matching usado por EntradaSatelite/EntradaProveedor para localizar productos en
+ * un pedido B2B que correspondan a un producto del inventario que está entrando.
+ * Extiende productoCoincide con un fallback por descripción para datos legacy.
+ */
+export const productoB2BCoincideConInventario = (productoPedido, productoInventario) => {
+  if (productoPedido.anulado) return false;
+
+  const tallaMatch = String(productoPedido.talla) === String(productoInventario.talla);
+  if (!tallaMatch) return false;
+
+  return !!(
+    (productoPedido.codigo && productoPedido.codigo === productoInventario.referencia) ||
+    (productoPedido.productoId && productoPedido.productoId === productoInventario.id) ||
+    (productoPedido.codigo && productoInventario.codigo && productoPedido.codigo === productoInventario.codigo) ||
+    (productoPedido.descripcion && productoInventario.nombre && productoPedido.descripcion === productoInventario.nombre)
+  );
+};
+
+/**
+ * Matching usado en la fase de batch (PASO 4) para re-localizar dentro del documento
+ * del pedido el item que corresponde a una asignación calculada en PASO 1.
+ */
+export const productoB2BCoincideConAsignacion = (producto, asig) => {
+  if (producto.anulado) return false;
+  if (String(producto.talla) !== String(asig.talla)) return false;
+  return !!(
+    (producto.productoId && asig.productoId && producto.productoId === asig.productoId) ||
+    (producto.codigo && asig.referencia && producto.codigo === asig.referencia) ||
+    (producto.descripcion && asig.descripcion && producto.descripcion === asig.descripcion)
+  );
+};
+
+/**
  * Verifica si un producto tiene unidades pendientes de alistar.
  */
 export const tienePendientes = (producto) => {

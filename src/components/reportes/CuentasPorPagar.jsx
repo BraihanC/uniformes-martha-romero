@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { db } from '../../services/firebase';
 import { collection, getDocs, query, where, writeBatch, doc, serverTimestamp, getDoc, increment } from 'firebase/firestore';
 import { ChevronDown, ChevronUp, CheckCircle, XCircle, History, Clock, RefreshCw } from 'lucide-react';
+import { getAlistadaActual, productoB2BCoincideConAsignacion } from '../../utils/pedidosB2BLogic';
 
 const CuentasPorPagar = () => {
   const [satelites, setSatelites] = useState([]);
@@ -389,8 +390,12 @@ const CuentasPorPagar = () => {
 
       // Para cada entrada, buscar su transacción asociada y actualizarla
       for (const entradaId of entradaIds) {
-        // Actualizar entrada como pagada
+        // Leer datos actuales de la entrada (necesarios para crear transacción si falta)
         const entradaRef = doc(db, 'stockEntries', entradaId);
+        const entradaSnap = await getDoc(entradaRef);
+        const entradaData = entradaSnap.exists() ? entradaSnap.data() : {};
+
+        // Actualizar entrada como pagada
         batch.update(entradaRef, {
           pagado: true,
           fechaPago: serverTimestamp(),
@@ -411,12 +416,42 @@ const CuentasPorPagar = () => {
           // Actualizar la transacción con el método real y origen del dinero
           transSnapshot.forEach(transDoc => {
             const transRef = doc(db, 'transactions', transDoc.id);
-            batch.update(transRef, {
+            const updateData = {
               metodoPago: metodoPagoTexto,
               origenDinero: origenDineroTexto,
               afectaCaja: afectaCaja,
               fechaPago: serverTimestamp()
-            });
+            };
+            // Si afecta caja, alinear `fecha` al momento del pago para que el cierre
+            // de caja la cuente en el día en que realmente salió el dinero.
+            if (afectaCaja) {
+              updateData.fecha = serverTimestamp();
+            }
+            batch.update(transRef, updateData);
+          });
+        } else if (afectaCaja && (entradaData.costoTotal || 0) > 0) {
+          // La entrada no tiene transacción (fue registrada cuando el costo era $0
+          // y se actualizó después). Como afecta caja, crearla ahora para que
+          // aparezca correctamente en el cierre del día del pago.
+          const newTransRef = doc(collection(db, 'transactions'));
+          batch.set(newTransRef, {
+            tipo: 'entrada_satelite',
+            monto: -(entradaData.costoTotal),
+            metodoPago: metodoPagoTexto,
+            afectaCaja: true,
+            origenDinero: origenDineroTexto,
+            entradaId: entradaId,
+            descripcion: `Entrada de satélite: ${entradaData.nombre || ''} (${entradaData.cantidad || 0} uds) - ${entradaData.sateliteNombre || ''}`,
+            productId: entradaData.productId || '',
+            productoNombre: entradaData.nombre || '',
+            sateliteId: entradaData.sateliteId || '',
+            sateliteNombre: entradaData.sateliteNombre || '',
+            cantidad: entradaData.cantidad || 0,
+            costoUnitario: entradaData.costoUnitario || 0,
+            userId: entradaData.userId || '',
+            fecha: serverTimestamp(),
+            fechaPago: serverTimestamp(),
+            createdAt: serverTimestamp()
           });
         }
       }
@@ -507,6 +542,18 @@ ${entrada.asignaciones.map(asig =>
         for (const asig of entrada.asignaciones) {
           const tipo = asig.tipo || 'pedido';
 
+          // Reconstruye los identificadores para el matching. Las entradas viejas no
+          // los persistían, así que caemos a los datos top-level de la entrada.
+          const asigForMatching = (asig.referencia || asig.productoId || asig.descripcion)
+            ? asig
+            : {
+                ...asig,
+                referencia: entrada.referencia,
+                talla: entrada.talla,
+                productoId: entrada.productId,
+                descripcion: entrada.nombre
+              };
+
           if (tipo === 'pedido') {
             // PEDIDO POS — buscar item por referencia+talla y recalcular estado
             const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
@@ -516,10 +563,19 @@ ${entrada.asignaciones.map(asig =>
             const pedidoData = pedidoSnap.data();
             const updatedItems = [...(pedidoData.items || [])];
 
-            const itemIndex = updatedItems.findIndex(item =>
-              item.referencia === entrada.referencia &&
-              item.talla === entrada.talla
+            // Match con talla coercida + filtro anulado. Preferimos el row con
+            // cantidadLista pendiente de revertir; si no hay, cae al primer match.
+            const matchItem = (item) =>
+              !item.anulado &&
+              item.referencia === asigForMatching.referencia &&
+              String(item.talla) === String(asigForMatching.talla);
+
+            let itemIndex = updatedItems.findIndex(item =>
+              matchItem(item) && (item.cantidadLista || 0) > 0
             );
+            if (itemIndex === -1) {
+              itemIndex = updatedItems.findIndex(matchItem);
+            }
             if (itemIndex === -1) continue;
 
             const item = updatedItems[itemIndex];
@@ -556,10 +612,18 @@ ${entrada.asignaciones.map(asig =>
             const pedidoData = pedidoSnap.data();
             const productosActualizados = [...(pedidoData.productos || [])];
 
-            const prodIndex = productosActualizados.findIndex(prod =>
-              (prod.codigo === entrada.referencia || prod.productoId === entrada.productId) &&
-              prod.talla === entrada.talla
+            // Preferimos el row con alistamiento pendiente de revertir. Si todos
+            // los matches están en 0 (porque ya se hizo envío que consumió la
+            // alistada), cae al primer match para mantener compat.
+            let prodIndex = productosActualizados.findIndex(p =>
+              productoB2BCoincideConAsignacion(p, asigForMatching) &&
+              getAlistadaActual(p) > 0
             );
+            if (prodIndex === -1) {
+              prodIndex = productosActualizados.findIndex(p =>
+                productoB2BCoincideConAsignacion(p, asigForMatching)
+              );
+            }
             if (prodIndex === -1) continue;
 
             const producto = productosActualizados[prodIndex];

@@ -478,6 +478,9 @@ const BuscadorFacturas = () => {
     try {
       const batch = writeBatch(db);
       const facturaRef = doc(db, 'sales', facturaSeleccionada.id);
+      // Captura el updatedAt actual para detectar correcciones concurrentes
+      // de otro usuario antes de hacer commit.
+      const originalUpdatedAt = facturaSeleccionada.updatedAt;
 
       // Producto actual (el que está mal o el que solo cambia cantidad)
       const productoActualId = productoActual.productoId;
@@ -590,6 +593,20 @@ const BuscadorFacturas = () => {
           fecha: serverTimestamp(),
           userId: currentUser?.email || currentUser?.uid || 'Admin'
         });
+      }
+
+      // Chequeo de concurrencia optimista: si otro usuario corrigió esta factura
+      // mientras este modal estaba abierto, abortamos para no pisar sus cambios.
+      // Solo aplica si la factura tenía updatedAt registrado (los legacy se saltan).
+      if (originalUpdatedAt?.toMillis) {
+        const freshSnap = await getDoc(facturaRef);
+        if (!freshSnap.exists()) {
+          throw new Error('La factura ya no existe en el sistema.');
+        }
+        const freshUpdatedAt = freshSnap.data().updatedAt;
+        if (freshUpdatedAt?.toMillis && freshUpdatedAt.toMillis() !== originalUpdatedAt.toMillis()) {
+          throw new Error('Otro usuario modificó esta factura mientras la estabas corrigiendo. Cierra este modal, recarga la factura y vuelve a intentar.');
+        }
       }
 
       await batch.commit();

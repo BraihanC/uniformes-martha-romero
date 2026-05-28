@@ -13,7 +13,8 @@ import {
   limit,
   deleteDoc,
   where,
-  addDoc
+  addDoc,
+  runTransaction
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../services/firebase';
@@ -121,6 +122,34 @@ const Apartados = () => {
     'Cédula de Extranjería',
     'Tarjeta de Identidad'
   ];
+
+  // Fix 2: helper para generar números consecutivos de forma atómica vía
+  // runTransaction sobre `counters/<nombre>`. Si el contador no existe aún,
+  // lo inicializa leyendo el MAX actual de la colección fuente.
+  const getSiguienteConsecutivo = async (counterName, sourceCollection, sourceField) => {
+    const counterRef = doc(db, 'counters', counterName);
+    let initialValue = null;
+    const counterCheckSnap = await getDoc(counterRef);
+    if (!counterCheckSnap.exists()) {
+      const maxSnap = await getDocs(
+        query(collection(db, sourceCollection), orderBy(sourceField, 'desc'), limit(1))
+      );
+      initialValue = maxSnap.empty ? 0 : (maxSnap.docs[0].data()[sourceField] || 0);
+    }
+    return await runTransaction(db, async (transaction) => {
+      const counterDoc = await transaction.get(counterRef);
+      let newNumber;
+      if (!counterDoc.exists()) {
+        newNumber = (initialValue || 0) + 1;
+        transaction.set(counterRef, { lastNumber: newNumber });
+      } else {
+        const currentNumber = counterDoc.data().lastNumber || 0;
+        newNumber = currentNumber + 1;
+        transaction.update(counterRef, { lastNumber: newNumber });
+      }
+      return newNumber;
+    });
+  };
 
   // Estados para cambio de método de pago de abono
   const [showCambiarMetodoPagoAbonoModal, setShowCambiarMetodoPagoAbonoModal] = useState(false);
@@ -523,21 +552,20 @@ const Apartados = () => {
       const fechaLimite = new Date();
       fechaLimite.setDate(fechaLimite.getDate() + plazoSeleccionado);
 
+      // Fix 4: pre-generamos el ID de la transacción para guardarlo en historialAbonos
+      const initialTransactionRef = abono > 0 ? doc(collection(db, 'transactions')) : null;
+
       const historialAbonos = abono > 0 ? [{
         fecha: new Date(),
         monto: abono,
         notas: 'Abono inicial',
         metodoPago: metodoPago,
+        transactionId: initialTransactionRef.id,
         ...(metodoPago === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {})
       }] : [];
 
-      // Obtener el siguiente número consecutivo
-      const apartadosSnapshot = await getDocs(query(collection(db, 'apartados'), orderBy('numeroApartado', 'desc'), limit(1)));
-      let siguienteNumero = 1;
-      if (!apartadosSnapshot.empty) {
-        const ultimoApartado = apartadosSnapshot.docs[0].data();
-        siguienteNumero = (ultimoApartado.numeroApartado || 0) + 1;
-      }
+      // Obtener el siguiente número consecutivo (Fix 2: atómico)
+      const siguienteNumero = await getSiguienteConsecutivo('apartados', 'apartados', 'numeroApartado');
 
       const colegio = colegios.find(c => c.id === selectedColegioId);
       const colegioNombre = colegio ? colegio.nombre : '';
@@ -587,10 +615,10 @@ const Apartados = () => {
         });
       }
 
-      // 4. (NUEVO) Registrar Transacción de Abono Inicial
+      // 4. (NUEVO) Registrar Transacción de Abono Inicial (Fix 4: usa el ref
+      // pre-generado para que el ID quede vinculado en historialAbonos)
       if (abono > 0) {
-        const transactionRef = doc(collection(db, 'transactions'));
-        batch.set(transactionRef, {
+        batch.set(initialTransactionRef, {
           tipo: 'abono_apartado',
           monto: abono,
           metodoPago: metodoPago,
@@ -673,11 +701,24 @@ const Apartados = () => {
       const nuevoSaldoPendiente = selectedApartado.totalApartado - nuevoTotalAbonado;
       const estaCompletado = nuevoSaldoPendiente <= 0; // Más seguro que === 0
 
+      // Fix 1: si el apartado estaba Vencido y solo recibe un abono parcial,
+      // debe seguir Vencido — no rebajar a Activo silenciosamente. Solo
+      // pasa a Completado cuando se paga todo, o queda Activo si nunca estuvo Vencido.
+      const estadoActual = selectedApartado.estadoGeneral;
+      const nuevoEstadoGeneral = estaCompletado
+        ? 'Completado'
+        : (estadoActual === 'Vencido' ? 'Vencido' : 'Activo');
+
+      // Fix 4: pre-generamos el ID de la transacción para guardarlo en historialAbonos
+      // y poder buscar la transacción exacta por ID en lugar de por monto+fecha.
+      const transactionRef = doc(collection(db, 'transactions'));
+
       const nuevoHistorial = {
         fecha: new Date().toISOString(), // Usar ISO string para historial
         monto: monto,
         notas: notasAbono || '',
         metodoPago: metodoPagoAbono,
+        transactionId: transactionRef.id,
         ...(metodoPagoAbono === 'Cruce de saldo' && referenciaOrigen.trim() ? { referenciaOrigen: referenciaOrigen.trim() } : {})
       };
 
@@ -687,13 +728,12 @@ const Apartados = () => {
       batch.update(apartadoRef, {
         totalAbonado: nuevoTotalAbonado,
         saldoPendiente: nuevoSaldoPendiente,
-        estadoGeneral: estaCompletado ? 'Completado' : 'Activo',
+        estadoGeneral: nuevoEstadoGeneral,
         historialAbonos: updatedHistorial,
         updatedAt: serverTimestamp()
       });
 
       // 2. (NUEVO) Registrar la Transacción del Abono
-      const transactionRef = doc(collection(db, 'transactions'));
       batch.set(transactionRef, {
         tipo: 'abono_apartado',
         monto: monto,
@@ -781,12 +821,12 @@ const Apartados = () => {
         fetchProductos(); // Refrescar stock si se completó
       }
 
-      // Actualizar el estado local
+      // Actualizar el estado local (mismo cálculo de estado que el batch, Fix 1)
       const updatedApartado = {
         ...selectedApartado,
         totalAbonado: nuevoTotalAbonado,
         saldoPendiente: nuevoSaldoPendiente,
-        estadoGeneral: estaCompletado ? 'Completado' : 'Activo',
+        estadoGeneral: nuevoEstadoGeneral,
         historialAbonos: updatedHistorial
       };
       setSelectedApartado(updatedApartado);
@@ -860,8 +900,8 @@ const Apartados = () => {
     const confirmar = window.confirm(
       `¿Estás seguro de cancelar este apartado?\n\n` +
       `Cliente: ${selectedApartado.clienteNombre}\n` +
-      `Total: $${selectedApartado.totalApartado.toLocaleString()}\n` +
-      `Abonado: $${selectedApartado.totalAbonado.toLocaleString()}\n\n` +
+      `Total: $${(selectedApartado.totalApartado || 0).toLocaleString()}\n` +
+      `Abonado: $${(selectedApartado.totalAbonado || 0).toLocaleString()}\n\n` +
       `Los productos volverán a estar disponibles en inventario.`
     );
 
@@ -991,8 +1031,8 @@ const Apartados = () => {
       `⚠️ ELIMINAR APARTADO\n\n` +
       `¿Estás seguro de ELIMINAR este apartado?\n\n` +
       `Cliente: ${selectedApartado.clienteNombre}\n` +
-      `Total: $${selectedApartado.totalApartado.toLocaleString()}\n` +
-      `Abonado: $${selectedApartado.totalAbonado.toLocaleString()}\n\n` +
+      `Total: $${(selectedApartado.totalApartado || 0).toLocaleString()}\n` +
+      `Abonado: $${(selectedApartado.totalAbonado || 0).toLocaleString()}\n\n` +
       `Esta acción:\n` +
       `• Marcará el apartado como eliminado\n` +
       `• Anulará todas las transacciones de abonos asociadas\n` +
@@ -1665,33 +1705,42 @@ const Apartados = () => {
       });
 
       // 2. Buscar y actualizar la transacción asociada
-      const transactionsQuery = query(
-        collection(db, 'transactions'),
-        where('apartadoId', '==', selectedApartado.id),
-        where('tipo', '==', 'abono_apartado'),
-        where('monto', '==', abonoActual.monto)
-      );
-      const transactionsSnapshot = await getDocs(transactionsQuery);
-
-      // Filtrar por fecha para encontrar la transacción exacta
-      transactionsSnapshot.docs.forEach(transactionDoc => {
-        const transData = transactionDoc.data();
-        const transFecha = transData.fecha?.toDate?.();
-
-        // Comparar si es la misma fecha (con margen de 1 minuto)
-        if (transFecha && Math.abs(transFecha - fechaAbono) < 60000) {
-          batch.update(transactionDoc.ref, {
-            metodoPago: nuevoMetodoPagoAbono,
-            correccionMetodoPago: {
-              fecha: serverTimestamp(),
-              metodoPagoAnterior: abonoActual.metodoPago || 'Efectivo',
-              metodoPagoNuevo: nuevoMetodoPagoAbono,
-              notas: notasMetodoPagoAbono,
-              usuario: currentUser?.email || 'Admin'
-            }
-          });
+      // Fix 4: si el abono tiene transactionId persistido, usar lookup directo
+      // por ID (preciso). Si no lo tiene (abono legacy), fallback a búsqueda por
+      // apartadoId + tipo + monto + fecha con margen — patrón frágil pero
+      // necesario para datos anteriores al fix.
+      const correccionPayload = {
+        metodoPago: nuevoMetodoPagoAbono,
+        correccionMetodoPago: {
+          fecha: serverTimestamp(),
+          metodoPagoAnterior: abonoActual.metodoPago || 'Efectivo',
+          metodoPagoNuevo: nuevoMetodoPagoAbono,
+          notas: notasMetodoPagoAbono,
+          usuario: currentUser?.email || 'Admin'
         }
-      });
+      };
+
+      if (abonoActual.transactionId) {
+        const transactionRef = doc(db, 'transactions', abonoActual.transactionId);
+        batch.update(transactionRef, correccionPayload);
+      } else {
+        // Fallback legacy: misma búsqueda fuzzy de antes
+        const transactionsQuery = query(
+          collection(db, 'transactions'),
+          where('apartadoId', '==', selectedApartado.id),
+          where('tipo', '==', 'abono_apartado'),
+          where('monto', '==', abonoActual.monto)
+        );
+        const transactionsSnapshot = await getDocs(transactionsQuery);
+
+        transactionsSnapshot.docs.forEach(transactionDoc => {
+          const transData = transactionDoc.data();
+          const transFecha = transData.fecha?.toDate?.();
+          if (transFecha && Math.abs(transFecha - fechaAbono) < 60000) {
+            batch.update(transactionDoc.ref, correccionPayload);
+          }
+        });
+      }
 
       await batch.commit();
 
@@ -1762,13 +1811,9 @@ const Apartados = () => {
       // Cerrar el modal
       setShowMetodoPagoModal(false);
 
-      // Paso 2: Obtener siguiente número de factura
-      const salesSnapshot = await getDocs(query(collection(db, 'sales'), orderBy('numeroFactura', 'desc')));
-      let siguienteNumero = 1;
-      if (!salesSnapshot.empty) {
-        const ultimaFactura = salesSnapshot.docs[0].data();
-        siguienteNumero = (ultimaFactura.numeroFactura || 0) + 1;
-      }
+      // Paso 2: Obtener siguiente número de factura (Fix 2: atómico, comparte
+      // el mismo contador `counters/facturas` que usa Pedidos.jsx)
+      const siguienteNumero = await getSiguienteConsecutivo('facturas', 'sales', 'numeroFactura');
 
       // Paso 3: Preparar datos de la venta
       const ventaData = {
