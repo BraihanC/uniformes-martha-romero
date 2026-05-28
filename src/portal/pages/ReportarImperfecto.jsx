@@ -30,7 +30,7 @@ const ReportarImperfecto = () => {
       const pedidosRef = collection(db, 'pedidos_b2b');
       const q = query(
         pedidosRef,
-        where('clienteId', '==', clienteCorporativo.id),
+        where('clienteEmail', '==', currentUser.email),
         orderBy('createdAt', 'desc')
       );
 
@@ -61,7 +61,7 @@ const ReportarImperfecto = () => {
       const reportesRef = collection(db, 'reportes_imperfectos');
       const q = query(
         reportesRef,
-        where('clienteId', '==', clienteCorporativo.id),
+        where('clienteEmail', '==', currentUser.email),
         orderBy('createdAt', 'desc')
       );
 
@@ -220,6 +220,9 @@ const ReportarImperfecto = () => {
         pedidoNumero: selectedPedido.numeroPedido || selectedPedido.id?.slice(-6).toUpperCase() || '0000',
         clienteId: clienteCorporativo?.id || '',
         clienteNombre: clienteCorporativo?.nombre || '',
+        // Security (Phase 2): clienteEmail para que las reglas restrinjan
+        // la lectura al dueño del reporte.
+        clienteEmail: clienteCorporativo?.credenciales?.email || currentUser?.email || '',
         codigoColegio: clienteCorporativo?.codigoColegio || '',
         producto: {
           productoId: selectedProducto.productoId || '',

@@ -76,10 +76,13 @@ service cloud.firestore {
     }
 
     // ─── Reportes de imperfectos (portal) ───────────────────
-    // B2B reporta, staff gestiona.
+    // B2B reporta, staff gestiona. B2B también lee sus propios reportes
+    // (filtrado por clienteEmail). Update/delete sigue siendo solo staff.
     match /reportes_imperfectos/{id} {
       allow create: if isSignedIn();
-      allow read, update, delete: if isStaff();
+      allow read: if isStaff() ||
+        (isSignedIn() && resource.data.clienteEmail == request.auth.token.email);
+      allow update, delete: if isStaff();
     }
 
     // ─── Resto: solo staff (operación interna) ──────────────

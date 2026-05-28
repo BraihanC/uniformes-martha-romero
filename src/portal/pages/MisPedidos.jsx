@@ -6,7 +6,7 @@ import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, Credit
 import jsPDF from 'jspdf';
 
 const MisPedidos = () => {
-  const { clienteCorporativo } = usePortalAuth();
+  const { clienteCorporativo, currentUser } = usePortalAuth();
   const [pedidos, setPedidos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expandedPedido, setExpandedPedido] = useState(null);
@@ -34,18 +34,21 @@ const MisPedidos = () => {
   const [soloConPendientesPedido, setSoloConPendientesPedido] = useState(false);
 
   useEffect(() => {
-    if (clienteCorporativo) {
+    if (clienteCorporativo && currentUser?.email) {
       fetchPedidos();
     }
-  }, [clienteCorporativo]);
+  }, [clienteCorporativo, currentUser]);
 
   const fetchPedidos = async () => {
     try {
       setLoading(true);
       const pedidosRef = collection(db, 'pedidos_b2b');
+      // Security: las reglas de Firestore exigen que la query filtre por
+      // clienteEmail (el mismo campo contra el que evalúan ownership).
+      // Filtrar por clienteId hace que la regla rechace la query completa.
       const q = query(
         pedidosRef,
-        where('clienteId', '==', clienteCorporativo.id),
+        where('clienteEmail', '==', currentUser.email),
         orderBy('createdAt', 'desc')
       );
       const querySnapshot = await getDocs(q);

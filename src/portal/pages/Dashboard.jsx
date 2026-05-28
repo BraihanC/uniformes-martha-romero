@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 
 const Dashboard = () => {
-  const { clienteCorporativo } = usePortalAuth();
+  const { clienteCorporativo, currentUser } = usePortalAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
@@ -30,7 +30,7 @@ const Dashboard = () => {
   });
 
   useEffect(() => {
-    if (clienteCorporativo) {
+    if (clienteCorporativo && currentUser?.email) {
       fetchDashboardData();
     }
   }, [clienteCorporativo]);
@@ -39,9 +39,10 @@ const Dashboard = () => {
     try {
       setLoading(true);
       const pedidosRef = collection(db, 'pedidos_b2b');
+      // Security: filtrar por clienteEmail para que coincida con la regla.
       const q = query(
         pedidosRef,
-        where('clienteId', '==', clienteCorporativo.id),
+        where('clienteEmail', '==', currentUser.email),
         orderBy('createdAt', 'desc')
       );
       const querySnapshot = await getDocs(q);
