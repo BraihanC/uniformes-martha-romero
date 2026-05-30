@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { db } from '../../services/firebase';
+import { useAuth } from '../../context/AuthContext';
 import {
   collection,
   query,
@@ -41,6 +42,12 @@ const sortTallas = (a, b) => {
 const CLIENTE_GENERAL_KEY = '__general__';
 
 const ReporteVentas = () => {
+  // Control de acceso: solo admin ve cifras en pesos (subtotales, recaudado,
+  // costo, utilidad, margen). El vendedor ve únicamente CANTIDADES por prenda
+  // para planear inventario/producción.
+  const { isAdmin } = useAuth();
+  const puedeVerDinero = isAdmin;
+
   // Filtros de consulta (afectan a Firestore)
   const [startDate, setStartDate] = useState(new Date());
   const [endDate, setEndDate] = useState(new Date());
@@ -811,6 +818,22 @@ const ReporteVentas = () => {
         });
       }
 
+      // Si el usuario no puede ver dinero (vendedor), eliminar columnas financieras
+      // de cada fila antes de exportar. Deja solo cantidades/dimensiones.
+      if (!puedeVerDinero) {
+        const columnasDinero = new Set([
+          'Total Ventas', 'Precio Unit.', 'Subtotal', 'Recaudado',
+          'Costo Unit.', 'Costo Total', 'Utilidad', 'Margen %'
+        ]);
+        dataParaExcel = dataParaExcel.map(fila => {
+          const limpia = {};
+          Object.keys(fila).forEach(k => {
+            if (!columnasDinero.has(k)) limpia[k] = fila[k];
+          });
+          return limpia;
+        });
+      }
+
       const worksheet = XLSX.utils.json_to_sheet(dataParaExcel);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Reporte Ventas');
@@ -1119,7 +1142,7 @@ const ReporteVentas = () => {
       {!loading && ventasCrudas && (
         <>
           {/* Tarjetas de Resumen */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+          <div className={`grid grid-cols-1 sm:grid-cols-2 ${puedeVerDinero ? 'lg:grid-cols-5' : 'lg:grid-cols-1'} gap-4 mb-6`}>
             <div className="bg-white rounded-lg shadow-md p-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -1132,53 +1155,57 @@ const ReporteVentas = () => {
               </div>
             </div>
 
-            <div className="bg-white rounded-lg shadow-md p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">Total Ventas</p>
-                  <p className="text-2xl font-bold text-green-600">
-                    {formatCurrency(totales.ventasTotal)}
-                  </p>
+            {puedeVerDinero && (
+              <>
+                <div className="bg-white rounded-lg shadow-md p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-600">Total Ventas</p>
+                      <p className="text-2xl font-bold text-green-600">
+                        {formatCurrency(totales.ventasTotal)}
+                      </p>
+                    </div>
+                    <DollarSign size={32} className="text-green-500" />
+                  </div>
                 </div>
-                <DollarSign size={32} className="text-green-500" />
-              </div>
-            </div>
 
-            <div className="bg-white rounded-lg shadow-md p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">Recaudado</p>
-                  <p className="text-2xl font-bold text-orange-600">
-                    {formatCurrency(totales.montoRecibidoTotal)}
-                  </p>
+                <div className="bg-white rounded-lg shadow-md p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-600">Recaudado</p>
+                      <p className="text-2xl font-bold text-orange-600">
+                        {formatCurrency(totales.montoRecibidoTotal)}
+                      </p>
+                    </div>
+                    <DollarSign size={32} className="text-orange-500" />
+                  </div>
                 </div>
-                <DollarSign size={32} className="text-orange-500" />
-              </div>
-            </div>
 
-            <div className="bg-white rounded-lg shadow-md p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">Utilidad</p>
-                  <p className="text-2xl font-bold" style={{ color: '#D50565' }}>
-                    {formatCurrency(totales.utilidadTotal)}
-                  </p>
+                <div className="bg-white rounded-lg shadow-md p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-600">Utilidad</p>
+                      <p className="text-2xl font-bold" style={{ color: '#D50565' }}>
+                        {formatCurrency(totales.utilidadTotal)}
+                      </p>
+                    </div>
+                    <TrendingUp size={32} style={{ color: '#D50565' }} />
+                  </div>
                 </div>
-                <TrendingUp size={32} style={{ color: '#D50565' }} />
-              </div>
-            </div>
 
-            <div className="bg-white rounded-lg shadow-md p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">Margen Promedio</p>
-                  <p className="text-2xl font-bold text-purple-600">
-                    {totales.margenPromedio.toFixed(2)}%
-                  </p>
+                <div className="bg-white rounded-lg shadow-md p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-gray-600">Margen Promedio</p>
+                      <p className="text-2xl font-bold text-purple-600">
+                        {totales.margenPromedio.toFixed(2)}%
+                      </p>
+                    </div>
+                    <Calendar size={32} className="text-purple-500" />
+                  </div>
                 </div>
-                <Calendar size={32} className="text-purple-500" />
-              </div>
-            </div>
+              </>
+            )}
           </div>
 
           {/* Tabla */}
@@ -1234,13 +1261,13 @@ const ReporteVentas = () => {
                           </th>
                         ))}
                         <SortHeader columnKey="totalCantidad" label="Total" align="right" />
-                        <SortHeader columnKey="totalVentas" label="Ventas" align="right" />
+                        {puedeVerDinero && <SortHeader columnKey="totalVentas" label="Ventas" align="right" />}
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
                       {datosPaginados.length === 0 ? (
                         <tr>
-                          <td colSpan={2 + tallasMatriz.length + 2} className="px-4 py-10 text-center text-gray-500 text-sm">
+                          <td colSpan={2 + tallasMatriz.length + (puedeVerDinero ? 2 : 1)} className="px-4 py-10 text-center text-gray-500 text-sm">
                             No hay datos que mostrar
                           </td>
                         </tr>
@@ -1258,9 +1285,11 @@ const ReporteVentas = () => {
                           <td className="px-4 py-3 text-sm font-bold text-blue-700 text-right">
                             {prod.totalCantidad.toLocaleString()}
                           </td>
-                          <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right whitespace-nowrap">
-                            {formatCurrency(prod.totalVentas)}
-                          </td>
+                          {puedeVerDinero && (
+                            <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right whitespace-nowrap">
+                              {formatCurrency(prod.totalVentas)}
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -1276,9 +1305,11 @@ const ReporteVentas = () => {
                           <td className="px-4 py-3 text-sm font-bold text-blue-700 text-right">
                             {totales.cantidadTotal.toLocaleString()}
                           </td>
-                          <td className="px-4 py-3 text-sm font-bold text-gray-700 text-right whitespace-nowrap">
-                            {formatCurrency(totales.ventasTotal)}
-                          </td>
+                          {puedeVerDinero && (
+                            <td className="px-4 py-3 text-sm font-bold text-gray-700 text-right whitespace-nowrap">
+                              {formatCurrency(totales.ventasTotal)}
+                            </td>
+                          )}
                         </tr>
                       </tfoot>
                     )}
@@ -1298,18 +1329,18 @@ const ReporteVentas = () => {
                         <SortHeader columnKey="referencia" label="Ref" />
                         <SortHeader columnKey="talla" label="Talla" />
                         <SortHeader columnKey="cantidad" label="Cant" align="right" />
-                        <SortHeader columnKey="precioUnitario" label="P. Unit" align="right" />
-                        <SortHeader columnKey="subtotal" label="Subtotal" align="right" />
-                        <SortHeader columnKey="montoRecibido" label="Recaudado" align="right" />
-                        <SortHeader columnKey="utilidad" label="Utilidad" align="right" />
-                        <SortHeader columnKey="margen" label="Margen %" align="right" />
+                        {puedeVerDinero && <SortHeader columnKey="precioUnitario" label="P. Unit" align="right" />}
+                        {puedeVerDinero && <SortHeader columnKey="subtotal" label="Subtotal" align="right" />}
+                        {puedeVerDinero && <SortHeader columnKey="montoRecibido" label="Recaudado" align="right" />}
+                        {puedeVerDinero && <SortHeader columnKey="utilidad" label="Utilidad" align="right" />}
+                        {puedeVerDinero && <SortHeader columnKey="margen" label="Margen %" align="right" />}
                         <SortHeader columnKey="colegioNombre" label="Colegio" />
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
                       {datosPaginados.length === 0 ? (
                         <tr>
-                          <td colSpan={14} className="px-4 py-10 text-center text-gray-500 text-sm">
+                          <td colSpan={puedeVerDinero ? 14 : 9} className="px-4 py-10 text-center text-gray-500 text-sm">
                             No hay datos que mostrar
                           </td>
                         </tr>
@@ -1323,11 +1354,11 @@ const ReporteVentas = () => {
                           <td className="px-4 py-3 text-sm text-gray-600">{venta.referencia}</td>
                           <td className="px-4 py-3 text-sm text-gray-600">{venta.talla}</td>
                           <td className="px-4 py-3 text-sm text-gray-900 text-right">{venta.cantidad}</td>
-                          <td className="px-4 py-3 text-sm text-gray-600 text-right whitespace-nowrap">{formatCurrency(venta.precioUnitario)}</td>
-                          <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right whitespace-nowrap">{formatCurrency(venta.subtotal)}</td>
-                          <td className="px-4 py-3 text-sm font-medium text-orange-600 text-right whitespace-nowrap">{formatCurrency(venta.montoRecibido)}</td>
-                          <td className="px-4 py-3 text-sm font-medium text-green-600 text-right whitespace-nowrap">{formatCurrency(venta.utilidad)}</td>
-                          <td className="px-4 py-3 text-sm text-gray-600 text-right">{venta.margen.toFixed(2)}%</td>
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm text-gray-600 text-right whitespace-nowrap">{formatCurrency(venta.precioUnitario)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right whitespace-nowrap">{formatCurrency(venta.subtotal)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm font-medium text-orange-600 text-right whitespace-nowrap">{formatCurrency(venta.montoRecibido)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm font-medium text-green-600 text-right whitespace-nowrap">{formatCurrency(venta.utilidad)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm text-gray-600 text-right">{venta.margen.toFixed(2)}%</td>}
                           <td className="px-4 py-3 text-sm text-gray-600">{venta.colegioNombre || '-'}</td>
                         </tr>
                       ))}
@@ -1352,17 +1383,17 @@ const ReporteVentas = () => {
                           }
                         />
                         <SortHeader columnKey="cantidad" label="Unidades" align="right" />
-                        <SortHeader columnKey="totalVentas" label="Total Ventas" align="right" />
-                        <SortHeader columnKey="montoRecibido" label="Recaudado" align="right" />
-                        <SortHeader columnKey="costoTotal" label="Costo Total" align="right" />
-                        <SortHeader columnKey="utilidad" label="Utilidad" align="right" />
-                        <SortHeader columnKey="margen" label="Margen %" align="right" />
+                        {puedeVerDinero && <SortHeader columnKey="totalVentas" label="Total Ventas" align="right" />}
+                        {puedeVerDinero && <SortHeader columnKey="montoRecibido" label="Recaudado" align="right" />}
+                        {puedeVerDinero && <SortHeader columnKey="costoTotal" label="Costo Total" align="right" />}
+                        {puedeVerDinero && <SortHeader columnKey="utilidad" label="Utilidad" align="right" />}
+                        {puedeVerDinero && <SortHeader columnKey="margen" label="Margen %" align="right" />}
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
                       {datosPaginados.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="px-4 py-10 text-center text-gray-500 text-sm">
+                          <td colSpan={puedeVerDinero ? 7 : 2} className="px-4 py-10 text-center text-gray-500 text-sm">
                             No hay datos que mostrar
                           </td>
                         </tr>
@@ -1370,11 +1401,11 @@ const ReporteVentas = () => {
                         <tr key={index} className="hover:bg-gray-50">
                           <td className="px-4 py-3 text-sm font-medium text-gray-900">{grupo.nombre}</td>
                           <td className="px-4 py-3 text-sm font-bold text-blue-700 text-right">{grupo.cantidad.toLocaleString()}</td>
-                          <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right whitespace-nowrap">{formatCurrency(grupo.totalVentas)}</td>
-                          <td className="px-4 py-3 text-sm font-medium text-orange-600 text-right whitespace-nowrap">{formatCurrency(grupo.montoRecibido)}</td>
-                          <td className="px-4 py-3 text-sm text-gray-600 text-right whitespace-nowrap">{formatCurrency(grupo.costoTotal)}</td>
-                          <td className="px-4 py-3 text-sm font-medium text-green-600 text-right whitespace-nowrap">{formatCurrency(grupo.utilidad)}</td>
-                          <td className="px-4 py-3 text-sm text-gray-600 text-right">{grupo.margen.toFixed(2)}%</td>
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm font-medium text-gray-900 text-right whitespace-nowrap">{formatCurrency(grupo.totalVentas)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm font-medium text-orange-600 text-right whitespace-nowrap">{formatCurrency(grupo.montoRecibido)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm text-gray-600 text-right whitespace-nowrap">{formatCurrency(grupo.costoTotal)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm font-medium text-green-600 text-right whitespace-nowrap">{formatCurrency(grupo.utilidad)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm text-gray-600 text-right">{grupo.margen.toFixed(2)}%</td>}
                         </tr>
                       ))}
                     </tbody>
@@ -1383,11 +1414,11 @@ const ReporteVentas = () => {
                         <tr className="bg-gray-50 border-t-2 border-gray-300">
                           <td className="px-4 py-3 text-sm font-bold text-gray-700">TOTAL</td>
                           <td className="px-4 py-3 text-sm font-bold text-blue-700 text-right">{totales.cantidadTotal.toLocaleString()}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-gray-700 text-right whitespace-nowrap">{formatCurrency(totales.ventasTotal)}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-orange-600 text-right whitespace-nowrap">{formatCurrency(totales.montoRecibidoTotal)}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-gray-600 text-right whitespace-nowrap">{formatCurrency(totales.costoTotal)}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-green-600 text-right whitespace-nowrap">{formatCurrency(totales.utilidadTotal)}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-gray-600 text-right">{totales.margenPromedio.toFixed(2)}%</td>
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm font-bold text-gray-700 text-right whitespace-nowrap">{formatCurrency(totales.ventasTotal)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm font-bold text-orange-600 text-right whitespace-nowrap">{formatCurrency(totales.montoRecibidoTotal)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm font-bold text-gray-600 text-right whitespace-nowrap">{formatCurrency(totales.costoTotal)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm font-bold text-green-600 text-right whitespace-nowrap">{formatCurrency(totales.utilidadTotal)}</td>}
+                          {puedeVerDinero && <td className="px-4 py-3 text-sm font-bold text-gray-600 text-right">{totales.margenPromedio.toFixed(2)}%</td>}
                         </tr>
                       </tfoot>
                     )}

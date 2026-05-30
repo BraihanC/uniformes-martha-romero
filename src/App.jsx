@@ -22,6 +22,7 @@ import ReportesLayout from './pages/Reportes';
 import CierreCaja from './components/reportes/CierreCaja';
 import BuscadorFacturas from './components/reportes/BuscadorFacturas';
 import ReporteCorte from './components/reportes/ReporteCorte';
+import ReporteVentas from './components/reportes/ReporteVentas';
 import CuentasPorPagar from './components/reportes/CuentasPorPagar';
 import DiagnosticoPedidosB2B from './components/reportes/DiagnosticoPedidosB2B';
 import ReportesAnalisis from './components/reportes/ReportesAnalisis';
@@ -140,6 +141,9 @@ function App() {
                   <Route path="cierre" element={<CierreCaja />} />
                   <Route path="facturas" element={<BuscadorFacturas />} />
                   <Route path="corte" element={<ReporteCorte />} />
+                  {/* Reporte de Ventas por prenda: vendedor lo ve sin cifras en pesos,
+                      admin lo ve con cifras (control interno por rol en el componente) */}
+                  <Route path="ventas" element={<ReporteVentas />} />
 
                   {/* Rutas solo para admin */}
                   <Route

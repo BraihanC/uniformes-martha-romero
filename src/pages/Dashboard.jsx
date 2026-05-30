@@ -26,7 +26,7 @@ const formatCurrency = (value) => {
 };
 
 const Dashboard = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, isAdmin } = useAuth();
   const navigate = useNavigate();
 
   const [stats, setStats] = useState({
@@ -169,14 +169,18 @@ const Dashboard = () => {
       </div>
 
       {/* Rejilla de Estadísticas */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        <StatCard
-          title="Ingresos de Hoy"
-          value={stats.ingresosHoy}
-          isCurrency={true}
-          colorClass="bg-green-100"
-          icon={<DollarSign className="w-6 h-6 text-green-600" />}
-        />
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${isAdmin ? 'lg:grid-cols-3' : 'lg:grid-cols-2'} gap-6`}>
+        {/* Ingresos de Hoy: solo admin (cifra financiera). El vendedor hace su
+            cuadre en Cierre de Caja, no aquí. */}
+        {isAdmin && (
+          <StatCard
+            title="Ingresos de Hoy"
+            value={stats.ingresosHoy}
+            isCurrency={true}
+            colorClass="bg-green-100"
+            icon={<DollarSign className="w-6 h-6 text-green-600" />}
+          />
+        )}
         <StatCard
           title="Pedidos Pendientes"
           value={stats.pedidosPendientes}

@@ -7,7 +7,10 @@ import { Loader2 } from 'lucide-react';
 import { getAlistadaActual, productoB2BCoincideConAsignacion } from '../utils/pedidosB2BLogic';
 
 const Inventory = () => {
-  const { isAdmin, currentUser } = useAuth();
+  const { isAdmin, isVendedor, currentUser } = useAuth();
+  // El vendedor puede editar productos (ajuste manual de stock para cuadrar
+  // inventario) pero NO ve/edita precios, ni elimina, importa, recalcula o anula.
+  const puedeEditarInventario = isAdmin || isVendedor;
   const [products, setProducts] = useState([]);
   const [filteredProducts, setFilteredProducts] = useState([]);
   const [colegios, setColegios] = useState([]);
@@ -1548,8 +1551,8 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
                         </div>
                       </div>
 
-                      {/* Botones de acción - Solo Admin */}
-                      {isAdmin && (
+                      {/* Editar: staff (admin + vendedor). Eliminar: solo admin. */}
+                      {puedeEditarInventario && (
                         <div className="flex gap-2">
                           <button
                             onClick={() => handleEdit(product)}
@@ -1558,13 +1561,15 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
                           >
                             Editar
                           </button>
-                          <button
-                            onClick={() => handleDelete(product.id, product.nombre)}
-                            disabled={loading}
-                            className="flex-1 px-3 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600 transition-colors disabled:opacity-50"
-                          >
-                            Eliminar
-                          </button>
+                          {isAdmin && (
+                            <button
+                              onClick={() => handleDelete(product.id, product.nombre)}
+                              disabled={loading}
+                              className="flex-1 px-3 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600 transition-colors disabled:opacity-50"
+                            >
+                              Eliminar
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1620,7 +1625,7 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
                     <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                       B2B
                     </th>
-                    {isAdmin && (
+                    {puedeEditarInventario && (
                       <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Acciones
                       </th>
@@ -1704,7 +1709,7 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
                           <span className="text-gray-400 text-xs">-</span>
                         )}
                       </td>
-                      {isAdmin && (
+                      {puedeEditarInventario && (
                         <td className="px-4 py-3 whitespace-nowrap text-right text-sm space-x-2">
                           <button
                             onClick={() => handleEdit(product)}
@@ -1713,13 +1718,15 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
                           >
                             Editar
                           </button>
-                          <button
-                            onClick={() => handleDelete(product.id, product.nombre)}
-                            disabled={loading}
-                            className="px-3 py-1.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors disabled:opacity-50"
-                          >
-                            Eliminar
-                          </button>
+                          {isAdmin && (
+                            <button
+                              onClick={() => handleDelete(product.id, product.nombre)}
+                              disabled={loading}
+                              className="px-3 py-1.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors disabled:opacity-50"
+                            >
+                              Eliminar
+                            </button>
+                          )}
                         </td>
                       )}
                         </tr>
@@ -2199,44 +2206,50 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
                   </select>
                 </div>
 
-                {/* Precio */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Precio Regular <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.precio}
-                    onChange={(e) => setFormData({ ...formData, precio: e.target.value })}
-                    placeholder="Ej: 50000"
-                    min="0"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                    disabled={loading}
-                    required
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Precio para POS, Pedidos y Apartados
-                  </p>
-                </div>
+                {/* Precios: SOLO admin. El vendedor edita stock pero no precios.
+                    El valor original se conserva en formData (cargado en handleEdit). */}
+                {isAdmin && (
+                  <>
+                    {/* Precio */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Precio Regular <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        value={formData.precio}
+                        onChange={(e) => setFormData({ ...formData, precio: e.target.value })}
+                        placeholder="Ej: 50000"
+                        min="0"
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                        disabled={loading}
+                        required
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Precio para POS, Pedidos y Apartados
+                      </p>
+                    </div>
 
-                {/* Precio B2B */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Precio B2B
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.precioB2B}
-                    onChange={(e) => setFormData({ ...formData, precioB2B: e.target.value })}
-                    placeholder="Ej: 45000"
-                    min="0"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-transparent"
-                    disabled={loading}
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Precio para Portal Corporativo (opcional)
-                  </p>
-                </div>
+                    {/* Precio B2B */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Precio B2B
+                      </label>
+                      <input
+                        type="number"
+                        value={formData.precioB2B}
+                        onChange={(e) => setFormData({ ...formData, precioB2B: e.target.value })}
+                        placeholder="Ej: 45000"
+                        min="0"
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-transparent"
+                        disabled={loading}
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Precio para Portal Corporativo (opcional)
+                      </p>
+                    </div>
+                  </>
+                )}
 
                 {/* Stock Total */}
                 <div>
