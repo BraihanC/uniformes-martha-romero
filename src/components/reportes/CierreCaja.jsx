@@ -58,7 +58,7 @@ const formatCurrency = (value) => {
 // --- Componente Principal ---
 
 const CierreCaja = () => { // <--- Nombre cambiado
-  const { currentUser, isVendedor } = useAuth();
+  const { currentUser } = useAuth();
   const [startDate, setStartDate] = useState(new Date());
   const [endDate, setEndDate] = useState(new Date());
   const [loading, setLoading] = useState(false);
@@ -419,24 +419,22 @@ const CierreCaja = () => { // <--- Nombre cambiado
             <span className="sm:hidden">Retiro</span>
           </button>
 
-          {/* Botón Imprimir - Solo para Administradores */}
-          {!isVendedor && (
-            <button
-              onClick={handlePrintReport}
-              className="px-3 sm:px-4 py-2 text-sm sm:text-base text-white rounded-lg hover:opacity-90 flex items-center justify-center gap-2"
-              style={{ backgroundColor: '#D50565' }}
-            >
-              <Printer size={16} className="sm:w-[18px] sm:h-[18px]" />
-              <span className="hidden sm:inline">Imprimir Reporte</span>
-              <span className="sm:hidden">Imprimir</span>
-            </button>
-          )}
+          {/* Botón Imprimir */}
+          <button
+            onClick={handlePrintReport}
+            className="px-3 sm:px-4 py-2 text-sm sm:text-base text-white rounded-lg hover:opacity-90 flex items-center justify-center gap-2"
+            style={{ backgroundColor: '#D50565' }}
+          >
+            <Printer size={16} className="sm:w-[18px] sm:h-[18px]" />
+            <span className="hidden sm:inline">Imprimir Reporte</span>
+            <span className="sm:hidden">Imprimir</span>
+          </button>
         </div>
       </div>
 
-      {/* Filtros de fecha - Solo para Administradores */}
-      {!isVendedor && (
-        <div className="bg-white rounded-lg shadow-md p-4 mb-6 print:hidden">
+      {/* Filtros de fecha — disponibles para todo el staff (la vendedora
+          genera el cierre del día para su cuadre) */}
+      <div className="bg-white rounded-lg shadow-md p-4 mb-6 print:hidden">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-end">
             {/* Fecha Inicio */}
             <div>
@@ -500,8 +498,7 @@ const CierreCaja = () => { // <--- Nombre cambiado
               {loading ? 'Generando...' : 'Generar Reporte'}
             </button>
           </div>
-        </div>
-      )}
+      </div>
 
       {/* Base Inicial de Caja - Disponible para todos */}
       <div className="bg-white rounded-lg shadow-md p-4 mb-6 print:hidden">
