@@ -1299,27 +1299,33 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
           <h1 className="text-2xl md:text-3xl font-bold text-gray-800">Inventario</h1>
           <p className="text-gray-600 mt-1">Gestión de productos y stock</p>
         </div>
-        {isAdmin && (
+        {puedeEditarInventario && (
           <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
-            <button
-              onClick={recalcularInventarioCompleto}
-              disabled={loading}
-              style={{ backgroundColor: '#4CAF50' }}
-              className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Recalcular inventario completo: stockTotal desde entradas, stockReservadoPedidos desde pedidos POS, stockReservadoB2B desde pedidos B2B, y stockReservadoApartados desde apartados activos"
-            >
-              <span className="hidden sm:inline">🔄 Recalcular Inventario</span>
-              <span className="sm:hidden">🔄 Recalc.</span>
-            </button>
-            <button
-              onClick={handleImportClick}
-              disabled={loading}
-              style={{ backgroundColor: '#EA5C2E' }}
-              className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <span className="hidden sm:inline">Importar Inventario</span>
-              <span className="sm:hidden">Importar</span>
-            </button>
+            {/* Recalcular e Importar: solo admin (operaciones masivas) */}
+            {isAdmin && (
+              <>
+                <button
+                  onClick={recalcularInventarioCompleto}
+                  disabled={loading}
+                  style={{ backgroundColor: '#4CAF50' }}
+                  className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Recalcular inventario completo: stockTotal desde entradas, stockReservadoPedidos desde pedidos POS, stockReservadoB2B desde pedidos B2B, y stockReservadoApartados desde apartados activos"
+                >
+                  <span className="hidden sm:inline">🔄 Recalcular Inventario</span>
+                  <span className="sm:hidden">🔄 Recalc.</span>
+                </button>
+                <button
+                  onClick={handleImportClick}
+                  disabled={loading}
+                  style={{ backgroundColor: '#EA5C2E' }}
+                  className="px-4 sm:px-6 py-2 sm:py-3 text-sm sm:text-base text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <span className="hidden sm:inline">Importar Inventario</span>
+                  <span className="sm:hidden">Importar</span>
+                </button>
+              </>
+            )}
+            {/* Añadir producto: staff (admin + vendedor) */}
             <button
               onClick={handleOpenModal}
               style={{ backgroundColor: '#D50565' }}
@@ -2206,9 +2212,10 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
                   </select>
                 </div>
 
-                {/* Precios: SOLO admin. El vendedor edita stock pero no precios.
-                    El valor original se conserva en formData (cargado en handleEdit). */}
-                {isAdmin && (
+                {/* Precios: admin siempre; vendedor SOLO al crear producto nuevo
+                    (un producto necesita precio para venderse). Al EDITAR uno
+                    existente, el vendedor no ve/cambia precios (se conserva el valor). */}
+                {(isAdmin || !editingProduct) && (
                   <>
                     {/* Precio */}
                     <div>

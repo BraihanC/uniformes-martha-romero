@@ -9,9 +9,14 @@ import {
   ref, uploadBytesResumable, getDownloadURL
 } from 'firebase/storage';
 import GestionCostos from '../components/config/GestionCostos';
+import { useAuth } from '../context/AuthContext';
 
 const Config = () => {
-  const [activeTab, setActiveTab] = useState('colegios');
+  const { isAdmin } = useAuth();
+  // El vendedor solo accede a la gestión de Satélites; el resto de pestañas
+  // (Colegios, Empresa, Proveedores, Costos, Usuarios, Clientes B2B) es admin-only.
+  // Como el AuthProvider no renderiza hasta tener el rol, isAdmin es confiable aquí.
+  const [activeTab, setActiveTab] = useState(isAdmin ? 'colegios' : 'satelites');
 
   // Estados para Gestión de Colegios
   const [colegios, setColegios] = useState([]);
@@ -779,6 +784,7 @@ const Config = () => {
       {/* Sistema de Pestañas */}
       <div className="border-b border-gray-300 mb-6 overflow-x-auto">
         <div className="flex space-x-4 sm:space-x-8 min-w-max sm:min-w-0">
+          {isAdmin && (
           <button
             onClick={() => setActiveTab('colegios')}
             className={`pb-3 px-1 text-sm sm:text-base font-medium transition-colors whitespace-nowrap ${
@@ -790,6 +796,8 @@ const Config = () => {
             <span className="hidden sm:inline">Gestión de Colegios</span>
             <span className="sm:hidden">Colegios</span>
           </button>
+          )}
+          {isAdmin && (
           <button
             onClick={() => setActiveTab('empresa')}
             className={`pb-3 px-1 text-sm sm:text-base font-medium transition-colors whitespace-nowrap ${
@@ -801,6 +809,7 @@ const Config = () => {
             <span className="hidden sm:inline">Datos de la Empresa</span>
             <span className="sm:hidden">Empresa</span>
           </button>
+          )}
           <button
             onClick={() => setActiveTab('satelites')}
             className={`pb-3 px-1 text-sm sm:text-base font-medium transition-colors whitespace-nowrap ${
@@ -812,6 +821,7 @@ const Config = () => {
             <span className="hidden sm:inline">Gestión de Satélites</span>
             <span className="sm:hidden">Satélites</span>
           </button>
+          {isAdmin && (
           <button
             onClick={() => setActiveTab('proveedores')}
             className={`pb-3 px-1 text-sm sm:text-base font-medium transition-colors whitespace-nowrap ${
@@ -823,6 +833,8 @@ const Config = () => {
             <span className="hidden sm:inline">Gestión de Proveedores</span>
             <span className="sm:hidden">Proveedores</span>
           </button>
+          )}
+          {isAdmin && (
           <button
             onClick={() => setActiveTab('costos')}
             className={`pb-3 px-1 text-sm sm:text-base font-medium transition-colors whitespace-nowrap ${
@@ -834,6 +846,8 @@ const Config = () => {
             <span className="hidden sm:inline">Gestión de Costos</span>
             <span className="sm:hidden">Costos</span>
           </button>
+          )}
+          {isAdmin && (
           <button
             onClick={() => setActiveTab('usuarios')}
             className={`pb-3 px-1 text-sm sm:text-base font-medium transition-colors whitespace-nowrap ${
@@ -845,6 +859,8 @@ const Config = () => {
             <span className="hidden sm:inline">Gestión de Usuarios</span>
             <span className="sm:hidden">Usuarios</span>
           </button>
+          )}
+          {isAdmin && (
           <button
             onClick={() => setActiveTab('clientesB2B')}
             className={`pb-3 px-1 text-sm sm:text-base font-medium transition-colors whitespace-nowrap ${
@@ -856,6 +872,7 @@ const Config = () => {
             <span className="hidden sm:inline">Clientes B2B</span>
             <span className="sm:hidden">B2B</span>
           </button>
+          )}
         </div>
       </div>
 
@@ -1147,13 +1164,16 @@ const Config = () => {
                         >
                           Editar
                         </button>
-                        <button
-                          onClick={() => handleDeleteSatelite(satelite.id, satelite.nombre)}
-                          disabled={loadingSatelite}
-                          className="flex-1 px-4 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          Eliminar
-                        </button>
+                        {/* Eliminar satélite: solo admin */}
+                        {isAdmin && (
+                          <button
+                            onClick={() => handleDeleteSatelite(satelite.id, satelite.nombre)}
+                            disabled={loadingSatelite}
+                            className="flex-1 px-4 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Eliminar
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}

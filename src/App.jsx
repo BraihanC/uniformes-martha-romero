@@ -145,15 +145,11 @@ function App() {
                       admin lo ve con cifras (control interno por rol en el componente) */}
                   <Route path="ventas" element={<ReporteVentas />} />
 
+                  {/* Cuentas por Pagar: accesible para staff (admin + vendedor).
+                      La vendedora gestiona pagos a satélites. */}
+                  <Route path="cuentas-por-pagar" element={<CuentasPorPagar />} />
+
                   {/* Rutas solo para admin */}
-                  <Route
-                    path="cuentas-por-pagar"
-                    element={
-                      <PrivateRoute requireAdmin>
-                        <CuentasPorPagar />
-                      </PrivateRoute>
-                    }
-                  />
                   <Route
                     path="diagnostico-b2b"
                     element={
@@ -171,14 +167,10 @@ function App() {
                     }
                   />
                 </Route>
-                <Route
-                  path="config"
-                  element={
-                    <PrivateRoute requireAdmin>
-                      <Config />
-                    </PrivateRoute>
-                  }
-                />
+                {/* Config: accesible para staff, pero Config.jsx muestra al
+                    vendedor ÚNICAMENTE la pestaña de Satélites; el resto
+                    (Usuarios, Costos, Clientes B2B, etc.) queda oculto/admin. */}
+                <Route path="config" element={<Config />} />
               </Route>
 
               {/* Catch all - redirect to dashboard */}

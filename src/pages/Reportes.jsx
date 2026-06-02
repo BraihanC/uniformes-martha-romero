@@ -55,18 +55,19 @@ const ReportesLayout = () => {
           <span className="hidden sm:inline">Ventas por Prenda</span>
           <span className="sm:hidden whitespace-nowrap">Ventas</span>
         </NavLink>
+        {/* Cuentas por Pagar: visible para staff (vendedor gestiona pagos a satélites) */}
+        <NavLink
+          to="/reportes/cuentas-por-pagar"
+          className={({ isActive }) => `${navLinkStyle} ${isActive ? activeStyle : inactiveStyle}`}
+        >
+          <Users size={16} className="sm:w-[18px] sm:h-[18px]" />
+          <span className="hidden sm:inline">Cuentas por Pagar</span>
+          <span className="sm:hidden whitespace-nowrap">Cuentas</span>
+        </NavLink>
 
         {/* Pestañas solo para administradores */}
         {isAdmin && (
           <>
-            <NavLink
-              to="/reportes/cuentas-por-pagar"
-              className={({ isActive }) => `${navLinkStyle} ${isActive ? activeStyle : inactiveStyle}`}
-            >
-              <Users size={16} className="sm:w-[18px] sm:h-[18px]" />
-              <span className="hidden sm:inline">Cuentas por Pagar</span>
-              <span className="sm:hidden whitespace-nowrap">Cuentas</span>
-            </NavLink>
             <NavLink
               to="/reportes/diagnostico-b2b"
               className={({ isActive }) => `${navLinkStyle} ${isActive ? activeStyle : inactiveStyle}`}
