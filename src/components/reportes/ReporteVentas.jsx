@@ -59,7 +59,9 @@ const ReporteVentas = () => {
   const [talla, setTalla] = useState('');
   const [metodoPago, setMetodoPago] = useState('todos');
   const [colegioId, setColegioId] = useState('');
-  const [agrupacion, setAgrupacion] = useState('matrizProductoTalla');
+  // Vista por defecto: "Totales por Producto" (limpia, una columna de cantidad).
+  // La matriz Producto × Talla queda disponible en el selector para planear producción.
+  const [agrupacion, setAgrupacion] = useState('producto');
 
   // Datos
   const [loading, setLoading] = useState(false);
