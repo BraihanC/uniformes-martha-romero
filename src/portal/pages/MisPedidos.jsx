@@ -599,6 +599,85 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
       doc.setFont('helvetica', 'normal');
     });
 
+    // ── HISTORIAL DE ABONOS (todos los abonos de todos los pedidos no anulados) ──
+    const fechaMs = (f) => {
+      if (!f) return 0;
+      if (typeof f.toDate === 'function') return f.toDate().getTime();
+      if (f.seconds) return f.seconds * 1000;
+      const d = new Date(f);
+      return isNaN(d.getTime()) ? 0 : d.getTime();
+    };
+    const todosLosAbonos = [];
+    pedidosParaTotales.forEach(p => {
+      (p.abonos || []).forEach(a => {
+        todosLosAbonos.push({
+          numeroPedido: p.numeroPedido || 0,
+          monto: a.monto || 0,
+          fecha: a.fecha,
+          notas: a.notas || ''
+        });
+      });
+    });
+    todosLosAbonos.sort((a, b) => fechaMs(a.fecha) - fechaMs(b.fecha));
+
+    if (todosLosAbonos.length > 0) {
+      if (yPosition > pageHeight - 50) { doc.addPage(); yPosition = margin; }
+      yPosition += 2;
+      doc.setFillColor(213, 5, 101);
+      doc.rect(margin, yPosition - 5, pageWidth - (2 * margin), 8, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('HISTORIAL DE ABONOS', margin + 2, yPosition);
+      yPosition += 10;
+
+      // Encabezados de columna
+      doc.setTextColor(...colorGris);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Fecha', margin + 5, yPosition);
+      doc.text('Pedido', margin + 45, yPosition);
+      doc.text('Notas', margin + 75, yPosition);
+      doc.text('Monto', pageWidth - margin - 5, yPosition, { align: 'right' });
+      yPosition += 4;
+      doc.setDrawColor(200, 200, 200);
+      doc.line(margin, yPosition - 1, pageWidth - margin, yPosition - 1);
+      yPosition += 3;
+
+      doc.setTextColor(...colorNegro);
+      doc.setFont('helvetica', 'normal');
+      todosLosAbonos.forEach(a => {
+        if (yPosition > pageHeight - 25) { doc.addPage(); yPosition = margin; }
+        doc.text(formatDateShort(a.fecha), margin + 5, yPosition);
+        doc.text(`#${String(a.numeroPedido).padStart(4, '0')}`, margin + 45, yPosition);
+        doc.text((a.notas || '').substring(0, 35), margin + 75, yPosition);
+        doc.setTextColor(0, 150, 0);
+        doc.text(formatCurrency(a.monto), pageWidth - margin - 5, yPosition, { align: 'right' });
+        doc.setTextColor(...colorNegro);
+        yPosition += 5;
+      });
+
+      // Total abonado de la sección
+      yPosition += 1;
+      doc.setDrawColor(150, 150, 150);
+      doc.line(margin, yPosition - 1, pageWidth - margin, yPosition - 1);
+      yPosition += 4;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('TOTAL ABONADO', margin + 5, yPosition);
+      doc.setTextColor(0, 150, 0);
+      doc.text(formatCurrency(totalAbonado), pageWidth - margin - 5, yPosition, { align: 'right' });
+      doc.setTextColor(...colorNegro);
+      yPosition += 6;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...colorPrimario);
+      doc.setFontSize(10);
+      doc.text('SALDO PENDIENTE', margin + 5, yPosition);
+      doc.text(formatCurrency(saldoTotal), pageWidth - margin - 5, yPosition, { align: 'right' });
+      doc.setTextColor(...colorNegro);
+    }
+
     // Footer
     doc.setFontSize(8);
     doc.setTextColor(...colorGris);
