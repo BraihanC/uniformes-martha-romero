@@ -26,6 +26,11 @@ import {
   AlertTriangle,
   Loader2
 } from 'lucide-react';
+import {
+  calcularValorDevuelto as calcValorDevuelto,
+  calcularValorProductosNuevos,
+  calcularDiferenciaCambio
+} from '../utils/devolucionesLogic';
 
 const Devoluciones = () => {
   const { currentUser } = useAuth();
@@ -274,13 +279,8 @@ const Devoluciones = () => {
     setShowDevolucionModal(true);
   };
 
-  const calcularMontoDevolucion = () => {
-    return itemsSeleccionados.reduce((total, index) => {
-      const item = facturaEncontrada.items[index];
-      const cantidadDevuelta = cantidadesDevueltas[index] || item.cantidad;
-      return total + (cantidadDevuelta * (item.precioUnitario || item.precio || 0));
-    }, 0);
-  };
+  const calcularMontoDevolucion = () =>
+    calcValorDevuelto(facturaEncontrada.items, itemsSeleccionados, cantidadesDevueltas);
 
   const handleConfirmarDevolucion = async () => {
     // Prevenir doble clic
@@ -518,21 +518,13 @@ const Devoluciones = () => {
     setProductosNuevos(productosNuevos.filter((_, i) => i !== index));
   };
 
-  const calcularValorDevuelto = () => {
-    return itemsSeleccionados.reduce((total, index) => {
-      const item = facturaEncontrada.items[index];
-      const cantidadDevuelta = cantidadesDevueltas[index] || item.cantidad;
-      return total + (cantidadDevuelta * (item.precioUnitario || item.precio || 0));
-    }, 0);
-  };
+  const calcularValorDevuelto = () =>
+    calcValorDevuelto(facturaEncontrada.items, itemsSeleccionados, cantidadesDevueltas);
 
-  const calcularValorNuevo = () => {
-    return productosNuevos.reduce((total, p) => total + ((p.cantidad || 0) * (p.precio || 0)), 0);
-  };
+  const calcularValorNuevo = () => calcularValorProductosNuevos(productosNuevos);
 
-  const calcularDiferencia = () => {
-    return calcularValorNuevo() - calcularValorDevuelto();
-  };
+  const calcularDiferencia = () =>
+    calcularDiferenciaCambio(calcularValorNuevo(), calcularValorDevuelto());
 
   const handleConfirmarCambio = async () => {
     if (productosNuevos.length === 0) {

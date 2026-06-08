@@ -17,6 +17,15 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
 import { Loader2 } from 'lucide-react';
+import {
+  calcularSubtotal,
+  calcularDescuentoItem,
+  calcularDescuentoTotalItems,
+  calcularDescuentoGeneral,
+  calcularIVA,
+  calcularTotal,
+  calcularCambio
+} from '../utils/posLogic';
 
 const POS = () => {
   const { currentUser } = useAuth();
@@ -487,56 +496,32 @@ const POS = () => {
   };
 
   // ====== BILLING CALCULATIONS ======
-  const calculateSubtotal = () => {
-    return cartItems.reduce((sum, item) => {
-      return sum + (item.product.precio * item.cantidad);
-    }, 0);
-  };
-
-  // Calculate discount per item (considering type: % or $)
-  const calculateItemDiscount = (item) => {
-    const itemTotal = item.product.precio * item.cantidad;
-    if (item.tipoDescuento === '%') {
-      return itemTotal * (item.descuento / 100);
-    } else {
-      // Fixed $ amount, but cannot exceed item total
-      return Math.min(item.descuento, itemTotal);
-    }
-  };
-
-  const calculateTotalDiscountItems = () => {
-    return cartItems.reduce((sum, item) => {
-      return sum + calculateItemDiscount(item);
-    }, 0);
-  };
-
-  // Calculate general discount (considering type: % or $)
-  const calculateGeneralDiscount = () => {
-    const subtotal = calculateSubtotal();
-    if (tipoDescuentoGeneral === '%') {
-      return subtotal * (descuentoGeneral / 100);
-    } else {
-      // Fixed $ amount, but cannot exceed subtotal
-      return Math.min(descuentoGeneral, subtotal);
-    }
-  };
-
-  const calculateIVA = () => {
-    if (!aplicarIVA) return 0;
-    const ivaRate = companyConfig?.iva || 19;
-    const subtotalAfterDiscounts = calculateSubtotal() - calculateTotalDiscountItems() - calculateGeneralDiscount();
-    return subtotalAfterDiscounts * (ivaRate / 100);
-  };
-
-  const calculateTotal = () => {
-    return calculateSubtotal() - calculateTotalDiscountItems() - calculateGeneralDiscount() + calculateIVA();
-  };
+  // La lógica pura vive en src/utils/posLogic.js (testeada). Aquí solo se
+  // inyecta el estado del componente. Se conservan los nombres calculateXxx
+  // para no tocar el resto del componente.
+  const calculateSubtotal = () => calcularSubtotal(cartItems);
+  const calculateItemDiscount = (item) => calcularDescuentoItem(item);
+  const calculateTotalDiscountItems = () => calcularDescuentoTotalItems(cartItems);
+  const calculateGeneralDiscount = () =>
+    calcularDescuentoGeneral(calculateSubtotal(), descuentoGeneral, tipoDescuentoGeneral);
+  const calculateIVA = () => calcularIVA({
+    subtotal: calculateSubtotal(),
+    descuentoItems: calculateTotalDiscountItems(),
+    descuentoGeneral: calculateGeneralDiscount(),
+    aplicarIVA,
+    ivaRate: companyConfig?.iva || 19
+  });
+  const calculateTotal = () => calcularTotal({
+    subtotal: calculateSubtotal(),
+    descuentoItems: calculateTotalDiscountItems(),
+    descuentoGeneral: calculateGeneralDiscount(),
+    iva: calculateIVA()
+  });
 
   // ====== PAYMENT HELPERS (NUEVO) ======
   const calculateCambio = () => {
     if (metodoPago !== 'Efectivo' || pagoMixto) return 0;
-    const montoPagado = parseFloat(montoPagadoEfectivo) || 0;
-    return Math.max(0, montoPagado - calculateTotal());
+    return calcularCambio(calculateTotal(), parseFloat(montoPagadoEfectivo) || 0);
   };
 
   const validarPagoMixto = () => {
