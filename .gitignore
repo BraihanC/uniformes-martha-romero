@@ -33,8 +33,10 @@ dev-dist
 # Firebase credentials - NEVER commit this file
 serviceAccountKey.json
 
-# Claude Code settings
-.claude/
+# Claude Code: ignorar settings locales pero versionar agentes del proyecto
+.claude/*
+!.claude/agents/
+.claude/settings.local.json
 
 # Script data files (backups, logs with production data)
 scripts/*.json
