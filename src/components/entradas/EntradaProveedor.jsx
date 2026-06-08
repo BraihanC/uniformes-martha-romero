@@ -22,6 +22,7 @@ import {
   productoB2BCoincideConInventario,
   productoB2BCoincideConAsignacion
 } from '../../utils/pedidosB2BLogic';
+import { calcularDisponible, calcularEstadoItemPOS } from '../../utils/stockLogic';
 
 const EntradaProveedor = () => {
   const { currentUser } = useAuth();
@@ -382,16 +383,11 @@ const EntradaProveedor = () => {
 
           const nuevaCantidadLista = cantidadListaActual + cantidadEfectiva;
 
-          let nuevoEstado;
-          if (cantidadEntregada === cantidadTotal) {
-            nuevoEstado = 'Entregado';
-          } else if (nuevaCantidadLista + cantidadEntregada === cantidadTotal) {
-            nuevoEstado = 'Listo para Entrega';
-          } else if (nuevaCantidadLista > 0) {
-            nuevoEstado = 'Parcialmente Listo';
-          } else {
-            nuevoEstado = 'En Producción';
-          }
+          const nuevoEstado = calcularEstadoItemPOS({
+            cantidad: cantidadTotal,
+            cantidadLista: nuevaCantidadLista,
+            cantidadEntregada
+          });
 
           updatedItems[itemIndex] = {
             ...item,
@@ -668,15 +664,8 @@ const EntradaProveedor = () => {
     setSearchResults([]);
   };
 
-  // Calcular stock disponible (nunca muestra negativos)
-  const calcularStockTotal = (product) => {
-    const stockTotal = product.stockTotal || 0;
-    const stockReservadoPedidos = product.stockReservadoPedidos || 0;
-    const stockReservadoApartados = product.stockReservadoApartados || 0;
-    const stockReservadoB2B = product.stockReservadoB2B || 0;
-    const disponible = stockTotal - stockReservadoPedidos - stockReservadoApartados - stockReservadoB2B;
-    return Math.max(0, disponible); // Si es negativo, muestra 0
-  };
+  // Calcular stock disponible (delega en stockLogic, nunca negativo)
+  const calcularStockTotal = (product) => calcularDisponible(product);
 
   return (
     <div>

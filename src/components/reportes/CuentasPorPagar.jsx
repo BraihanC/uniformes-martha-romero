@@ -3,6 +3,7 @@ import { db } from '../../services/firebase';
 import { collection, getDocs, query, where, writeBatch, doc, serverTimestamp, getDoc, increment } from 'firebase/firestore';
 import { ChevronDown, ChevronUp, CheckCircle, XCircle, History, Clock, RefreshCw } from 'lucide-react';
 import { getAlistadaActual, productoB2BCoincideConAsignacion } from '../../utils/pedidosB2BLogic';
+import { calcularEstadoItemPOS } from '../../utils/stockLogic';
 
 const CuentasPorPagar = () => {
   const [satelites, setSatelites] = useState([]);
@@ -580,18 +581,12 @@ ${entrada.asignaciones.map(asig =>
 
             const item = updatedItems[itemIndex];
             const nuevaCantidadLista = Math.max(0, (item.cantidadLista || 0) - asig.cantidad);
-            const cantidadEntregada = item.cantidadEntregada || 0;
 
-            let nuevoEstado;
-            if (cantidadEntregada === item.cantidad) {
-              nuevoEstado = 'Entregado';
-            } else if (nuevaCantidadLista + cantidadEntregada === item.cantidad) {
-              nuevoEstado = 'Listo para Entrega';
-            } else if (nuevaCantidadLista > 0) {
-              nuevoEstado = 'Parcialmente Listo';
-            } else {
-              nuevoEstado = 'En Producción';
-            }
+            const nuevoEstado = calcularEstadoItemPOS({
+              cantidad: item.cantidad,
+              cantidadLista: nuevaCantidadLista,
+              cantidadEntregada: item.cantidadEntregada || 0
+            });
 
             updatedItems[itemIndex] = {
               ...item,

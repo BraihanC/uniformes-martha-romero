@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx';
 import { useAuth } from '../context/AuthContext';
 import { Loader2 } from 'lucide-react';
 import { getAlistadaActual, productoB2BCoincideConAsignacion } from '../utils/pedidosB2BLogic';
+import { calcularDisponible, calcularEstadoItemPOS } from '../utils/stockLogic';
 
 const Inventory = () => {
   const { isAdmin, isVendedor, currentUser } = useAuth();
@@ -75,10 +76,7 @@ const Inventory = () => {
   // Calcular stock disponible (nunca muestra negativos)
   // Resta stockReservadoPedidos (pedidos POS listos), stockReservadoApartados y stockReservadoB2B
   // NO resta totalPrendasPedidas porque son prendas que aún no existen físicamente
-  const calcularStockDisponible = (product) => {
-    const disponible = (product.stockTotal || 0) - (product.stockReservadoPedidos || 0) - (product.stockReservadoApartados || 0) - (product.stockReservadoB2B || 0);
-    return Math.max(0, disponible); // Si es negativo, muestra 0
-  };
+  const calcularStockDisponible = (product) => calcularDisponible(product);
 
   // Función para ordenar productos por talla
   const sortByTalla = (products) => {
@@ -344,18 +342,12 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
                 const item = updatedItems[itemIndex];
                 const nuevaCantidadLista = Math.max(0, (item.cantidadLista || 0) - asig.cantidad);
 
-                // Determinar nuevo estado
-                let nuevoEstado;
-                const cantidadEntregada = item.cantidadEntregada || 0;
-                if (cantidadEntregada === item.cantidad) {
-                  nuevoEstado = 'Entregado';
-                } else if (nuevaCantidadLista + cantidadEntregada === item.cantidad) {
-                  nuevoEstado = 'Listo para Entrega';
-                } else if (nuevaCantidadLista > 0) {
-                  nuevoEstado = 'Parcialmente Listo';
-                } else {
-                  nuevoEstado = 'En Producción';
-                }
+                // Determinar nuevo estado (stockLogic)
+                const nuevoEstado = calcularEstadoItemPOS({
+                  cantidad: item.cantidad,
+                  cantidadLista: nuevaCantidadLista,
+                  cantidadEntregada: item.cantidadEntregada || 0
+                });
 
                 updatedItems[itemIndex] = {
                   ...item,
