@@ -24,22 +24,12 @@ import {
   ArrowUpDown
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-
-const TALLA_ORDEN = [
-  '0', '2', '4', '6', '8', '10', '12', '14', '16', '18', '20',
-  'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'
-];
-
-const sortTallas = (a, b) => {
-  const ia = TALLA_ORDEN.indexOf(a);
-  const ib = TALLA_ORDEN.indexOf(b);
-  if (ia === -1 && ib === -1) return a.localeCompare(b);
-  if (ia === -1) return 1;
-  if (ib === -1) return -1;
-  return ia - ib;
-};
-
-const CLIENTE_GENERAL_KEY = '__general__';
+import {
+  sortTallas,
+  calcularTotalesVentas,
+  agruparVentas,
+  CLIENTE_GENERAL_KEY
+} from '../../utils/reporteVentasLogic';
 
 const ReporteVentas = () => {
   // Control de acceso: solo admin ve cifras en pesos (subtotales, recaudado,
@@ -526,29 +516,8 @@ const ReporteVentas = () => {
     return res;
   }, [ventasCrudas, clienteId, productoFiltro, talla, metodoPago, colegioId, colegios]);
 
-  // ---- Totales ----
-  const totales = useMemo(() => {
-    const t = {
-      cantidadTotal: 0,
-      ventasTotal: 0,
-      montoRecibidoTotal: 0,
-      costoTotal: 0,
-      utilidadTotal: 0,
-      margenPromedio: 0,
-      totalRegistros: ventasFiltradas.length
-    };
-    ventasFiltradas.forEach(v => {
-      t.cantidadTotal += v.cantidad;
-      t.ventasTotal += v.subtotal;
-      t.montoRecibidoTotal += v.montoRecibido;
-      t.costoTotal += v.costoTotal;
-      t.utilidadTotal += v.utilidad;
-    });
-    t.margenPromedio = t.ventasTotal > 0
-      ? (t.utilidadTotal / t.ventasTotal) * 100
-      : 0;
-    return t;
-  }, [ventasFiltradas]);
+  // ---- Totales ---- (reporteVentasLogic)
+  const totales = useMemo(() => calcularTotalesVentas(ventasFiltradas), [ventasFiltradas]);
 
   // ---- Tallas para la matriz ----
   const tallasMatriz = useMemo(() => {
@@ -558,103 +527,11 @@ const ReporteVentas = () => {
     return Array.from(set).sort(sortTallas);
   }, [ventasFiltradas, agrupacion]);
 
-  // ---- Agrupación ----
-  const datosAgrupados = useMemo(() => {
-    if (agrupacion === 'ninguna') return ventasFiltradas;
-
-    // Matriz Producto × Talla (para producción)
-    if (agrupacion === 'matrizProductoTalla') {
-      const grupos = {};
-      ventasFiltradas.forEach(v => {
-        const clave = v.productoId || v.referencia || 'Sin ref';
-        const t = v.talla || 'Sin talla';
-        if (!grupos[clave]) {
-          grupos[clave] = {
-            clave,
-            nombre: v.productoNombre || v.referencia || 'Sin nombre',
-            referencia: v.referencia || '',
-            tallas: {},
-            totalCantidad: 0,
-            totalVentas: 0,
-            montoRecibido: 0,
-            costoTotal: 0,
-            utilidad: 0
-          };
-        }
-        grupos[clave].tallas[t] = (grupos[clave].tallas[t] || 0) + v.cantidad;
-        grupos[clave].totalCantidad += v.cantidad;
-        grupos[clave].totalVentas += v.subtotal;
-        grupos[clave].montoRecibido += v.montoRecibido;
-        grupos[clave].costoTotal += v.costoTotal;
-        grupos[clave].utilidad += v.utilidad;
-      });
-      return Object.values(grupos).map(g => ({
-        ...g,
-        margen: g.totalVentas > 0 ? (g.utilidad / g.totalVentas) * 100 : 0
-      }));
-    }
-
-    const grupos = {};
-    ventasFiltradas.forEach(v => {
-      let clave = '';
-      let nombre = '';
-
-      switch (agrupacion) {
-        case 'producto':
-          clave = v.productoId || v.referencia || 'Sin ref';
-          nombre = v.referencia ? `${v.referencia} - ${v.productoNombre}` : v.productoNombre;
-          break;
-        case 'cliente':
-          clave = v.clienteId || CLIENTE_GENERAL_KEY;
-          nombre = v.clienteId ? v.clienteNombre : 'Cliente General';
-          break;
-        case 'colegio':
-          clave = v.colegioId || v.colegioCodigo || v.colegioNombre || 'Sin colegio';
-          nombre = v.colegioNombre || v.colegioCodigo || 'Sin colegio';
-          break;
-        case 'talla':
-          clave = v.talla || 'Sin talla';
-          nombre = v.talla || 'Sin talla';
-          break;
-        case 'fecha': {
-          const d = v.fecha;
-          clave = d.toISOString().split('T')[0];
-          nombre = d.toLocaleDateString('es-CO');
-          break;
-        }
-        case 'metodoPago':
-          clave = v.metodoPago;
-          nombre = v.metodoPago;
-          break;
-        default:
-          clave = 'General';
-          nombre = 'General';
-      }
-
-      if (!grupos[clave]) {
-        grupos[clave] = {
-          clave,
-          nombre,
-          cantidad: 0,
-          totalVentas: 0,
-          montoRecibido: 0,
-          costoTotal: 0,
-          utilidad: 0
-        };
-      }
-
-      grupos[clave].cantidad += v.cantidad;
-      grupos[clave].totalVentas += v.subtotal;
-      grupos[clave].montoRecibido += v.montoRecibido;
-      grupos[clave].costoTotal += v.costoTotal;
-      grupos[clave].utilidad += v.utilidad;
-    });
-
-    return Object.values(grupos).map(g => ({
-      ...g,
-      margen: g.totalVentas > 0 ? (g.utilidad / g.totalVentas) * 100 : 0
-    }));
-  }, [ventasFiltradas, agrupacion]);
+  // ---- Agrupación ---- (reporteVentasLogic)
+  const datosAgrupados = useMemo(
+    () => agruparVentas(ventasFiltradas, agrupacion),
+    [ventasFiltradas, agrupacion]
+  );
 
   // Totales por talla para la fila final de la matriz
   const totalesPorTalla = useMemo(() => {

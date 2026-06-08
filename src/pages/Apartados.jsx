@@ -20,6 +20,12 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
 import {
+  recalcularTotalApartado,
+  calcularEstadoTrasAbono,
+  estaVencido,
+  calcularDiasRestantes
+} from '../utils/apartadosLogic';
+import {
   Search,
   Plus,
   Eye,
@@ -192,17 +198,14 @@ const Apartados = () => {
   useEffect(() => {
     const verificarVencimientos = async () => {
       const hoy = new Date();
-      hoy.setHours(0, 0, 0, 0);
 
       const apartadosActivos = apartados.filter(
         a => a.estadoGeneral === 'Activo' && a.fechaLimite
       );
 
       for (const apartado of apartadosActivos) {
-        const fechaLimite = apartado.fechaLimite.toDate();
-        fechaLimite.setHours(0, 0, 0, 0);
-
-        if (fechaLimite < hoy) {
+        // estaVencido (apartadosLogic) compara a medianoche; exclusivo del día límite.
+        if (estaVencido(apartado.fechaLimite.toDate(), hoy)) {
           const apartadoRef = doc(db, 'apartados', apartado.id);
           await updateDoc(apartadoRef, {
             estadoGeneral: 'Vencido',
@@ -309,14 +312,10 @@ const Apartados = () => {
     }
   };
 
-  // Funciones auxiliares
-  const calcularDiasRestantes = (fechaLimite) => {
-    if (!fechaLimite) return null;
-    const hoy = new Date();
-    const limite = fechaLimite.toDate();
-    const diferencia = Math.ceil((limite - hoy) / (1000 * 60 * 60 * 24));
-    return diferencia;
-  };
+  // Funciones auxiliares — días restantes hasta la fecha límite (apartadosLogic).
+  // El Timestamp de Firestore se convierte a Date antes de delegar.
+  const diasRestantesApartado = (fechaLimite) =>
+    calcularDiasRestantes(fechaLimite ? fechaLimite.toDate() : null, new Date());
 
   const getColorDiasRestantes = (dias) => {
     if (dias === null) return 'text-gray-500';
@@ -698,16 +697,17 @@ const Apartados = () => {
       const apartadoRef = doc(db, 'apartados', selectedApartado.id);
 
       const nuevoTotalAbonado = selectedApartado.totalAbonado + monto;
-      const nuevoSaldoPendiente = selectedApartado.totalApartado - nuevoTotalAbonado;
-      const estaCompletado = nuevoSaldoPendiente <= 0; // Más seguro que === 0
-
-      // Fix 1: si el apartado estaba Vencido y solo recibe un abono parcial,
-      // debe seguir Vencido — no rebajar a Activo silenciosamente. Solo
-      // pasa a Completado cuando se paga todo, o queda Activo si nunca estuvo Vencido.
-      const estadoActual = selectedApartado.estadoGeneral;
-      const nuevoEstadoGeneral = estaCompletado
-        ? 'Completado'
-        : (estadoActual === 'Vencido' ? 'Vencido' : 'Activo');
+      // Estado tras abono (apartadosLogic): preserva 'Vencido' si solo es abono
+      // parcial; pasa a 'Completado' al saldar; si no, 'Activo'.
+      const {
+        saldoPendiente: nuevoSaldoPendiente,
+        completado: estaCompletado,
+        estadoGeneral: nuevoEstadoGeneral
+      } = calcularEstadoTrasAbono({
+        estadoActual: selectedApartado.estadoGeneral,
+        totalApartado: selectedApartado.totalApartado,
+        totalAbonado: nuevoTotalAbonado
+      });
 
       // Fix 4: pre-generamos el ID de la transacción para guardarlo en historialAbonos
       // y poder buscar la transacción exacta por ID en lugar de por monto+fecha.
@@ -1448,10 +1448,8 @@ const Apartados = () => {
         }
       };
 
-      // Recalcular totales (solo productos NO anulados)
-      const nuevoTotal = updatedItems
-        .filter(item => !item.anulado)
-        .reduce((sum, item) => sum + item.subtotal, 0);
+      // Recalcular totales (solo productos NO anulados) — apartadosLogic
+      const nuevoTotal = recalcularTotalApartado(updatedItems);
 
       const nuevoSaldoPendiente = nuevoTotal - (selectedApartado.totalAbonado || 0);
 
@@ -1560,10 +1558,8 @@ const Apartados = () => {
       const { anulado, anulacion, ...itemSinAnulacion } = itemToRestaurar;
       updatedItems[itemIndex] = itemSinAnulacion;
 
-      // Recalcular totales
-      const nuevoTotal = updatedItems
-        .filter(item => !item.anulado)
-        .reduce((sum, item) => sum + item.subtotal, 0);
+      // Recalcular totales — apartadosLogic
+      const nuevoTotal = recalcularTotalApartado(updatedItems);
 
       const nuevoSaldoPendiente = nuevoTotal - (selectedApartado.totalAbonado || 0);
 
@@ -2198,7 +2194,7 @@ const Apartados = () => {
               </div>
             ) : (
               apartadosActuales.map((apartado) => {
-                const diasRestantes = calcularDiasRestantes(apartado.fechaLimite);
+                const diasRestantes = diasRestantesApartado(apartado.fechaLimite);
                 return (
                   <div key={apartado.id} className="bg-white border rounded-lg p-4 shadow-sm">
                     {/* Header de la tarjeta */}
@@ -2338,7 +2334,7 @@ const Apartados = () => {
                   </tr>
                 ) : (
                   apartadosActuales.map((apartado) => {
-                    const diasRestantes = calcularDiasRestantes(apartado.fechaLimite);
+                    const diasRestantes = diasRestantesApartado(apartado.fechaLimite);
                     return (
                       <tr key={apartado.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-6 py-4">
@@ -2911,9 +2907,9 @@ const Apartados = () => {
                   </div>
                   <div>
                     <p className="text-sm text-gray-600">Días Restantes</p>
-                    <p className={`text-lg font-semibold ${getColorDiasRestantes(calcularDiasRestantes(selectedApartado.fechaLimite))}`}>
+                    <p className={`text-lg font-semibold ${getColorDiasRestantes(diasRestantesApartado(selectedApartado.fechaLimite))}`}>
                       {(() => {
-                        const dias = calcularDiasRestantes(selectedApartado.fechaLimite);
+                        const dias = diasRestantesApartado(selectedApartado.fechaLimite);
                         if (dias < 0) return `Vencido hace ${Math.abs(dias)} días`;
                         return `${dias} día${dias !== 1 ? 's' : ''}`;
                       })()}
@@ -3288,7 +3284,7 @@ const Apartados = () => {
                   <span>{selectedApartado.fechaLimite?.toDate?.()?.toLocaleDateString('es-CO') || 'N/A'}</span>
                 </div>
                 {(() => {
-                  const dias = calcularDiasRestantes(selectedApartado.fechaLimite);
+                  const dias = diasRestantesApartado(selectedApartado.fechaLimite);
                   return dias !== null && (
                     <div className="flex justify-between text-sm">
                       <span className="font-medium">Días Restantes:</span>
