@@ -1836,7 +1836,7 @@ const Config = () => {
       )}
 
       {/* CONTENIDO PESTAÑA GESTIÓN DE COSTOS */}
-      {activeTab === 'costos' && (
+      {activeTab === 'costos' && isAdmin && (
         <GestionCostos />
       )}
 

@@ -101,6 +101,7 @@ service cloud.firestore {
     match /satelites/{id}              { allow read, write: if isStaff(); }
     match /stockEntries/{id}           { allow read, write: if isStaff(); }
     match /transactions/{id}           { allow read, write: if isStaff(); }
+    match /transactions_b2b/{id}       { allow read, write: if isStaff(); }
 
     // ─── Default deny ───────────────────────────────────────
     // Cualquier colección NO listada arriba queda bloqueada por defecto.
