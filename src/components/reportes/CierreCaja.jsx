@@ -69,6 +69,10 @@ const CierreCaja = () => { // <--- Nombre cambiado
   const [editandoBase, setEditandoBase] = useState(false);
   const [baseInputValue, setBaseInputValue] = useState('0');
 
+  // Conciliación: efectivo contado físicamente al cerrar (vs el esperado)
+  const [efectivoContado, setEfectivoContado] = useState('');
+  const [guardandoContado, setGuardandoContado] = useState(false);
+
   // Estados para modal de retiros de caja
   const [showRetiroModal, setShowRetiroModal] = useState(false);
   const [retiroMonto, setRetiroMonto] = useState('');
@@ -105,18 +109,47 @@ const CierreCaja = () => { // <--- Nombre cambiado
       const baseDoc = await getDoc(baseDocRef);
 
       if (baseDoc.exists()) {
-        const base = baseDoc.data().monto || 0;
+        const data = baseDoc.data();
+        const base = data.monto || 0;
         setBaseInicial(base);
         setBaseInputValue(base.toString());
+        // Efectivo contado guardado para esa fecha (si existe)
+        setEfectivoContado(data.efectivoContado !== undefined && data.efectivoContado !== null
+          ? String(data.efectivoContado)
+          : '');
       } else {
         // Si no existe, inicializar en 0
         setBaseInicial(0);
         setBaseInputValue('0');
+        setEfectivoContado('');
       }
     } catch (error) {
       console.error('Error al cargar base inicial:', error);
       setBaseInicial(0);
       setBaseInputValue('0');
+      setEfectivoContado('');
+    }
+  };
+
+  /**
+   * Guarda el efectivo contado físicamente para la fecha (merge con la base).
+   */
+  const handleSaveEfectivoContado = async () => {
+    if (guardandoContado) return;
+    setGuardandoContado(true);
+    try {
+      const dateKey = formatDateForInput(startDate);
+      const baseDocRef = doc(db, 'bases_caja', dateKey);
+      await setDoc(baseDocRef, {
+        efectivoContado: parseFloat(efectivoContado) || 0,
+        updatedAt: new Date()
+      }, { merge: true });
+      alert('✅ Efectivo contado guardado');
+    } catch (error) {
+      console.error('Error al guardar efectivo contado:', error);
+      alert('❌ Error al guardar efectivo contado: ' + error.message);
+    } finally {
+      setGuardandoContado(false);
     }
   };
 
@@ -138,7 +171,7 @@ const CierreCaja = () => { // <--- Nombre cambiado
         fecha: startDate,
         monto: monto,
         updatedAt: new Date()
-      });
+      }, { merge: true });
 
       setBaseInicial(monto);
       setEditandoBase(false);
@@ -669,6 +702,72 @@ const CierreCaja = () => { // <--- Nombre cambiado
                 </div>
               </div>
             </div>
+
+            {/* --- Conciliación: efectivo esperado vs contado físicamente --- */}
+            {(() => {
+              const efectivoEsperado = baseInicial + reportData.saldoNetoEfectivo - reportData.totalRetiros;
+              const contado = parseFloat(efectivoContado);
+              const hayContado = efectivoContado !== '' && !isNaN(contado);
+              const diferencia = hayContado ? contado - efectivoEsperado : 0;
+              const cuadra = Math.abs(diferencia) < 1; // tolerancia $1 por redondeo
+              return (
+                <div className="bg-white rounded-lg shadow-md p-4 print:hidden">
+                  <h3 className="text-sm font-semibold text-gray-800 mb-3">
+                    Conciliación de Efectivo (arqueo de caja)
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Efectivo contado (físico)
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          value={efectivoContado}
+                          onChange={(e) => setEfectivoContado(e.target.value)}
+                          placeholder="Cuenta el dinero y escríbelo aquí"
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 text-sm"
+                        />
+                        <button
+                          onClick={handleSaveEfectivoContado}
+                          disabled={guardandoContado}
+                          className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm"
+                          title="Guardar efectivo contado"
+                        >
+                          {guardandoContado ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Esperado</p>
+                      <p className="text-xl font-bold text-purple-700">{formatCurrency(efectivoEsperado)}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Diferencia</p>
+                      {!hayContado ? (
+                        <p className="text-sm text-gray-400 italic">Ingresa el efectivo contado</p>
+                      ) : cuadra ? (
+                        <p className="text-xl font-bold text-green-600">✓ Cuadra</p>
+                      ) : (
+                        <p className={`text-xl font-bold ${diferencia < 0 ? 'text-red-600' : 'text-orange-600'}`}>
+                          {diferencia > 0 ? '+' : ''}{formatCurrency(diferencia)}
+                          <span className="block text-xs font-normal">
+                            {diferencia < 0 ? 'Falta efectivo en caja' : 'Sobra efectivo en caja'}
+                          </span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  {hayContado && !cuadra && (
+                    <p className="mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2">
+                      ⚠️ Hay una diferencia de {formatCurrency(Math.abs(diferencia))} entre el efectivo esperado y el contado.
+                      Revisa transacciones, retiros o registros faltantes del día.
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* --- Desgloses --- */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
