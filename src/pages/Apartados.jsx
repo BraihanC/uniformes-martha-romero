@@ -610,7 +610,8 @@ const Apartados = () => {
       for (const producto of selectedProductos) {
         const productoRef = doc(db, 'products', producto.id);
         batch.update(productoRef, {
-          stockReservadoApartados: increment(producto.cantidad)
+          stockReservadoApartados: increment(producto.cantidad),
+          updatedAt: serverTimestamp()
         });
       }
 
@@ -750,8 +751,13 @@ const Apartados = () => {
 
       // 3. (LÓGICA DE CONVERTIRAVENTA INTEGRADA) Si se completa, crear Venta y actualizar Stock
       if (estaCompletado) {
+        // numeroFactura consecutivo (mismo mecanismo que procesarFacturacionApartado):
+        // sin él, la venta no aparecía en BuscadorFacturas ni en reportes por factura.
+        const numeroFacturaApartado = await getSiguienteConsecutivo('facturas', 'sales', 'numeroFactura');
+
         // Crear la venta
         const ventaData = {
+          numeroFactura: numeroFacturaApartado,
           clienteId: selectedApartado.clienteId,
           clienteNombre: selectedApartado.clienteNombre,
           items: selectedApartado.items,
@@ -764,7 +770,6 @@ const Apartados = () => {
           esFacturaDeApartado: true,
           createdAt: serverTimestamp(),
           userId: currentUser.uid
-          // Nota: Falta numeroFactura consecutivo, se puede añadir luego si es crítico
         };
         const ventaRef = doc(collection(db, 'sales'));
         batch.set(ventaRef, ventaData);
@@ -789,7 +794,8 @@ const Apartados = () => {
 
           batch.update(productoRef, {
             stockTotal: increment(-item.cantidad),
-            stockReservadoApartados: increment(-item.cantidad)
+            stockReservadoApartados: increment(-item.cantidad),
+            updatedAt: serverTimestamp()
           });
         }
 
@@ -929,7 +935,8 @@ const Apartados = () => {
 
         const productoRef = doc(db, 'products', item.productoId);
         batch.update(productoRef, {
-          stockReservadoApartados: increment(-item.cantidad)
+          stockReservadoApartados: increment(-item.cantidad),
+          updatedAt: serverTimestamp()
         });
       }
 
@@ -1071,7 +1078,8 @@ const Apartados = () => {
 
           const productoRef = doc(db, 'products', item.productoId);
           batch.update(productoRef, {
-            stockReservadoApartados: increment(-item.cantidad)
+            stockReservadoApartados: increment(-item.cantidad),
+            updatedAt: serverTimestamp()
           });
         }
       }
@@ -1243,16 +1251,22 @@ const Apartados = () => {
 
       // Producto a usar (nuevo o el mismo)
       const productoNuevoId = productoParaUsar.id || productoParaUsar.productoId || itemActual.productoId;
-      const precioNuevo = productoParaUsar.precio || 0;
+      // Cadena de fallback de precio (anti-patrón #3): los items del apartado
+      // guardan precioUnitario, mientras que un producto nuevo de la colección
+      // products trae precio. Sin el fallback, corregir SOLO la cantidad leía
+      // itemActual.precio (undefined) → subtotal 0 → total 0 → egreso de caja falso.
+      const precioNuevo = productoParaUsar.precioUnitario || productoParaUsar.precio || 0;
       const subtotalNuevo = (precioNuevo || 0) * (cantidadNueva || 0);
 
-      // Crear copia de items actualizada
+      // Crear copia de items actualizada. Se escriben precioUnitario (campo que
+      // usa el resto de Apartados) y precio (alias para sales/Devoluciones).
       const updatedItems = [...selectedApartado.items];
       updatedItems[itemIndexToCorrect] = {
         productoId: productoNuevoId || '',
         nombre: productoParaUsar.nombre || '',
         referencia: productoParaUsar.referencia || itemActual.referencia || '',
         talla: productoParaUsar.talla || itemActual.talla || '',
+        precioUnitario: precioNuevo || 0,
         precio: precioNuevo || 0,
         cantidad: cantidadNueva || 0,
         subtotal: subtotalNuevo || 0
@@ -1430,14 +1444,19 @@ const Apartados = () => {
       const batch = writeBatch(db);
       const apartadoRef = doc(db, 'apartados', selectedApartado.id);
 
-      // Marcar producto como anulado
+      // Marcar producto como anulado preservando TODOS sus campos (incluido
+      // precioUnitario, que la lista fija anterior descartaba dejándolo en 0
+      // para auditoría y para sales/Devoluciones si el apartado se completa).
       const updatedItems = [...selectedApartado.items];
       updatedItems[itemIndexToAnular] = {
+        ...itemToAnular,
         productoId: itemToAnular.productoId || '',
         nombre: itemToAnular.nombre || '',
         referencia: itemToAnular.referencia || '',
         talla: itemToAnular.talla || '',
-        precio: itemToAnular.precio || 0,
+        // Garantizar ambos campos de precio definidos (nunca undefined en Firestore)
+        precioUnitario: itemToAnular.precioUnitario || itemToAnular.precio || 0,
+        precio: itemToAnular.precio || itemToAnular.precioUnitario || 0,
         cantidad: itemToAnular.cantidad || 0,
         subtotal: itemToAnular.subtotal || 0,
         anulado: true,
@@ -1597,7 +1616,9 @@ const Apartados = () => {
           productoRestaurado: {
             nombre: itemToRestaurar.nombre,
             cantidad: itemToRestaurar.cantidad,
-            precio: itemToRestaurar.precio,
+            // Fallback: los items del apartado guardan precioUnitario, no precio.
+            // Sin él, Firestore rechaza el undefined y aborta la restauración.
+            precio: itemToRestaurar.precio || itemToRestaurar.precioUnitario || 0,
             subtotal: itemToRestaurar.subtotal
           },
           fecha: serverTimestamp(),
@@ -1868,7 +1889,8 @@ const Apartados = () => {
 
         batch.update(productoRef, {
           stockTotal: increment(-item.cantidad),
-          stockReservadoApartados: increment(-item.cantidad)
+          stockReservadoApartados: increment(-item.cantidad),
+          updatedAt: serverTimestamp()
         });
       }
 

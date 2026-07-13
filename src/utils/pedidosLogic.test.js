@@ -7,6 +7,7 @@ import {
   calcularSaldoRequerido,
   calcularUpdatedItems,
   calcularEstadoGeneral,
+  calcularEstadoCorrectoPedido,
 } from './pedidosLogic';
 
 // ─────────────────────────────────────────────────────────────
@@ -490,5 +491,211 @@ describe('calcularEstadoGeneral', () => {
   it('mantiene el estado actual si no hay cambios determinables', () => {
     const items = [{ estadoItem: 'En Producción', anulado: false, cantidad: 5, cantidadLista: 2, cantidadEntregada: 0 }];
     expect(calcularEstadoGeneral(items, 'En Proceso')).toBe('En Proceso');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// calcularEstadoCorrectoPedido
+// El ORDEN de las reglas es crítico: previene "pedidos zombis"
+// (pedidos anulados que revivían al recalcular su estado desde los ítems).
+// ─────────────────────────────────────────────────────────────
+
+const itemProduccion = (overrides = {}) => ({
+  estadoItem: 'En Producción',
+  cantidad: 3,
+  precio: 30000,
+  subtotal: 90000,
+  cantidadEntregada: 0,
+  cantidadLista: 0,
+  anulado: false,
+  ...overrides,
+});
+
+describe('calcularEstadoCorrectoPedido', () => {
+  describe('pedido con anulado === true', () => {
+    it('retorna Anulado aunque estadoGeneral sea En Proceso (zombi legacy)', () => {
+      const pedido = {
+        anulado: true,
+        estadoGeneral: 'En Proceso',
+        items: [itemProduccion()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Anulado');
+    });
+
+    it('retorna Anulado aunque estadoGeneral sea Pedido Completo - Listo para Recoger', () => {
+      const pedido = {
+        anulado: true,
+        estadoGeneral: 'Pedido Completo - Listo para Recoger',
+        items: [itemListo()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Anulado');
+    });
+
+    it('retorna Cancelado cuando anulado=true y estadoGeneral=Cancelado', () => {
+      const pedido = {
+        anulado: true,
+        estadoGeneral: 'Cancelado',
+        items: [itemProduccion()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Cancelado');
+    });
+
+    it('retorna Anulado cuando anulado=true y estadoGeneral=Anulado', () => {
+      const pedido = {
+        anulado: true,
+        estadoGeneral: 'Anulado',
+        items: [itemProduccion()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Anulado');
+    });
+
+    it('sigue siendo Anulado aunque los ítems estén Listo para Entrega/Entregado (no resucita)', () => {
+      const pedido = {
+        anulado: true,
+        estadoGeneral: 'En Proceso',
+        items: [itemListo(), itemEntregado()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Anulado');
+    });
+  });
+
+  describe('estadoGeneral terminal sin flag anulado', () => {
+    it('conserva Anulado tal cual, sin recalcular, incluso con ítems activos', () => {
+      const pedido = {
+        estadoGeneral: 'Anulado',
+        items: [itemListo(), itemEntregado()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Anulado');
+    });
+
+    it('conserva Cancelado tal cual, sin recalcular, incluso con ítems activos', () => {
+      const pedido = {
+        estadoGeneral: 'Cancelado',
+        items: [itemEntregado(), itemEntregado()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Cancelado');
+    });
+  });
+
+  describe('sin ítems o ítems vacío', () => {
+    it('devuelve el estadoGeneral actual cuando items es undefined', () => {
+      const pedido = { estadoGeneral: 'En Proceso' };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('En Proceso');
+    });
+
+    it('devuelve el estadoGeneral actual cuando items es un array vacío', () => {
+      const pedido = { estadoGeneral: 'Pedido Recibido', items: [] };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Pedido Recibido');
+    });
+  });
+
+  describe('todos los ítems inactivos', () => {
+    it('devuelve el estadoGeneral actual cuando todos los ítems están anulados', () => {
+      const pedido = {
+        estadoGeneral: 'En Proceso',
+        items: [
+          { ...itemEntregado(), anulado: true },
+          { ...itemListo(), anulado: true },
+        ],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('En Proceso');
+    });
+
+    it('devuelve el estadoGeneral actual cuando todos los ítems son Cambio de Talla', () => {
+      const pedido = {
+        estadoGeneral: 'Pedido Recibido',
+        items: [
+          { ...itemEntregado(), estadoItem: 'Cambio de Talla' },
+          { ...itemListo(), estadoItem: 'Cambio de Talla' },
+        ],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Pedido Recibido');
+    });
+  });
+
+  describe('derivación normal desde ítems activos', () => {
+    it('retorna Entregado cuando todos los ítems activos están Entregado', () => {
+      const pedido = {
+        estadoGeneral: 'En Proceso',
+        items: [itemEntregado(), itemEntregado()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Entregado');
+    });
+
+    it('retorna En Proceso cuando algún ítem está En Producción', () => {
+      const pedido = {
+        estadoGeneral: 'Pedido Recibido',
+        items: [itemProduccion(), itemEntregado()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('En Proceso');
+    });
+
+    it('retorna Pedido Completo cuando todos están Listo/Entregado/Parcialmente sin ninguno En Producción', () => {
+      const pedido = {
+        estadoGeneral: 'En Proceso',
+        items: [itemListo(), itemEntregado(), itemParcial()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido))
+        .toBe('Pedido Completo - Listo para Recoger');
+    });
+
+    it('devuelve estadoGeneral actual (fallback) para una mezcla que no cae en ninguna regla', () => {
+      // Parcialmente Listo NO está en el conjunto allReadyOrDelivered junto a un estado desconocido
+      const pedido = {
+        estadoGeneral: 'Pedido Recibido',
+        items: [itemParcial(), { ...itemListo(), estadoItem: 'Estado Desconocido' }],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Pedido Recibido');
+    });
+  });
+
+  describe('los ítems inactivos se excluyen del cálculo', () => {
+    it('un Cambio de Talla + un Entregado → Entregado (el CT no cuenta)', () => {
+      const pedido = {
+        estadoGeneral: 'En Proceso',
+        items: [
+          { ...itemProduccion(), estadoItem: 'Cambio de Talla' },
+          itemEntregado(),
+        ],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Entregado');
+    });
+
+    it('un ítem anulado En Producción + un Entregado → Entregado', () => {
+      const pedido = {
+        estadoGeneral: 'En Proceso',
+        items: [
+          { ...itemProduccion(), anulado: true },
+          itemEntregado(),
+        ],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Entregado');
+    });
+  });
+
+  describe('casos borde', () => {
+    it('trata un ítem sin estadoItem como activo y cae al fallback del estadoGeneral', () => {
+      const pedido = {
+        estadoGeneral: 'Pedido Recibido',
+        items: [{ anulado: false, cantidad: 1 }],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Pedido Recibido');
+    });
+
+    it('funciona sin campo anulado (undefined) derivando desde los ítems', () => {
+      const pedido = {
+        estadoGeneral: 'En Proceso',
+        items: [itemEntregado(), itemEntregado()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('Entregado');
+    });
+
+    it('precedencia: En Producción gana sobre Listo para Entrega → En Proceso', () => {
+      const pedido = {
+        estadoGeneral: 'Pedido Recibido',
+        items: [itemProduccion(), itemListo()],
+      };
+      expect(calcularEstadoCorrectoPedido(pedido)).toBe('En Proceso');
+    });
   });
 });

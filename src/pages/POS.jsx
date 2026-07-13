@@ -825,7 +825,11 @@ const POS = () => {
         stockChecks.forEach(({ ref, currentStockTotal, requestedQty }) => {
           const newStockTotal = currentStockTotal - requestedQty;
           transaction.update(ref, {
-            stockTotal: newStockTotal
+            stockTotal: newStockTotal,
+            // updatedAt hace visible esta venta al guard de concurrencia
+            // optimista de Inventory (sin él, editar un producto con el modal
+            // abierto podía restaurar stock ya vendido)
+            updatedAt: serverTimestamp()
           });
         });
 

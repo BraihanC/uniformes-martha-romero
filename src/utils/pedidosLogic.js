@@ -146,3 +146,46 @@ export const calcularEstadoGeneral = (updatedItems, estadoActual) => {
   if (todosListosOEntregados) return 'Pedido Completo - Listo para Recoger';
   return estadoActual;
 };
+
+/**
+ * Deriva el estadoGeneral correcto de un pedido a partir de sus ítems.
+ * Usada por fetchPedidos para autocorregir estados desincronizados.
+ *
+ * Reglas clave (el orden importa):
+ *  1. Pedido anulado/cancelado: NO se recalcula. Si el flag `anulado` está
+ *     desincronizado con un estadoGeneral vivo (zombis legacy, anti-patrón #1),
+ *     se normaliza a 'Anulado' (o 'Cancelado' si ese era el estadoGeneral).
+ *     Sin esto, un pedido anulado con ítems 'Listo para Entrega' se "resucitaba"
+ *     como activo → habilitaba doble anulación y entregas sobre pedidos muertos.
+ *  2. Sin ítems (o todos inactivos): se conserva el estadoGeneral actual.
+ *  3. En otro caso, se deriva de los estadoItem de los ítems activos.
+ *
+ * @param {Object} pedido - doc de `pedidos` (estadoGeneral, anulado, items[])
+ * @returns {string} estadoGeneral correcto
+ */
+export const calcularEstadoCorrectoPedido = (pedido) => {
+  if (pedido.anulado === true) {
+    return pedido.estadoGeneral === 'Cancelado' ? 'Cancelado' : 'Anulado';
+  }
+  if (pedido.estadoGeneral === 'Anulado' || pedido.estadoGeneral === 'Cancelado') {
+    return pedido.estadoGeneral;
+  }
+  if (!pedido.items || pedido.items.length === 0) return pedido.estadoGeneral;
+
+  // Excluir ítems anulados y cambios de talla (no son entregables)
+  const itemsActivos = pedido.items.filter(item => !esItemInactivo(item));
+  if (itemsActivos.length === 0) return pedido.estadoGeneral;
+
+  const todosEntregados = itemsActivos.every(item => item.estadoItem === 'Entregado');
+  const anyInProduction = itemsActivos.some(item => item.estadoItem === 'En Producción');
+  const allReadyOrDelivered = itemsActivos.every(
+    item => item.estadoItem === 'Listo para Entrega' ||
+            item.estadoItem === 'Entregado' ||
+            item.estadoItem === 'Parcialmente Listo'
+  );
+
+  if (todosEntregados) return 'Entregado';
+  if (anyInProduction) return 'En Proceso';
+  if (allReadyOrDelivered) return 'Pedido Completo - Listo para Recoger';
+  return pedido.estadoGeneral;
+};

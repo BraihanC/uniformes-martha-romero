@@ -6,7 +6,6 @@ import { getAlistadaActual, productoB2BCoincideConAsignacion } from '../../utils
 import { calcularEstadoItemPOS } from '../../utils/stockLogic';
 
 const CuentasPorPagar = () => {
-  const [satelites, setSatelites] = useState([]);
   const [cuentasPorSatelite, setCuentasPorSatelite] = useState([]);
   const [historialPorSatelite, setHistorialPorSatelite] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -31,7 +30,6 @@ const CuentasPorPagar = () => {
         id: doc.id,
         ...doc.data()
       }));
-      setSatelites(satelitesData);
 
       // 2. Obtener TODAS las entradas de satélite (pagadas y no pagadas)
       const qTodas = query(
@@ -502,149 +500,208 @@ ${entrada.asignaciones.map(asig =>
     try {
       const batch = writeBatch(db);
 
-      // 1. Revertir cambios en el producto
-      // Bug 3: solo revertir lo que realmente entró al stockTotal — las defectuosas
-      // nunca se sumaron. Para entradas legacy (sin cantidadBuena) caemos a cantidad.
-      const cantidadParaRevertir = entrada.cantidadBuena ?? entrada.cantidad;
-      const productRef = doc(db, 'products', entrada.productId);
-      const productUpdate = {
-        stockTotal: increment(-cantidadParaRevertir),
-        updatedAt: serverTimestamp()
-      };
+      // Guard de doble anulación: releer la entrada fresca. El botón se oculta
+      // en la UI, pero dos pantallas desincronizadas podían anular dos veces y
+      // revertir el stock doble.
+      const entradaRef = doc(db, 'stockEntries', entrada.id);
+      const entradaSnap = await getDoc(entradaRef);
+      if (!entradaSnap.exists() || entradaSnap.data().anulada === true) {
+        alert('⚠️ Esta entrada ya fue anulada (o ya no existe). Recarga la página para actualizar la lista.');
+        return;
+      }
 
-      // Bug 4: revertir TODAS las asignaciones (parciales + completas) y agregar
-      // por tipo, igual que la ruta de anulación del módulo de Inventario.
+      // Bug 4: revertir TODAS las asignaciones (parciales + completas). Las
+      // reservas del producto se descuentan con lo EFECTIVAMENTE revertido en
+      // cada pedido, no con los montos nominales de la entrada.
       let cantidadReservadaPedidos = 0;
       let cantidadReservadaB2B = 0;
 
+      // 1. Revertir cambios en los pedidos — todas las asignaciones, no solo las completas.
+      // Bug 10: agrupar por pedido y aplicar todas las reversiones sobre UNA sola
+      // lectura/escritura por documento. Con 2+ asignaciones al mismo pedido, cada
+      // batch.update pisaba al anterior (la relectura no ve writes staged del batch)
+      // y se perdía una reversión mientras las reservas se decrementaban por ambas.
       if (entrada.asignaciones && entrada.asignaciones.length > 0) {
-        entrada.asignaciones.forEach(asig => {
-          // Las entradas legacy sin tipo se asumen POS
+        const asignacionesPorPedido = new Map();
+        for (const asig of entrada.asignaciones) {
           const tipo = asig.tipo || 'pedido';
-          if (tipo === 'pedido') {
-            cantidadReservadaPedidos += asig.cantidad;
-          } else if (tipo === 'pedido_b2b') {
-            cantidadReservadaB2B += asig.cantidad;
+          const key = `${tipo}:${asig.pedidoId}`;
+          if (!asignacionesPorPedido.has(key)) {
+            asignacionesPorPedido.set(key, { tipo, pedidoId: asig.pedidoId, asigs: [] });
           }
-        });
-
-        if (cantidadReservadaPedidos > 0) {
-          productUpdate.stockReservadoPedidos = increment(-cantidadReservadaPedidos);
+          asignacionesPorPedido.get(key).asigs.push(asig);
         }
-        if (cantidadReservadaB2B > 0) {
-          productUpdate.stockReservadoB2B = increment(-cantidadReservadaB2B);
+
+        // Reconstruye los identificadores para el matching. Las entradas viejas no
+        // los persistían, así que caemos a los datos top-level de la entrada.
+        const conMatching = (asig) => (asig.referencia || asig.productoId || asig.descripcion)
+          ? asig
+          : {
+              ...asig,
+              referencia: entrada.referencia,
+              talla: entrada.talla,
+              productoId: entrada.productId,
+              descripcion: entrada.nombre
+            };
+
+        for (const { tipo, pedidoId, asigs } of asignacionesPorPedido.values()) {
+          if (tipo === 'pedido') {
+            // PEDIDO POS — buscar item por referencia+talla y recalcular estado
+            const pedidoRef = doc(db, 'pedidos', pedidoId);
+            const pedidoSnap = await getDoc(pedidoRef);
+            if (!pedidoSnap.exists()) continue;
+
+            const pedidoData = pedidoSnap.data();
+            // Pedido anulado/cancelado: su anulación YA liberó la reserva del
+            // producto. Volver a restarla dejaría stockReservadoPedidos negativo
+            // → disponible inflado → sobreventa.
+            if (pedidoData.anulado === true ||
+                pedidoData.estadoGeneral === 'Anulado' ||
+                pedidoData.estadoGeneral === 'Cancelado') {
+              continue;
+            }
+
+            const updatedItems = [...(pedidoData.items || [])];
+            let huboCambios = false;
+
+            for (const asig of asigs) {
+              const asigForMatching = conMatching(asig);
+
+              // Match con talla coercida + filtro anulado. Preferimos el row con
+              // cantidadLista pendiente de revertir; si no hay, cae al primer match.
+              // Se excluye 'Cambio de Talla': el item muerto retiene cantidadLista
+              // pero su reserva ya se liberó al hacer el cambio.
+              const matchItem = (item) =>
+                !item.anulado &&
+                item.estadoItem !== 'Cambio de Talla' &&
+                item.referencia === asigForMatching.referencia &&
+                String(item.talla) === String(asigForMatching.talla);
+
+              let itemIndex = updatedItems.findIndex(item =>
+                matchItem(item) && (item.cantidadLista || 0) > 0
+              );
+              if (itemIndex === -1) {
+                itemIndex = updatedItems.findIndex(matchItem);
+              }
+              if (itemIndex === -1) continue;
+
+              const item = updatedItems[itemIndex];
+              const cantidadListaActual = item.cantidadLista || 0;
+              const nuevaCantidadLista = Math.max(0, cantidadListaActual - asig.cantidad);
+              // Solo lo realmente descontado del item libera reserva — si el
+              // item ya fue entregado (lista=0), no hay nada que revertir.
+              const revertidoEfectivo = cantidadListaActual - nuevaCantidadLista;
+              if (revertidoEfectivo <= 0) continue;
+
+              const nuevoEstado = calcularEstadoItemPOS({
+                cantidad: item.cantidad,
+                cantidadLista: nuevaCantidadLista,
+                cantidadEntregada: item.cantidadEntregada || 0
+              });
+
+              updatedItems[itemIndex] = {
+                ...item,
+                cantidadLista: nuevaCantidadLista,
+                estadoItem: nuevoEstado
+              };
+              huboCambios = true;
+              cantidadReservadaPedidos += revertidoEfectivo;
+            }
+
+            if (huboCambios) {
+              batch.update(pedidoRef, {
+                items: updatedItems,
+                updatedAt: serverTimestamp()
+              });
+            }
+          } else if (tipo === 'pedido_b2b') {
+            // PEDIDO B2B (PORTAL)
+            const pedidoRef = doc(db, 'pedidos_b2b', pedidoId);
+            const pedidoSnap = await getDoc(pedidoRef);
+            if (!pedidoSnap.exists()) continue;
+
+            const pedidoData = pedidoSnap.data();
+            // Igual que POS: la anulación del pedido B2B ya liberó su reserva.
+            if (pedidoData.anulado === true || pedidoData.estado === 'Anulado') {
+              continue;
+            }
+
+            const productosActualizados = [...(pedidoData.productos || [])];
+            let huboCambios = false;
+
+            for (const asig of asigs) {
+              const asigForMatching = conMatching(asig);
+
+              // Preferimos el row con alistamiento pendiente de revertir. Si todos
+              // los matches están en 0 (porque ya se hizo envío que consumió la
+              // alistada), cae al primer match para mantener compat.
+              let prodIndex = productosActualizados.findIndex(p =>
+                productoB2BCoincideConAsignacion(p, asigForMatching) &&
+                getAlistadaActual(p) > 0
+              );
+              if (prodIndex === -1) {
+                prodIndex = productosActualizados.findIndex(p =>
+                  productoB2BCoincideConAsignacion(p, asigForMatching)
+                );
+              }
+              if (prodIndex === -1) continue;
+
+              const producto = productosActualizados[prodIndex];
+              const cantidadEnviadaProd = producto.cantidadEnviada || 0;
+              const alistadaVieja = producto.cantidadAlistadaActual ?? Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviadaProd);
+              const nuevaAlistadaActual = Math.max(0, alistadaVieja - asig.cantidad);
+              const nuevaAlistadaTotal = Math.max(0, (producto.cantidadAlistadaTotal ?? (producto.cantidadAlistada || 0)) - asig.cantidad);
+              const totalPreparado = nuevaAlistadaActual + cantidadEnviadaProd;
+
+              productosActualizados[prodIndex] = {
+                ...producto,
+                cantidadAlistadaActual: nuevaAlistadaActual,
+                cantidadAlistadaTotal: nuevaAlistadaTotal,
+                cantidadAlistada: totalPreparado, // compat
+                estadoProduccion: totalPreparado >= producto.cantidad ? 'alistado' : (totalPreparado > 0 ? 'en_produccion' : 'pendiente')
+              };
+              huboCambios = true;
+              // Solo lo realmente descontado de la alistada libera reserva
+              cantidadReservadaB2B += alistadaVieja - nuevaAlistadaActual;
+            }
+
+            if (huboCambios) {
+              batch.update(pedidoRef, {
+                productos: productosActualizados,
+                updatedAt: serverTimestamp()
+              });
+            }
+          }
         }
       }
 
-      batch.update(productRef, productUpdate);
+      // 2. Revertir stock del producto con montos efectivos y piso en 0 (lectura fresca).
+      // Bug 3: solo revertir lo que realmente entró al stockTotal — las defectuosas
+      // nunca se sumaron. Para entradas legacy (sin cantidadBuena) caemos a cantidad.
+      const productRef = doc(db, 'products', entrada.productId);
+      const productSnap = await getDoc(productRef);
+      if (productSnap.exists()) {
+        const prodData = productSnap.data() || {};
+        // Piso en 0: si parte de lo entrado ya salió (venta/entrega), no dejar
+        // stockTotal ni reservas en negativo.
+        const cantidadParaRevertir = Math.min(entrada.cantidadBuena ?? entrada.cantidad, prodData.stockTotal || 0);
+        const reservaPedidosARevertir = Math.min(cantidadReservadaPedidos, prodData.stockReservadoPedidos || 0);
+        const reservaB2BARevertir = Math.min(cantidadReservadaB2B, prodData.stockReservadoB2B || 0);
 
-      // 2. Revertir cambios en los pedidos — todas las asignaciones, no solo las completas.
-      if (entrada.asignaciones && entrada.asignaciones.length > 0) {
-        for (const asig of entrada.asignaciones) {
-          const tipo = asig.tipo || 'pedido';
-
-          // Reconstruye los identificadores para el matching. Las entradas viejas no
-          // los persistían, así que caemos a los datos top-level de la entrada.
-          const asigForMatching = (asig.referencia || asig.productoId || asig.descripcion)
-            ? asig
-            : {
-                ...asig,
-                referencia: entrada.referencia,
-                talla: entrada.talla,
-                productoId: entrada.productId,
-                descripcion: entrada.nombre
-              };
-
-          if (tipo === 'pedido') {
-            // PEDIDO POS — buscar item por referencia+talla y recalcular estado
-            const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
-            const pedidoSnap = await getDoc(pedidoRef);
-            if (!pedidoSnap.exists()) continue;
-
-            const pedidoData = pedidoSnap.data();
-            const updatedItems = [...(pedidoData.items || [])];
-
-            // Match con talla coercida + filtro anulado. Preferimos el row con
-            // cantidadLista pendiente de revertir; si no hay, cae al primer match.
-            const matchItem = (item) =>
-              !item.anulado &&
-              item.referencia === asigForMatching.referencia &&
-              String(item.talla) === String(asigForMatching.talla);
-
-            let itemIndex = updatedItems.findIndex(item =>
-              matchItem(item) && (item.cantidadLista || 0) > 0
-            );
-            if (itemIndex === -1) {
-              itemIndex = updatedItems.findIndex(matchItem);
-            }
-            if (itemIndex === -1) continue;
-
-            const item = updatedItems[itemIndex];
-            const nuevaCantidadLista = Math.max(0, (item.cantidadLista || 0) - asig.cantidad);
-
-            const nuevoEstado = calcularEstadoItemPOS({
-              cantidad: item.cantidad,
-              cantidadLista: nuevaCantidadLista,
-              cantidadEntregada: item.cantidadEntregada || 0
-            });
-
-            updatedItems[itemIndex] = {
-              ...item,
-              cantidadLista: nuevaCantidadLista,
-              estadoItem: nuevoEstado
-            };
-
-            batch.update(pedidoRef, {
-              items: updatedItems,
-              updatedAt: serverTimestamp()
-            });
-          } else if (tipo === 'pedido_b2b') {
-            // PEDIDO B2B (PORTAL)
-            const pedidoRef = doc(db, 'pedidos_b2b', asig.pedidoId);
-            const pedidoSnap = await getDoc(pedidoRef);
-            if (!pedidoSnap.exists()) continue;
-
-            const pedidoData = pedidoSnap.data();
-            const productosActualizados = [...(pedidoData.productos || [])];
-
-            // Preferimos el row con alistamiento pendiente de revertir. Si todos
-            // los matches están en 0 (porque ya se hizo envío que consumió la
-            // alistada), cae al primer match para mantener compat.
-            let prodIndex = productosActualizados.findIndex(p =>
-              productoB2BCoincideConAsignacion(p, asigForMatching) &&
-              getAlistadaActual(p) > 0
-            );
-            if (prodIndex === -1) {
-              prodIndex = productosActualizados.findIndex(p =>
-                productoB2BCoincideConAsignacion(p, asigForMatching)
-              );
-            }
-            if (prodIndex === -1) continue;
-
-            const producto = productosActualizados[prodIndex];
-            const cantidadEnviadaProd = producto.cantidadEnviada || 0;
-            const nuevaAlistadaActual = Math.max(0, (producto.cantidadAlistadaActual ?? Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviadaProd)) - asig.cantidad);
-            const nuevaAlistadaTotal = Math.max(0, (producto.cantidadAlistadaTotal ?? (producto.cantidadAlistada || 0)) - asig.cantidad);
-            const totalPreparado = nuevaAlistadaActual + cantidadEnviadaProd;
-
-            productosActualizados[prodIndex] = {
-              ...producto,
-              cantidadAlistadaActual: nuevaAlistadaActual,
-              cantidadAlistadaTotal: nuevaAlistadaTotal,
-              cantidadAlistada: totalPreparado, // compat
-              estadoProduccion: totalPreparado >= producto.cantidad ? 'alistado' : (totalPreparado > 0 ? 'en_produccion' : 'pendiente')
-            };
-
-            batch.update(pedidoRef, {
-              productos: productosActualizados,
-              updatedAt: serverTimestamp()
-            });
-          }
+        const productUpdate = {
+          stockTotal: increment(-cantidadParaRevertir),
+          updatedAt: serverTimestamp()
+        };
+        if (reservaPedidosARevertir > 0) {
+          productUpdate.stockReservadoPedidos = increment(-reservaPedidosARevertir);
         }
+        if (reservaB2BARevertir > 0) {
+          productUpdate.stockReservadoB2B = increment(-reservaB2BARevertir);
+        }
+        batch.update(productRef, productUpdate);
       }
 
       // 3. Marcar la entrada como anulada
-      const entradaRef = doc(db, 'stockEntries', entrada.id);
       batch.update(entradaRef, {
         anulada: true,
         fechaAnulacion: serverTimestamp(),

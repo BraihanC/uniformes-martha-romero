@@ -264,70 +264,79 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
     try {
       const batch = writeBatch(db);
 
-      // 1. Revertir stock del producto
-      // Bug 3: solo revertir lo que realmente entró al stockTotal — las defectuosas
-      // nunca se sumaron. Para entradas legacy (sin cantidadBuena) caemos a cantidad.
-      const cantidadParaRevertir = entrada.cantidadBuena ?? entrada.cantidad;
-      const productRef = doc(db, 'products', entrada.productId);
-      const productUpdate = {
-        stockTotal: increment(-cantidadParaRevertir),
-        updatedAt: serverTimestamp()
-      };
+      // Guard de doble anulación: releer la entrada fresca. El botón se oculta
+      // en la UI, pero dos pantallas desincronizadas podían anular dos veces y
+      // revertir el stock doble.
+      const entradaRef = doc(db, 'stockEntries', entrada.id);
+      const entradaSnap = await getDoc(entradaRef);
+      if (!entradaSnap.exists() || entradaSnap.data().anulada === true) {
+        alert('⚠️ Esta entrada ya fue anulada (o ya no existe). Recarga la página para actualizar la lista.');
+        return;
+      }
 
-      // Calcular cuánto stock reservado hay que revertir
+      // Lo efectivamente revertido en los pedidos — las reservas del producto
+      // se descuentan con estos montos, no con los nominales de la entrada.
       let cantidadReservadaPedidos = 0;
       let cantidadReservadaB2B = 0;
 
+      // 1. Revertir asignaciones a pedidos
+      // Bug 10: agrupar por pedido y aplicar todas las reversiones sobre UNA sola
+      // lectura/escritura por documento. Con 2+ asignaciones al mismo pedido, cada
+      // batch.update pisaba al anterior (la relectura no ve writes staged del batch)
+      // y se perdía una reversión mientras las reservas se decrementaban por ambas.
       if (entrada.asignaciones && entrada.asignaciones.length > 0) {
-        entrada.asignaciones.forEach(asig => {
-          // Bug 9: entradas legacy no tienen `tipo` — eran todas POS antes de B2B.
-          const tipo = asig.tipo || 'pedido';
-          if (tipo === 'pedido') {
-            cantidadReservadaPedidos += asig.cantidad;
-          } else if (tipo === 'pedido_b2b') {
-            cantidadReservadaB2B += asig.cantidad;
-          }
-        });
-
-        if (cantidadReservadaPedidos > 0) {
-          productUpdate.stockReservadoPedidos = increment(-cantidadReservadaPedidos);
-        }
-        if (cantidadReservadaB2B > 0) {
-          productUpdate.stockReservadoB2B = increment(-cantidadReservadaB2B);
-        }
-      }
-
-      batch.update(productRef, productUpdate);
-
-      // 2. Revertir asignaciones a pedidos
-      if (entrada.asignaciones && entrada.asignaciones.length > 0) {
+        const asignacionesPorPedido = new Map();
         for (const asig of entrada.asignaciones) {
           const tipo = asig.tipo || 'pedido'; // Bug 9: legacy
-          // Reconstruye los identificadores para el matching. Las entradas viejas no
-          // los persistían, así que caemos a los datos top-level de la entrada.
-          const asigForMatching = (asig.referencia || asig.productoId || asig.descripcion)
-            ? asig
-            : {
-                ...asig,
-                referencia: entrada.referencia,
-                talla: entrada.talla,
-                productoId: entrada.productId,
-                descripcion: entrada.nombre
-              };
+          const key = `${tipo}:${asig.pedidoId}`;
+          if (!asignacionesPorPedido.has(key)) {
+            asignacionesPorPedido.set(key, { tipo, pedidoId: asig.pedidoId, asigs: [] });
+          }
+          asignacionesPorPedido.get(key).asigs.push(asig);
+        }
 
+        // Reconstruye los identificadores para el matching. Las entradas viejas no
+        // los persistían, así que caemos a los datos top-level de la entrada.
+        const conMatching = (asig) => (asig.referencia || asig.productoId || asig.descripcion)
+          ? asig
+          : {
+              ...asig,
+              referencia: entrada.referencia,
+              talla: entrada.talla,
+              productoId: entrada.productId,
+              descripcion: entrada.nombre
+            };
+
+        for (const { tipo, pedidoId, asigs } of asignacionesPorPedido.values()) {
           if (tipo === 'pedido') {
             // PEDIDO POS
-            const pedidoRef = doc(db, 'pedidos', asig.pedidoId);
+            const pedidoRef = doc(db, 'pedidos', pedidoId);
             const pedidoSnap = await getDoc(pedidoRef);
+            if (!pedidoSnap.exists()) continue;
 
-            if (pedidoSnap.exists()) {
-              const pedidoData = pedidoSnap.data();
-              const updatedItems = [...pedidoData.items];
+            const pedidoData = pedidoSnap.data();
+            // Pedido anulado/cancelado: su anulación YA liberó la reserva del
+            // producto. Volver a restarla dejaría stockReservadoPedidos negativo
+            // → disponible inflado → sobreventa.
+            if (pedidoData.anulado === true ||
+                pedidoData.estadoGeneral === 'Anulado' ||
+                pedidoData.estadoGeneral === 'Cancelado') {
+              continue;
+            }
+
+            const updatedItems = [...(pedidoData.items || [])];
+            let huboCambios = false;
+
+            for (const asig of asigs) {
+              const asigForMatching = conMatching(asig);
 
               // Match con talla coercida + filtro anulado. Preferimos el row con
               // cantidadLista pendiente de revertir; si no hay, cae al primer match.
+              // Se excluye 'Cambio de Talla': el item muerto retiene cantidadLista
+              // pero su reserva ya se liberó al hacer el cambio.
               const matchItem = (item) =>
                 !item.anulado &&
+                item.estadoItem !== 'Cambio de Talla' &&
                 item.referencia === asigForMatching.referencia &&
                 String(item.talla) === String(asigForMatching.talla);
 
@@ -337,38 +346,55 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
               if (itemIndex === -1) {
                 itemIndex = updatedItems.findIndex(matchItem);
               }
+              if (itemIndex === -1) continue;
 
-              if (itemIndex !== -1) {
-                const item = updatedItems[itemIndex];
-                const nuevaCantidadLista = Math.max(0, (item.cantidadLista || 0) - asig.cantidad);
+              const item = updatedItems[itemIndex];
+              const cantidadListaActual = item.cantidadLista || 0;
+              const nuevaCantidadLista = Math.max(0, cantidadListaActual - asig.cantidad);
+              // Solo lo realmente descontado del item libera reserva — si el
+              // item ya fue entregado (lista=0), no hay nada que revertir.
+              const revertidoEfectivo = cantidadListaActual - nuevaCantidadLista;
+              if (revertidoEfectivo <= 0) continue;
 
-                // Determinar nuevo estado (stockLogic)
-                const nuevoEstado = calcularEstadoItemPOS({
-                  cantidad: item.cantidad,
-                  cantidadLista: nuevaCantidadLista,
-                  cantidadEntregada: item.cantidadEntregada || 0
-                });
+              // Determinar nuevo estado (stockLogic)
+              const nuevoEstado = calcularEstadoItemPOS({
+                cantidad: item.cantidad,
+                cantidadLista: nuevaCantidadLista,
+                cantidadEntregada: item.cantidadEntregada || 0
+              });
 
-                updatedItems[itemIndex] = {
-                  ...item,
-                  cantidadLista: nuevaCantidadLista,
-                  estadoItem: nuevoEstado
-                };
+              updatedItems[itemIndex] = {
+                ...item,
+                cantidadLista: nuevaCantidadLista,
+                estadoItem: nuevoEstado
+              };
+              huboCambios = true;
+              cantidadReservadaPedidos += revertidoEfectivo;
+            }
 
-                batch.update(pedidoRef, {
-                  items: updatedItems,
-                  updatedAt: serverTimestamp()
-                });
-              }
+            if (huboCambios) {
+              batch.update(pedidoRef, {
+                items: updatedItems,
+                updatedAt: serverTimestamp()
+              });
             }
           } else if (tipo === 'pedido_b2b') {
             // PEDIDO B2B
-            const pedidoRef = doc(db, 'pedidos_b2b', asig.pedidoId);
+            const pedidoRef = doc(db, 'pedidos_b2b', pedidoId);
             const pedidoSnap = await getDoc(pedidoRef);
+            if (!pedidoSnap.exists()) continue;
 
-            if (pedidoSnap.exists()) {
-              const pedidoData = pedidoSnap.data();
-              const updatedProductos = [...pedidoData.productos];
+            const pedidoData = pedidoSnap.data();
+            // Igual que POS: la anulación del pedido B2B ya liberó su reserva.
+            if (pedidoData.anulado === true || pedidoData.estado === 'Anulado') {
+              continue;
+            }
+
+            const updatedProductos = [...(pedidoData.productos || [])];
+            let huboCambios = false;
+
+            for (const asig of asigs) {
+              const asigForMatching = conMatching(asig);
 
               // Preferimos el row con alistamiento pendiente de revertir. Si todos
               // los matches están en 0 (porque ya se hizo envío que consumió la
@@ -382,34 +408,65 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
                   productoB2BCoincideConAsignacion(p, asigForMatching)
                 );
               }
+              if (prodIndex === -1) continue;
 
-              if (prodIndex !== -1) {
-                const producto = updatedProductos[prodIndex];
-                const cantidadEnviadaProd = producto.cantidadEnviada || 0;
-                const nuevaAlistadaActual = Math.max(0, (producto.cantidadAlistadaActual ?? Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviadaProd)) - asig.cantidad);
-                const nuevaAlistadaTotal = Math.max(0, (producto.cantidadAlistadaTotal ?? (producto.cantidadAlistada || 0)) - asig.cantidad);
-                const totalPreparado = nuevaAlistadaActual + cantidadEnviadaProd;
+              const producto = updatedProductos[prodIndex];
+              const cantidadEnviadaProd = producto.cantidadEnviada || 0;
+              const alistadaVieja = producto.cantidadAlistadaActual ?? Math.max(0, (producto.cantidadAlistada || 0) - cantidadEnviadaProd);
+              const nuevaAlistadaActual = Math.max(0, alistadaVieja - asig.cantidad);
+              const nuevaAlistadaTotal = Math.max(0, (producto.cantidadAlistadaTotal ?? (producto.cantidadAlistada || 0)) - asig.cantidad);
+              const totalPreparado = nuevaAlistadaActual + cantidadEnviadaProd;
 
-                updatedProductos[prodIndex] = {
-                  ...producto,
-                  cantidadAlistadaActual: nuevaAlistadaActual,
-                  cantidadAlistadaTotal: nuevaAlistadaTotal,
-                  cantidadAlistada: totalPreparado, // compat
-                  estadoProduccion: totalPreparado >= producto.cantidad ? 'alistado' : (totalPreparado > 0 ? 'en_produccion' : 'pendiente')
-                };
+              updatedProductos[prodIndex] = {
+                ...producto,
+                cantidadAlistadaActual: nuevaAlistadaActual,
+                cantidadAlistadaTotal: nuevaAlistadaTotal,
+                cantidadAlistada: totalPreparado, // compat
+                estadoProduccion: totalPreparado >= producto.cantidad ? 'alistado' : (totalPreparado > 0 ? 'en_produccion' : 'pendiente')
+              };
+              huboCambios = true;
+              // Solo lo realmente descontado de la alistada libera reserva
+              cantidadReservadaB2B += alistadaVieja - nuevaAlistadaActual;
+            }
 
-                batch.update(pedidoRef, {
-                  productos: updatedProductos,
-                  updatedAt: serverTimestamp()
-                });
-              }
+            if (huboCambios) {
+              batch.update(pedidoRef, {
+                productos: updatedProductos,
+                updatedAt: serverTimestamp()
+              });
             }
           }
         }
       }
 
+      // 2. Revertir stock del producto con montos efectivos y piso en 0 (lectura fresca).
+      // Bug 3: solo revertir lo que realmente entró al stockTotal — las defectuosas
+      // nunca se sumaron. Para entradas legacy (sin cantidadBuena) caemos a cantidad.
+      const productRef = doc(db, 'products', entrada.productId);
+      const productSnap = await getDoc(productRef);
+      let cantidadParaRevertir = entrada.cantidadBuena ?? entrada.cantidad;
+      if (productSnap.exists()) {
+        const prodData = productSnap.data() || {};
+        // Piso en 0: si parte de lo entrado ya salió (venta/entrega), no dejar
+        // stockTotal ni reservas en negativo.
+        cantidadParaRevertir = Math.min(cantidadParaRevertir, prodData.stockTotal || 0);
+        const reservaPedidosARevertir = Math.min(cantidadReservadaPedidos, prodData.stockReservadoPedidos || 0);
+        const reservaB2BARevertir = Math.min(cantidadReservadaB2B, prodData.stockReservadoB2B || 0);
+
+        const productUpdate = {
+          stockTotal: increment(-cantidadParaRevertir),
+          updatedAt: serverTimestamp()
+        };
+        if (reservaPedidosARevertir > 0) {
+          productUpdate.stockReservadoPedidos = increment(-reservaPedidosARevertir);
+        }
+        if (reservaB2BARevertir > 0) {
+          productUpdate.stockReservadoB2B = increment(-reservaB2BARevertir);
+        }
+        batch.update(productRef, productUpdate);
+      }
+
       // 3. Marcar la entrada como anulada
-      const entradaRef = doc(db, 'stockEntries', entrada.id);
       batch.update(entradaRef, {
         anulada: true,
         fechaAnulacion: serverTimestamp(),
@@ -433,7 +490,7 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
 
       await batch.commit();
 
-      alert(`✅ Entrada anulada exitosamente.\n\nSe han revertido:\n- Stock del producto: -${entrada.cantidad} unidades\n${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignación(es) a pedidos` : ''}`);
+      alert(`✅ Entrada anulada exitosamente.\n\nSe han revertido:\n- Stock del producto: -${cantidadParaRevertir} unidades\n${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignación(es) a pedidos` : ''}`);
 
       // Recargar datos
       await fetchEntradas();
@@ -529,8 +586,10 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
         const estadoGeneral = pedido.estadoGeneral;
         const items = pedido.items || [];
 
-        // Saltar pedidos anulados o cancelados
-        if (estadoGeneral === 'Anulado' || estadoGeneral === 'Cancelado') {
+        // Saltar pedidos anulados o cancelados. Verificar TAMBIÉN el flag `anulado`:
+        // hay pedidos legacy anulados con estadoGeneral desactualizado (ej. "En Proceso")
+        // que de otro modo se contarían como activos (anti-patrón #1).
+        if (pedido.anulado === true || estadoGeneral === 'Anulado' || estadoGeneral === 'Cancelado') {
           return;
         }
 
@@ -554,6 +613,14 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
           if (anulado) {
             itemsAnulados++;
             return; // Items anulados no cuentan
+          }
+
+          // Items reemplazados por cambio de talla tampoco cuentan: no llevan
+          // anulado=true pero su pendiente/reserva ya se liberó al hacer el
+          // cambio (el resto del repo los filtra por este estado).
+          if (estadoItem === 'Cambio de Talla') {
+            itemsAnulados++;
+            return;
           }
 
           if (estadoItem === 'En Producción') itemsEnProduccion++;
@@ -1020,7 +1087,10 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
           stockReservadoPedidos: 0,
           stockReservadoApartados: 0,
           stockReservadoB2B: 0,
-          createdAt: serverTimestamp()
+          createdAt: serverTimestamp(),
+          // Sin updatedAt inicial, el guard de concurrencia optimista de la
+          // edición se salta entero para este producto
+          updatedAt: serverTimestamp()
         });
         alert('Producto guardado correctamente.');
       }
@@ -1091,14 +1161,16 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
     const pedidosB2BRef = [];
     const apartadosRef = [];
 
-    // Pedidos POS — excluir Anulado/Cancelado
+    // Pedidos POS — excluir Anulado/Cancelado (también por flag: hay pedidos
+    // legacy anulados con estadoGeneral desactualizado, anti-patrón #1)
     const pedidosSnap = await getDocs(collection(db, 'pedidos'));
     pedidosSnap.forEach(docSnap => {
       const pedido = docSnap.data();
-      if (pedido.estadoGeneral === 'Anulado' || pedido.estadoGeneral === 'Cancelado') return;
+      if (pedido.anulado === true || pedido.estadoGeneral === 'Anulado' || pedido.estadoGeneral === 'Cancelado') return;
       const items = pedido.items || [];
       const tieneRef = items.some(item =>
-        item.productoId === productoId && !item.anulado && item.estadoItem !== 'Entregado'
+        item.productoId === productoId && !item.anulado &&
+        item.estadoItem !== 'Entregado' && item.estadoItem !== 'Cambio de Talla'
       );
       if (tieneRef) pedidosRef.push(`#${String(pedido.numeroPedido || '?').padStart(4, '0')}`);
     });
@@ -1195,11 +1267,16 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
         }
       });
 
-      // Preparar batch y contadores
-      const batch = writeBatch(db);
+      // Preparar batches y contadores. Firestore limita 500 escrituras por
+      // batch — chunkear igual que el recálculo para que archivos grandes
+      // no revienten el commit completo.
+      const BATCH_LIMIT = 450;
+      const batches = [writeBatch(db)];
+      let opsEnBatchActual = 0;
       let nuevosProductos = 0;
       let omitidosPorDuplicado = 0;
       let omitidosPorColegio = 0;
+      let omitidosPorDatosInvalidos = 0;
 
       // Procesar cada fila del Excel
       jsonData.forEach((row) => {
@@ -1224,32 +1301,52 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
           return;
         }
 
+        // VALIDACIÓN 3: números válidos — un typo en Excel guardaría NaN,
+        // los increment() posteriores lo propagan y el producto queda roto
+        const precio = Number(row.PRECIO || 0);
+        const precioB2B = Number(row.PRECIO_B2B || 0);
+        const stockTotal = Number(row.STOCK_TOTAL || 0);
+        if (Number.isNaN(precio) || Number.isNaN(precioB2B) || Number.isNaN(stockTotal)) {
+          omitidosPorDatosInvalidos++;
+          return;
+        }
+
         // Añadir al Set para evitar duplicados en el mismo archivo
         referenciasSet.add(referencia);
 
-        // Crear el nuevo producto
+        // Crear el nuevo producto (mismos campos que la creación por modal)
+        if (opsEnBatchActual >= BATCH_LIMIT) {
+          batches.push(writeBatch(db));
+          opsEnBatchActual = 0;
+        }
         const newProductRef = doc(collection(db, 'products'));
-        batch.set(newProductRef, {
+        batches[batches.length - 1].set(newProductRef, {
           referencia: referencia,
           nombre: String(row.NOMBRE || '').trim(),
           colegio: codigoColegio, // Guardamos el CÓDIGO del colegio
           talla: String(row.TALLA || '').trim(),
           tipo: String(row.TIPO || 'diario').toLowerCase(),
-          precio: Number(row.PRECIO || 0),
-          stockTotal: Number(row.STOCK_TOTAL || 0),
+          precio: precio,
+          precioB2B: precioB2B,
+          stockTotal: stockTotal,
           stockReservadoPedidos: 0,
           stockReservadoApartados: 0,
           stockReservadoB2B: 0,
+          totalPrendasPedidas: 0,
           esB2B: row.ES_B2B === 'SI' || row.ES_B2B === 'si' || row.ES_B2B === true || row.ES_B2B === 1,
-          createdAt: serverTimestamp()
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
         });
+        opsEnBatchActual++;
 
         nuevosProductos++;
       });
 
-      // Ejecutar el batch
+      // Ejecutar los batches
       if (nuevosProductos > 0) {
-        await batch.commit();
+        for (const batchChunk of batches) {
+          await batchChunk.commit();
+        }
       }
 
       // Recargar la lista de productos
@@ -1260,7 +1357,8 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
         `Importación completada:\n` +
         `- Nuevos productos añadidos: ${nuevosProductos}\n` +
         `- Omitidos por REFERENCIA duplicada: ${omitidosPorDuplicado}\n` +
-        `- Omitidos por CÓDIGO de colegio no válido: ${omitidosPorColegio}`
+        `- Omitidos por CÓDIGO de colegio no válido: ${omitidosPorColegio}\n` +
+        `- Omitidos por PRECIO/STOCK no numérico: ${omitidosPorDatosInvalidos}`
       );
 
       // Limpiar el input file

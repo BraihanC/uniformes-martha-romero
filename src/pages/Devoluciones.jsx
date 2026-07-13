@@ -29,7 +29,9 @@ import {
 import {
   calcularValorDevuelto as calcValorDevuelto,
   calcularValorProductosNuevos,
-  calcularDiferenciaCambio
+  calcularDiferenciaCambio,
+  cantidadYaDevuelta,
+  cantidadDisponibleDevolver
 } from '../utils/devolucionesLogic';
 
 const Devoluciones = () => {
@@ -209,8 +211,10 @@ const Devoluciones = () => {
   const handleToggleItem = (index) => {
     const item = facturaEncontrada.items[index];
 
-    // No permitir seleccionar items ya procesados
-    if (item.estadoDevolucion) {
+    // Bloquear solo si el item está anulado (BuscadorFacturas ya reingresó su
+    // stock) o si ya no quedan unidades por devolver. Las devoluciones parciales
+    // dejan saldo devolvible: se permiten hasta completar la cantidad vendida.
+    if (item.anulado || cantidadDisponibleDevolver(item) <= 0) {
       return;
     }
 
@@ -224,10 +228,10 @@ const Devoluciones = () => {
       setCantidadesDevueltas(newCantidades);
     } else {
       setItemsSeleccionados([...itemsSeleccionados, index]);
-      // Establecer la cantidad por defecto como la cantidad total del item
+      // Cantidad por defecto = lo que aún queda por devolver (no la total)
       setCantidadesDevueltas({
         ...cantidadesDevueltas,
-        [index]: item.cantidad
+        [index]: cantidadDisponibleDevolver(item)
       });
     }
   };
@@ -240,9 +244,11 @@ const Devoluciones = () => {
     const item = facturaEncontrada.items[index];
     const cantidadNum = parseInt(cantidad) || 0;
 
-    // Validar que no sea mayor a la cantidad original
-    if (cantidadNum > item.cantidad) {
-      alert(`La cantidad máxima es ${item.cantidad}`);
+    // Validar que no supere lo que aún queda por devolver (no la cantidad total,
+    // que podría incluir unidades ya devueltas en operaciones anteriores)
+    const maxDevolvible = cantidadDisponibleDevolver(item);
+    if (cantidadNum > maxDevolvible) {
+      alert(`La cantidad máxima que puedes devolver es ${maxDevolvible}`);
       return;
     }
 
@@ -291,7 +297,7 @@ const Devoluciones = () => {
       const batch = writeBatch(db);
       const itemsDevueltos = itemsSeleccionados.map(index => {
         const item = facturaEncontrada.items[index];
-        const cantidadDevuelta = cantidadesDevueltas[index] || item.cantidad;
+        const cantidadDevuelta = cantidadesDevueltas[index] || cantidadDisponibleDevolver(item);
         return {
           ...item,
           cantidad: cantidadDevuelta, // Usar la cantidad devuelta
@@ -303,12 +309,17 @@ const Devoluciones = () => {
       // Actualizar stock
       for (const item of itemsDevueltos) {
         const productoId = item.productoId || item.product?.id;
+        // Líneas de servicio/arreglo sin productoId: no tienen stock que reingresar.
+        // Sin este guard, doc(db,'products',undefined) revienta el batch completo
+        // (simetría con el flujo de cambio, que ya lo contempla).
+        if (!productoId) continue;
         const productoRef = doc(db, 'products', productoId);
 
         // Si es defecto de fabricación o defecto en prenda, va a stock defectuoso y a reparación
         if (item.razon === 'Defecto de fabricación' || item.razon === 'Defecto en prenda') {
           batch.update(productoRef, {
             stockDefectuoso: increment(item.cantidad),
+            updatedAt: serverTimestamp(),
             historialDefectos: arrayUnion({
               fecha: new Date().toISOString(),
               cantidad: item.cantidad,
@@ -342,7 +353,8 @@ const Devoluciones = () => {
         } else {
           // Si no es defecto, vuelve al stock normal
           batch.update(productoRef, {
-            stockTotal: increment(item.cantidad)
+            stockTotal: increment(item.cantidad),
+            updatedAt: serverTimestamp()
           });
         }
       }
@@ -365,12 +377,20 @@ const Devoluciones = () => {
       };
       batch.set(devolucionRef, devolucionData);
 
-      // Marcar items como devueltos en la factura original
+      // Marcar items en la factura original acumulando la cantidad devuelta.
+      // estadoDevolucion queda 'parcial' mientras quede saldo (permite seguir
+      // devolviendo), o 'devuelto' al completar. Se deja SIEMPRE puesto para que
+      // BuscadorFacturas bloquee anular/corregir esa línea (evita doble reingreso).
       const itemsActualizados = [...facturaEncontrada.items];
       itemsSeleccionados.forEach(index => {
+        const item = itemsActualizados[index];
+        const devueltaAhora = cantidadesDevueltas[index] || cantidadDisponibleDevolver(item);
+        const nuevaCantidadDevuelta = cantidadYaDevuelta(item) + devueltaAhora;
+        const completo = nuevaCantidadDevuelta >= (item.cantidad || 0);
         itemsActualizados[index] = {
-          ...itemsActualizados[index],
-          estadoDevolucion: 'devuelto',
+          ...item,
+          cantidadDevuelta: nuevaCantidadDevuelta,
+          estadoDevolucion: completo ? 'devuelto' : 'parcial',
           fechaDevolucion: new Date(),
           devolucionId: devolucionRef.id
         };
@@ -378,7 +398,8 @@ const Devoluciones = () => {
 
       const facturaRef = doc(db, 'sales', facturaEncontrada.id);
       batch.update(facturaRef, {
-        items: itemsActualizados
+        items: itemsActualizados,
+        updatedAt: serverTimestamp()
       });
 
       // 4. (NUEVO) Registrar Transacción de Egreso (Devolución)
@@ -409,6 +430,22 @@ const Devoluciones = () => {
         userId: currentUser.uid
       });
 
+      // Concurrencia optimista (mismo patrón que BuscadorFacturas): si la factura
+      // cambió desde que se cargó — otra devolución/cambio, o una anulación de
+      // línea en BuscadorFacturas — abortamos para no pisar con datos stale ni
+      // duplicar reingresos de stock. Los sales legacy sin updatedAt se saltan.
+      const originalUpdatedAt = facturaEncontrada.updatedAt;
+      if (originalUpdatedAt?.toMillis) {
+        const freshSnap = await getDoc(facturaRef);
+        if (!freshSnap.exists()) {
+          throw new Error('La factura ya no existe en el sistema.');
+        }
+        const freshUpdatedAt = freshSnap.data().updatedAt;
+        if (freshUpdatedAt?.toMillis && freshUpdatedAt.toMillis() !== originalUpdatedAt.toMillis()) {
+          throw new Error('Otro usuario modificó esta factura mientras la tenías abierta. Recarga la factura y vuelve a intentar.');
+        }
+      }
+
       await batch.commit();
 
       // Actualizar estado local de la factura
@@ -428,7 +465,7 @@ const Devoluciones = () => {
 
     } catch (error) {
       console.error('Error al registrar devolución:', error);
-      alert('Error al registrar devolución');
+      alert('Error al registrar devolución.\n\n' + (error.message || ''));
     } finally {
       setProcesandoDevolucion(false);
     }
@@ -540,7 +577,7 @@ const Devoluciones = () => {
       const batch = writeBatch(db);
       const itemsDevueltos = itemsSeleccionados.map(index => {
         const item = facturaEncontrada.items[index];
-        const cantidadDevuelta = cantidadesDevueltas[index] || item.cantidad;
+        const cantidadDevuelta = cantidadesDevueltas[index] || cantidadDisponibleDevolver(item);
         return {
           ...item,
           cantidad: cantidadDevuelta, // Usar la cantidad devuelta
@@ -565,6 +602,7 @@ const Devoluciones = () => {
         if (item.razon === 'Defecto de fabricación' || item.razon === 'Defecto en prenda') {
           batch.update(productoRef, {
             stockDefectuoso: increment(item.cantidad),
+            updatedAt: serverTimestamp(),
             historialDefectos: arrayUnion({
               fecha: new Date().toISOString(),
               cantidad: item.cantidad,
@@ -598,7 +636,8 @@ const Devoluciones = () => {
         } else {
           // Si no es defecto, vuelve al stock normal
           batch.update(productoRef, {
-            stockTotal: increment(item.cantidad)
+            stockTotal: increment(item.cantidad),
+            updatedAt: serverTimestamp()
           });
         }
       }
@@ -636,7 +675,8 @@ const Devoluciones = () => {
       for (const item of productosNuevos) {
         const productoRef = doc(db, 'products', item.id);
         batch.update(productoRef, {
-          stockTotal: increment(-item.cantidad)
+          stockTotal: increment(-item.cantidad),
+          updatedAt: serverTimestamp()
         });
       }
 
@@ -674,12 +714,19 @@ const Devoluciones = () => {
       };
       batch.set(cambioRef, cambioData);
 
-      // Marcar items como cambiados en la factura original
+      // Marcar items en la factura acumulando la cantidad cambiada (misma
+      // mecánica que la devolución: 'parcial' mientras quede saldo, 'cambiado'
+      // al completar; el flag siempre puesto protege la línea en BuscadorFacturas).
       const itemsActualizados = [...facturaEncontrada.items];
       itemsSeleccionados.forEach(index => {
+        const item = itemsActualizados[index];
+        const cambiadaAhora = cantidadesDevueltas[index] || cantidadDisponibleDevolver(item);
+        const nuevaCantidadDevuelta = cantidadYaDevuelta(item) + cambiadaAhora;
+        const completo = nuevaCantidadDevuelta >= (item.cantidad || 0);
         itemsActualizados[index] = {
-          ...itemsActualizados[index],
-          estadoDevolucion: 'cambiado',
+          ...item,
+          cantidadDevuelta: nuevaCantidadDevuelta,
+          estadoDevolucion: completo ? 'cambiado' : 'parcial',
           fechaCambio: new Date(),
           cambioId: cambioRef.id
         };
@@ -687,7 +734,8 @@ const Devoluciones = () => {
 
       const facturaRef = doc(db, 'sales', facturaEncontrada.id);
       batch.update(facturaRef, {
-        items: itemsActualizados
+        items: itemsActualizados,
+        updatedAt: serverTimestamp()
       });
 
       // 4. (NUEVO) Registrar Transacción si hay diferencia
@@ -729,6 +777,21 @@ const Devoluciones = () => {
           fecha: serverTimestamp(),
           userId: currentUser.uid
         });
+      }
+
+      // Concurrencia optimista (mismo patrón que BuscadorFacturas): abortar si la
+      // factura cambió desde que se cargó, para no pisar cambios ajenos ni duplicar
+      // reingresos. Los sales legacy sin updatedAt se saltan.
+      const originalUpdatedAt = facturaEncontrada.updatedAt;
+      if (originalUpdatedAt?.toMillis) {
+        const freshSnap = await getDoc(facturaRef);
+        if (!freshSnap.exists()) {
+          throw new Error('La factura ya no existe en el sistema.');
+        }
+        const freshUpdatedAt = freshSnap.data().updatedAt;
+        if (freshUpdatedAt?.toMillis && freshUpdatedAt.toMillis() !== originalUpdatedAt.toMillis()) {
+          throw new Error('Otro usuario modificó esta factura mientras la tenías abierta. Recarga la factura y vuelve a intentar.');
+        }
       }
 
       await batch.commit();
@@ -865,7 +928,11 @@ const Devoluciones = () => {
               {/* Vista de Tarjetas - Solo Móvil */}
               <div className="md:hidden space-y-3">
                 {facturaEncontrada.items?.map((item, index) => {
-                  const yaProc = item.estadoDevolucion ? true : false;
+                  // "Agotado" = sin saldo devolvible (anulado o ya devuelto todo).
+                  // Un item parcialmente devuelto NO está agotado: sigue seleccionable.
+                  const disponibleDevolver = cantidadDisponibleDevolver(item);
+                  const yaDevueltoParcial = !item.anulado && cantidadYaDevuelta(item) > 0 && disponibleDevolver > 0;
+                  const yaProc = item.anulado || disponibleDevolver <= 0;
                   const isSelected = itemsSeleccionados.includes(index);
                   return (
                     <div
@@ -894,14 +961,21 @@ const Devoluciones = () => {
                               <p className="text-xs text-gray-600">
                                 Ref: {item.referencia || item.product?.referencia} | Talla: {item.talla}
                               </p>
+                              {yaDevueltoParcial && (
+                                <p className="text-xs text-amber-700 font-medium mt-0.5">
+                                  Ya devuelto: {cantidadYaDevuelta(item)} de {item.cantidad} · quedan {disponibleDevolver}
+                                </p>
+                              )}
                             </div>
                             {yaProc && (
                               <span className={`px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${
-                                item.estadoDevolucion === 'devuelto'
-                                  ? 'bg-red-100 text-red-800'
-                                  : 'bg-blue-100 text-blue-800'
+                                item.anulado
+                                  ? 'bg-gray-200 text-gray-700'
+                                  : item.estadoDevolucion === 'devuelto'
+                                    ? 'bg-red-100 text-red-800'
+                                    : 'bg-blue-100 text-blue-800'
                               }`}>
-                                {item.estadoDevolucion === 'devuelto' ? 'Devuelto' : 'Cambiado'}
+                                {item.anulado ? 'Anulado' : item.estadoDevolucion === 'devuelto' ? 'Devuelto' : 'Cambiado'}
                               </span>
                             )}
                           </div>
@@ -932,12 +1006,12 @@ const Devoluciones = () => {
                             <input
                               type="number"
                               min="1"
-                              max={item.cantidad}
-                              value={cantidadesDevueltas[index] || item.cantidad}
+                              max={disponibleDevolver}
+                              value={cantidadesDevueltas[index] || disponibleDevolver}
                               onChange={(e) => handleSetCantidadDevuelta(index, e.target.value)}
                               className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
                             />
-                            <p className="text-xs text-gray-500 mt-1">Máximo: {item.cantidad}</p>
+                            <p className="text-xs text-gray-500 mt-1">Máximo: {disponibleDevolver}</p>
                           </div>
                           <div>
                             <label className="block text-xs text-gray-600 mb-1">Razón:</label>
@@ -975,7 +1049,11 @@ const Devoluciones = () => {
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {facturaEncontrada.items?.map((item, index) => {
-                      const yaProc = item.estadoDevolucion ? true : false;
+                      // "Agotado" = sin saldo devolvible (anulado o ya devuelto todo).
+                  // Un item parcialmente devuelto NO está agotado: sigue seleccionable.
+                  const disponibleDevolver = cantidadDisponibleDevolver(item);
+                  const yaDevueltoParcial = !item.anulado && cantidadYaDevuelta(item) > 0 && disponibleDevolver > 0;
+                  const yaProc = item.anulado || disponibleDevolver <= 0;
                       return (
                         <tr
                           key={index}
@@ -1003,14 +1081,21 @@ const Devoluciones = () => {
                                 <p className="text-sm text-gray-600">
                                   Ref: {item.referencia || item.product?.referencia} | Talla: {item.talla}
                                 </p>
+                                {yaDevueltoParcial && (
+                                  <p className="text-xs text-amber-700 font-medium mt-0.5">
+                                    Ya devuelto: {cantidadYaDevuelta(item)} de {item.cantidad} · quedan {disponibleDevolver}
+                                  </p>
+                                )}
                               </div>
                               {yaProc && (
                                 <span className={`ml-2 px-2 py-1 rounded-full text-xs font-semibold ${
-                                  item.estadoDevolucion === 'devuelto'
-                                    ? 'bg-red-100 text-red-800'
-                                    : 'bg-blue-100 text-blue-800'
+                                  item.anulado
+                                    ? 'bg-gray-200 text-gray-700'
+                                    : item.estadoDevolucion === 'devuelto'
+                                      ? 'bg-red-100 text-red-800'
+                                      : 'bg-blue-100 text-blue-800'
                                 }`}>
-                                  {item.estadoDevolucion === 'devuelto' ? 'Devuelto' : 'Cambiado'}
+                                  {item.anulado ? 'Anulado' : item.estadoDevolucion === 'devuelto' ? 'Devuelto' : 'Cambiado'}
                                 </span>
                               )}
                             </div>
@@ -1022,12 +1107,12 @@ const Devoluciones = () => {
                                 <input
                                   type="number"
                                   min="1"
-                                  max={item.cantidad}
-                                  value={cantidadesDevueltas[index] || item.cantidad}
+                                  max={disponibleDevolver}
+                                  value={cantidadesDevueltas[index] || disponibleDevolver}
                                   onChange={(e) => handleSetCantidadDevuelta(index, e.target.value)}
                                   className="w-20 px-2 py-1 border border-gray-300 rounded text-center text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
                                 />
-                                <span className="text-xs text-gray-500">Máx: {item.cantidad}</span>
+                                <span className="text-xs text-gray-500">Máx: {disponibleDevolver}</span>
                               </div>
                             ) : (
                               <span className="text-gray-500">-</span>
@@ -1309,7 +1394,7 @@ const Devoluciones = () => {
                       <tbody className="divide-y divide-gray-200">
                         {itemsSeleccionados.map(index => {
                           const item = facturaEncontrada.items[index];
-                          const cantidadDevuelta = cantidadesDevueltas[index] || item.cantidad;
+                          const cantidadDevuelta = cantidadesDevueltas[index] || cantidadDisponibleDevolver(item);
                           return (
                             <tr key={index}>
                               <td className="px-4 py-2">
@@ -1443,7 +1528,7 @@ const Devoluciones = () => {
                         <tbody className="divide-y divide-gray-200">
                           {itemsSeleccionados.map(index => {
                             const item = facturaEncontrada.items[index];
-                            const cantidadDevuelta = cantidadesDevueltas[index] || item.cantidad;
+                            const cantidadDevuelta = cantidadesDevueltas[index] || cantidadDisponibleDevolver(item);
                             return (
                               <tr key={index}>
                                 <td className="px-3 py-2">

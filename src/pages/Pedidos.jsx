@@ -27,8 +27,10 @@ import {
   calcularSaldoRequerido,
   calcularUpdatedItems,
   calcularEstadoGeneral,
+  calcularEstadoCorrectoPedido,
   esItemInactivo,
 } from '../utils/pedidosLogic';
+import { calcularEstadoItemPOS } from '../utils/stockLogic';
 
 const Pedidos = () => {
   const { currentUser, isAdmin } = useAuth();
@@ -228,30 +230,8 @@ const Pedidos = () => {
     }
   };
 
-  // Función pura: deriva el estadoGeneral correcto a partir de los ítems del pedido.
-  // No hace lecturas ni escrituras a Firestore.
-  const calcularEstadoCorrectoPedido = (pedido) => {
-    if (!pedido.items || pedido.items.length === 0) return pedido.estadoGeneral;
-
-    // Excluir ítems anulados y registros de cambio de talla (no son entregables)
-    const itemsActivos = pedido.items.filter(
-      item => !item.anulado && item.estadoItem !== 'Cambio de Talla'
-    );
-    if (itemsActivos.length === 0) return pedido.estadoGeneral;
-
-    const todosEntregados = itemsActivos.every(item => item.estadoItem === 'Entregado');
-    const anyInProduction = itemsActivos.some(item => item.estadoItem === 'En Producción');
-    const allReadyOrDelivered = itemsActivos.every(
-      item => item.estadoItem === 'Listo para Entrega' ||
-              item.estadoItem === 'Entregado' ||
-              item.estadoItem === 'Parcialmente Listo'
-    );
-
-    if (todosEntregados) return 'Entregado';
-    if (anyInProduction) return 'En Proceso';
-    if (allReadyOrDelivered) return 'Pedido Completo - Listo para Recoger';
-    return pedido.estadoGeneral;
-  };
+  // calcularEstadoCorrectoPedido: lógica pura extraída a utils/pedidosLogic.js
+  // (con tests de regresión). Importada arriba.
 
   // Persiste correcciones de estado a Firestore sin re-fetch.
   // Solo se llama una vez por sesión de navegador.
@@ -386,6 +366,20 @@ const Pedidos = () => {
   }, [productSearchTerm, allProducts, selectedColegioId, allColegios]);
 
   // Funciones para el formulario de creación
+  // Guard compartido: bloquea operaciones de gestión sobre pedidos anulados.
+  // Un pedido anulado ya liberó sus reservas y revirtió sus abonos — cualquier
+  // mutación posterior (entrega, abono, corrección, cambio de talla) volvería
+  // a descontar stock o dinero que ya fue liberado.
+  const bloquearSiPedidoAnulado = (pedido) => {
+    if (pedido?.anulado === true ||
+        pedido?.estadoGeneral === 'Anulado' ||
+        pedido?.estadoGeneral === 'Cancelado') {
+      alert('⚠️ Este pedido está ANULADO/CANCELADO.\n\nNo se pueden registrar operaciones sobre él. Cierra el modal y recarga la página si el estado no coincide.');
+      return true;
+    }
+    return false;
+  };
+
   const handleSelectClient = (client) => {
     setSelectedClient(client);
     setClientSearchTerm('');
@@ -875,6 +869,7 @@ const Pedidos = () => {
 
   const confirmarEntrega = async () => {
     if (!selectedPedido) return;
+    if (bloquearSiPedidoAnulado(selectedPedido)) return;
 
     // Prevenir doble clic
     if (registrandoEntrega) return;
@@ -1056,6 +1051,16 @@ const Pedidos = () => {
 
         // ── VALIDACIONES (sin I/O) ───────────────────────────────────────────
         const pedidoFresco = pedidoDoc.data();
+
+        // Chequeo autoritativo con datos frescos: si otro usuario anuló el
+        // pedido mientras este modal estaba abierto, entregar descontaría
+        // stock/reservas que la anulación ya liberó.
+        if (pedidoFresco.anulado === true ||
+            pedidoFresco.estadoGeneral === 'Anulado' ||
+            pedidoFresco.estadoGeneral === 'Cancelado') {
+          throw new Error('El pedido fue ANULADO por otro usuario. Recarga la página.');
+        }
+
         for (const index of selectedItemsForDelivery) {
           const itemFresco = (pedidoFresco.items || [])[index];
           if (!itemFresco) continue;
@@ -1255,6 +1260,7 @@ const Pedidos = () => {
     e.preventDefault();
 
     if (!selectedPedido) return;
+    if (bloquearSiPedidoAnulado(selectedPedido)) return;
 
     const monto = Number(abonoAdicionalMonto);
     if (monto <= 0) {
@@ -1351,6 +1357,7 @@ const Pedidos = () => {
     if (!selectedPedido || itemIndexToCorrect === null) {
       return;
     }
+    if (bloquearSiPedidoAnulado(selectedPedido)) return;
 
     if (!notasCorreccion.trim()) {
       alert('Por favor, ingresa las notas explicando el motivo de la corrección.');
@@ -1366,6 +1373,14 @@ const Pedidos = () => {
 
     const itemActual = selectedPedido.items[itemIndexToCorrect];
     const cantidadAnterior = itemActual.cantidad;
+
+    // No permitir corregir por debajo de lo ya entregado — el item quedaría
+    // con más unidades entregadas que pedidas.
+    const cantidadYaEntregadaCorr = itemActual.cantidadEntregada || 0;
+    if (cantidadNueva < cantidadYaEntregadaCorr) {
+      alert(`No puedes corregir la cantidad a ${cantidadNueva}: ya se entregaron ${cantidadYaEntregadaCorr} unidad(es) de este producto.`);
+      return;
+    }
 
     // Si no se seleccionó producto nuevo, usar el actual
     const productoParaUsar = productoNuevoSeleccionado || itemActual;
@@ -1412,12 +1427,32 @@ const Pedidos = () => {
 
       // Producto a usar (nuevo o el mismo)
       const productoNuevoId = productoParaUsar.id || productoParaUsar.productoId || '';
-      const precioNuevo = productoParaUsar.precio || 0;
+      // Cadena de fallback para items legacy con solo precioUnitario (anti-patrón #3)
+      const precioNuevo = productoParaUsar.precio || productoParaUsar.precioUnitario || 0;
       const subtotalNuevo = (precioNuevo || 0) * (cantidadNueva || 0);
 
-      // Crear copia de items actualizada (preservando estadoItem)
-      const updatedItems = [...selectedPedido.items];
+      // Cantidades base para la aritmética de inventario y el item reescrito
+      // Bug 11: la "cantidad reservada" debe basarse en cantidadLista real, y como
+      // fallback en lo realmente pendiente (cantidad − cantidadEntregada), nunca en
+      // cantidad total — eso libera/reserva más de la cuenta para items con entregas.
       const estadoItemActual = itemActual.estadoItem || 'En Producción';
+      const cantidadEntregadaCorr = itemActual.cantidadEntregada || 0;
+      const cantidadPendienteCorr = Math.max(0, cantidadAnterior - cantidadEntregadaCorr);
+      const cantidadPendienteNueva = Math.max(0, cantidadNueva - cantidadEntregadaCorr);
+      const itemTieneStockReservado = estadoItemActual === 'Listo para Entrega' || estadoItemActual === 'Parcialmente Listo';
+      const cantidadReservadaActual = itemTieneStockReservado ? (itemActual.cantidadLista || cantidadPendienteCorr) : 0;
+      // La cantidadLista del item corregido: capeada a la nueva cantidad pendiente,
+      // igual que el ajuste de reserva del producto más abajo — item y producto
+      // deben contar lo mismo.
+      const nuevaCantidadListaItem = itemTieneStockReservado
+        ? Math.min(cantidadReservadaActual, cantidadPendienteNueva)
+        : (itemActual.cantidadLista || 0);
+
+      // Crear copia de items actualizada.
+      // El item reescrito PRESERVA cantidadEntregada/cantidadLista — antes se
+      // borraban y una entrega posterior descontaba stock por unidades ya
+      // entregadas (doble descuento físico y sobre-cobro).
+      const updatedItems = [...selectedPedido.items];
       updatedItems[itemIndexToCorrect] = {
         productoId: productoNuevoId || '',
         productoNombre: productoParaUsar.nombre || '',
@@ -1426,10 +1461,19 @@ const Pedidos = () => {
         referencia: productoParaUsar.referencia || '',
         talla: productoParaUsar.talla || '',
         precio: precioNuevo || 0,
+        precioUnitario: precioNuevo || 0, // alias que consumen Devoluciones/Apartados
         cantidad: cantidadNueva || 0,
         subtotal: subtotalNuevo || 0,
         categoria: productoParaUsar.categoria || '',
-        estadoItem: estadoItemActual // Preservar el estado
+        cantidadEntregada: cantidadEntregadaCorr,
+        cantidadLista: nuevaCantidadListaItem,
+        // El estado se deriva de las cantidades reales (si la cantidad subió,
+        // un item 'Listo para Entrega' pasa a 'Parcialmente Listo', etc.)
+        estadoItem: calcularEstadoItemPOS({
+          cantidad: cantidadNueva || 0,
+          cantidadLista: nuevaCantidadListaItem,
+          cantidadEntregada: cantidadEntregadaCorr
+        })
       };
 
       // Recalcular total del pedido (excluyendo items anulados y cambios de talla)
@@ -1437,16 +1481,6 @@ const Pedidos = () => {
         .filter(item => !item.anulado && item.estadoItem !== 'Cambio de Talla')
         .reduce((sum, item) => sum + (item.subtotal || 0), 0);
       const nuevoSaldoPendiente = Math.max(0, nuevoTotal - (selectedPedido.totalAbonado || 0));
-
-      // Ajustar inventario
-      // Bug 11: la "cantidad reservada" debe basarse en cantidadLista real, y como
-      // fallback en lo realmente pendiente (cantidad − cantidadEntregada), nunca en
-      // cantidad total — eso libera/reserva más de la cuenta para items con entregas.
-      const cantidadEntregadaCorr = itemActual.cantidadEntregada || 0;
-      const cantidadPendienteCorr = Math.max(0, cantidadAnterior - cantidadEntregadaCorr);
-      const cantidadPendienteNueva = Math.max(0, cantidadNueva - cantidadEntregadaCorr);
-      const itemTieneStockReservado = estadoItemActual === 'Listo para Entrega' || estadoItemActual === 'Parcialmente Listo';
-      const cantidadReservadaActual = itemTieneStockReservado ? (itemActual.cantidadLista || cantidadPendienteCorr) : 0;
 
       if (!cambioDeProducto) {
         // Mismo producto, solo cambió la cantidad
@@ -1615,6 +1649,7 @@ const Pedidos = () => {
     if (!selectedPedido || itemIndexToAnular === null) {
       return;
     }
+    if (bloquearSiPedidoAnulado(selectedPedido)) return;
 
     if (!motivoAnulacion.trim()) {
       alert('Por favor, ingresa el motivo de la anulación.');
@@ -1673,6 +1708,11 @@ const Pedidos = () => {
       const updatedItems = [...selectedPedido.items];
       const estadoItemActual = itemToAnular.estadoItem || 'En Producción';
       updatedItems[itemIndexToAnular] = {
+        // Preservar TODOS los campos del item (cantidadEntregada, cantidadLista,
+        // precioUnitario, etc.). Reescribirlo con una lista fija los borraba, y
+        // la restauración re-reservaba la cantidad completa mientras una entrega
+        // posterior descontaba stock por unidades ya entregadas.
+        ...itemToAnular,
         productoId: itemToAnular.productoId || '',
         productoNombre: itemToAnular.productoNombre || itemToAnular.nombre || '',
         nombre: itemToAnular.nombre || itemToAnular.productoNombre || '',
@@ -1802,6 +1842,7 @@ const Pedidos = () => {
 
   const handleRestaurarProducto = async (itemIndex) => {
     if (!selectedPedido) return;
+    if (bloquearSiPedidoAnulado(selectedPedido)) return;
 
     const itemToRestaurar = selectedPedido.items[itemIndex];
 
@@ -2028,6 +2069,7 @@ const Pedidos = () => {
 
   const handleCambiarTalla = async () => {
     if (!selectedPedido || itemIndexToCambiarTalla === null) return;
+    if (bloquearSiPedidoAnulado(selectedPedido)) return;
 
     const itemActual = selectedPedido.items[itemIndexToCambiarTalla];
 
@@ -2430,6 +2472,7 @@ const Pedidos = () => {
   // Función para cambiar la cantidad lista de un item
   const handleCambiarCantidadLista = async () => {
     if (!selectedPedido || itemIndexToCambiarEstado === null) return;
+    if (bloquearSiPedidoAnulado(selectedPedido)) return;
 
     const item = selectedPedido.items[itemIndexToCambiarEstado];
     const cantidadTotal = item.cantidad;
@@ -2665,15 +2708,21 @@ const Pedidos = () => {
 
   const handleAnularPedidoCompleto = async () => {
     if (!selectedPedido) return;
+    if (bloquearSiPedidoAnulado(selectedPedido)) return;
 
     if (!motivoAnularPedido.trim()) {
       alert('Por favor, ingresa el motivo de la anulación.');
       return;
     }
 
-    // Calcular totales para el mensaje de confirmación
+    // Calcular totales para el mensaje de confirmación.
+    // Se excluyen items 'Cambio de Talla': retienen cantidad/cantidadLista pero
+    // su pendiente y reserva ya se liberaron al hacer el cambio — volver a
+    // restarlos aquí descontaba totalPrendasPedidas dos veces.
     const totalAbonado = selectedPedido.totalAbonado || 0;
-    const itemsActivos = selectedPedido.items?.filter(item => !item.anulado) || [];
+    const itemsActivos = selectedPedido.items?.filter(
+      item => !item.anulado && item.estadoItem !== 'Cambio de Talla'
+    ) || [];
 
     const confirmar = window.confirm(
       `⚠️ ANULAR PEDIDO COMPLETO\n\n` +
@@ -2696,6 +2745,20 @@ const Pedidos = () => {
     try {
       const batch = writeBatch(db);
       const pedidoRef = doc(db, 'pedidos', selectedPedido.id);
+
+      // Guard de doble anulación con datos frescos: si otro usuario (u otra
+      // pestaña) ya lo anuló, repetir la anulación liberaría stock y crearía
+      // egresos de devolución por segunda vez.
+      const pedidoFrescoSnap = await getDoc(pedidoRef);
+      if (!pedidoFrescoSnap.exists()) {
+        alert('⚠️ El pedido ya no existe en la base de datos.');
+        return;
+      }
+      const pedidoFrescoData = pedidoFrescoSnap.data();
+      if (pedidoFrescoData.anulado === true || pedidoFrescoData.estadoGeneral === 'Anulado') {
+        alert('⚠️ Este pedido ya fue anulado por otro usuario. Recarga la página.');
+        return;
+      }
 
       // 1. Marcar pedido como anulado
       // saldoPendiente: 0 para que reportes no muestren deuda fantasma.

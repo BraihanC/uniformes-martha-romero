@@ -531,7 +531,8 @@ const BuscadorFacturas = () => {
         if (diferenciaCantidad !== 0) {
           const productoRef = doc(db, 'products', productoActualId);
           batch.update(productoRef, {
-            stockTotal: increment(-diferenciaCantidad) // Si aumentó cantidad, restar; si disminuyó, sumar
+            stockTotal: increment(-diferenciaCantidad), // Si aumentó cantidad, restar; si disminuyó, sumar
+            updatedAt: serverTimestamp()
           });
         }
       } else {
@@ -539,13 +540,15 @@ const BuscadorFacturas = () => {
         // Devolver stock del producto anterior
         const productoIncorrectoRef = doc(db, 'products', productoActualId);
         batch.update(productoIncorrectoRef, {
-          stockTotal: increment(cantidadAnterior) // Devolver el stock
+          stockTotal: increment(cantidadAnterior), // Devolver el stock
+          updatedAt: serverTimestamp()
         });
 
         // Descontar stock del producto nuevo
         const productoCorrectoRef = doc(db, 'products', productoNuevoId);
         batch.update(productoCorrectoRef, {
-          stockTotal: increment(-cantidadNueva) // Descontar el stock
+          stockTotal: increment(-cantidadNueva), // Descontar el stock
+          updatedAt: serverTimestamp()
         });
       }
 

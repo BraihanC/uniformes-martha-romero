@@ -37,3 +37,30 @@ export const calcularValorProductosNuevos = (productosNuevos = []) =>
  */
 export const calcularDiferenciaCambio = (valorNuevo, valorDevuelto) =>
   valorNuevo - valorDevuelto;
+
+/**
+ * Unidades ya devueltas/cambiadas de un item (acumulado histórico).
+ * Legacy: items procesados antes del contador `cantidadDevuelta` solo tienen
+ * el flag `estadoDevolucion` → se asumen totalmente devueltos.
+ *
+ * @param {Object} item - item de sales
+ * @returns {number}
+ */
+export const cantidadYaDevuelta = (item = {}) => {
+  if (item.cantidadDevuelta !== undefined && item.cantidadDevuelta !== null) {
+    return item.cantidadDevuelta;
+  }
+  return item.estadoDevolucion ? (item.cantidad || 0) : 0;
+};
+
+/**
+ * Unidades de un item que AÚN se pueden devolver/cambiar.
+ * Un item anulado (línea ya revertida en BuscadorFacturas) no admite devolución.
+ *
+ * @param {Object} item - item de sales
+ * @returns {number} nunca negativo
+ */
+export const cantidadDisponibleDevolver = (item = {}) => {
+  if (item.anulado) return 0;
+  return Math.max(0, (item.cantidad || 0) - cantidadYaDevuelta(item));
+};
