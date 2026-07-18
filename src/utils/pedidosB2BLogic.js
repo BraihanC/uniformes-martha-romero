@@ -288,3 +288,68 @@ export const calcularSaldoPendienteB2B = (pedido) => {
   const abonado = (pedido.abonos || []).reduce((sum, a) => sum + (a.monto || 0), 0);
   return Math.max(0, total - abonado);
 };
+
+// ─────────────────────────────────────────────────────────────
+// PRECIOS DEL PORTAL
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Resuelve el precio corporativo OFICIAL de un producto para un cliente:
+ * precio especial del cliente si existe, si no precioB2B, si no precio base.
+ * Réplica de la resolución del catálogo del portal (Catalogo.jsx), normalizada
+ * a número: un precioEspecial guardado como string ("52000") daría discrepancia
+ * falsa permanente al comparar contra el precio numérico del carrito.
+ */
+export const resolverPrecioOficialB2B = (producto = {}, precioEspecial) =>
+  Number(precioEspecial || producto.precioB2B || producto.precio || 0) || 0;
+
+/**
+ * Revalida los items del carrito B2B contra el catálogo OFICIAL al confirmar
+ * el pedido. El carrito vive en localStorage (editable por el cliente y
+ * potencialmente desactualizado) — el pedido SIEMPRE se crea con los precios
+ * oficiales del momento; si difieren de los del carrito se reportan las
+ * discrepancias para condicionar la auto-aprobación.
+ *
+ * @param {Array}  cartItems     - items del carrito {id, precio, cantidad, descripcion, talla}
+ * @param {Object} catalogoPorId - { [productoId]: { producto, precioEspecial } }
+ * @returns {{ itemsValidados: Array, discrepancias: Array, errores: Array }}
+ *   - itemsValidados: items con precio OFICIAL y cantidad saneada (entera > 0)
+ *   - discrepancias:  [{ productoId, descripcion, talla, precioCarrito, precioOficial }]
+ *   - errores:        mensajes de items inválidos (no existen / cantidad inválida)
+ */
+export const revalidarCarritoB2B = (cartItems = [], catalogoPorId = {}) => {
+  const itemsValidados = [];
+  const discrepancias = [];
+  const errores = [];
+
+  for (const item of cartItems) {
+    const entrada = item.id ? catalogoPorId[item.id] : null;
+    if (!entrada || !entrada.producto) {
+      errores.push(`${item.descripcion || item.id || 'Producto sin nombre'} — ya no existe en el catálogo`);
+      continue;
+    }
+
+    const cantidad = Number(item.cantidad);
+    if (!Number.isInteger(cantidad) || cantidad <= 0) {
+      errores.push(`${item.descripcion || item.id} — cantidad inválida (${item.cantidad})`);
+      continue;
+    }
+
+    const precioOficial = resolverPrecioOficialB2B(entrada.producto, entrada.precioEspecial);
+    const precioCarrito = Number(item.precio) || 0;
+
+    if (precioCarrito !== precioOficial) {
+      discrepancias.push({
+        productoId: item.id,
+        descripcion: item.descripcion || entrada.producto.nombre || '',
+        talla: item.talla || '',
+        precioCarrito,
+        precioOficial
+      });
+    }
+
+    itemsValidados.push({ ...item, precio: precioOficial, cantidad });
+  }
+
+  return { itemsValidados, discrepancias, errores };
+};

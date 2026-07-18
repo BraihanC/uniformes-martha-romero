@@ -13,7 +13,9 @@ import {
   tienePendientes,
   esEnvioCompleto,
   pedidoCompletamenteRecibido,
-  calcularSaldoPendienteB2B
+  calcularSaldoPendienteB2B,
+  resolverPrecioOficialB2B,
+  revalidarCarritoB2B
 } from './pedidosB2BLogic';
 
 // ─────────────────────────────────────────────────────────────
@@ -1030,5 +1032,271 @@ describe('Escenario: compatibilidad con pedido viejo (sin campos nuevos)', () =>
     expect(producto.cantidadEnviada).toBe(10);
     expect(producto.cantidadAlistadaActual).toBe(0);
     expect(producto.estadoProduccion).toBe('enviado');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// resolverPrecioOficialB2B (precios del portal)
+// ─────────────────────────────────────────────────────────────
+describe('resolverPrecioOficialB2B', () => {
+  it('precio especial del cliente gana sobre precioB2B y precio base', () => {
+    expect(resolverPrecioOficialB2B({ precioB2B: 52000, precio: 60000 }, 45000)).toBe(45000);
+  });
+
+  it('normaliza a número un precioEspecial guardado como string', () => {
+    // Un "52000" (string) en precios_corporativos daría discrepancia falsa
+    // permanente al comparar contra el precio numérico del carrito.
+    expect(resolverPrecioOficialB2B({ precioB2B: 60000 }, '52000')).toBe(52000);
+  });
+
+  it('valor no numérico cae a 0 en vez de propagar NaN', () => {
+    expect(resolverPrecioOficialB2B({}, 'abc')).toBe(0);
+  });
+
+  it('sin precio especial usa precioB2B', () => {
+    expect(resolverPrecioOficialB2B({ precioB2B: 52000, precio: 60000 }, undefined)).toBe(52000);
+  });
+
+  it('sin precio especial ni precioB2B cae al precio base', () => {
+    expect(resolverPrecioOficialB2B({ precio: 60000 }, undefined)).toBe(60000);
+  });
+
+  it('sin ningún precio devuelve 0', () => {
+    expect(resolverPrecioOficialB2B({}, undefined)).toBe(0);
+  });
+
+  it('maneja producto undefined (default {})', () => {
+    expect(resolverPrecioOficialB2B()).toBe(0);
+  });
+
+  it('precioB2B = 0 cae al precio base (cadena de ||)', () => {
+    expect(resolverPrecioOficialB2B({ precioB2B: 0, precio: 60000 }, undefined)).toBe(60000);
+  });
+
+  it('CASO SUTIL: precioEspecial = 0 NO gana, cae al fallback', () => {
+    // La función usa || (réplica exacta del catálogo del portal, Catalogo.jsx:113),
+    // así que un precio especial de 0 se trata como "sin precio especial" y cae
+    // a precioB2B. Es comportamiento HEREDADO INTENCIONAL: la resolución del
+    // pedido debe coincidir con lo que el cliente ve en el catálogo.
+    expect(resolverPrecioOficialB2B({ precioB2B: 52000, precio: 60000 }, 0)).toBe(52000);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// revalidarCarritoB2B (revalidación de precios al confirmar pedido)
+// ─────────────────────────────────────────────────────────────
+describe('revalidarCarritoB2B', () => {
+  const catalogo = {
+    'prod-1': { producto: { nombre: 'Camisa Colegio A', precioB2B: 52000, precio: 60000 } },
+    'prod-2': { producto: { nombre: 'Pantalón Colegio A', precioB2B: 38000, precio: 42000 }, precioEspecial: 35000 }
+  };
+
+  it('carrito con precio correcto → itemsValidados con ese precio, sin discrepancias ni errores', () => {
+    const cart = [{ id: 'prod-1', descripcion: 'Camisa Colegio A', talla: '10', precio: 52000, cantidad: 3 }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.itemsValidados).toHaveLength(1);
+    expect(res.itemsValidados[0].precio).toBe(52000);
+    expect(res.itemsValidados[0].cantidad).toBe(3);
+    expect(res.discrepancias).toEqual([]);
+    expect(res.errores).toEqual([]);
+  });
+
+  it('precio manipulado en el carrito → el pedido lleva el precio OFICIAL y se reporta discrepancia', () => {
+    // Escenario del bug: el carrito vive en localStorage y el cliente puede editarlo
+    const cart = [{ id: 'prod-1', descripcion: 'Camisa Colegio A', talla: '12', precio: 1000, cantidad: 2 }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.itemsValidados).toHaveLength(1);
+    expect(res.itemsValidados[0].precio).toBe(52000); // NO el precio del carrito
+    expect(res.discrepancias).toEqual([{
+      productoId: 'prod-1',
+      descripcion: 'Camisa Colegio A',
+      talla: '12',
+      precioCarrito: 1000,
+      precioOficial: 52000
+    }]);
+    expect(res.errores).toEqual([]);
+  });
+
+  it('precio desactualizado (subió el catálogo) → mismo mecanismo: precio oficial + discrepancia', () => {
+    // El cliente armó el carrito ayer a 52000; hoy el precio oficial es 58000
+    const catalogoActualizado = {
+      'prod-1': { producto: { nombre: 'Camisa Colegio A', precioB2B: 58000, precio: 60000 } }
+    };
+    const cart = [{ id: 'prod-1', descripcion: 'Camisa Colegio A', talla: '10', precio: 52000, cantidad: 1 }];
+    const res = revalidarCarritoB2B(cart, catalogoActualizado);
+    expect(res.itemsValidados[0].precio).toBe(58000);
+    expect(res.discrepancias).toHaveLength(1);
+    expect(res.discrepancias[0].precioCarrito).toBe(52000);
+    expect(res.discrepancias[0].precioOficial).toBe(58000);
+  });
+
+  it('producto que ya no está en el catálogo → error y NO entra a itemsValidados', () => {
+    const cart = [{ id: 'prod-borrado', descripcion: 'Falda descontinuada', precio: 30000, cantidad: 1 }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.itemsValidados).toEqual([]);
+    expect(res.discrepancias).toEqual([]);
+    expect(res.errores).toHaveLength(1);
+    expect(res.errores[0]).toContain('Falda descontinuada');
+    expect(res.errores[0]).toContain('ya no existe en el catálogo');
+  });
+
+  it('entrada del catálogo sin producto → error (no se puede resolver precio)', () => {
+    const catalogoCorrupto = { 'prod-1': { precioEspecial: 45000 } }; // sin .producto
+    const cart = [{ id: 'prod-1', descripcion: 'Camisa', precio: 45000, cantidad: 1 }];
+    const res = revalidarCarritoB2B(cart, catalogoCorrupto);
+    expect(res.itemsValidados).toEqual([]);
+    expect(res.errores).toHaveLength(1);
+  });
+
+  it('item sin id → error', () => {
+    const cart = [{ descripcion: 'Item huérfano', precio: 10000, cantidad: 1 }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.itemsValidados).toEqual([]);
+    expect(res.errores).toHaveLength(1);
+    expect(res.errores[0]).toContain('Item huérfano');
+  });
+
+  it('item sin id ni descripción → error con "Producto sin nombre"', () => {
+    const res = revalidarCarritoB2B([{ precio: 10000, cantidad: 1 }], catalogo);
+    expect(res.errores[0]).toContain('Producto sin nombre');
+  });
+
+  it('cantidad 0 → error y NO entra a itemsValidados', () => {
+    const cart = [{ id: 'prod-1', descripcion: 'Camisa', precio: 52000, cantidad: 0 }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.itemsValidados).toEqual([]);
+    expect(res.errores).toHaveLength(1);
+    expect(res.errores[0]).toContain('cantidad inválida');
+  });
+
+  it('cantidad negativa → error', () => {
+    const cart = [{ id: 'prod-1', descripcion: 'Camisa', precio: 52000, cantidad: -2 }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.itemsValidados).toEqual([]);
+    expect(res.errores).toHaveLength(1);
+  });
+
+  it('cantidad decimal (2.5) → error', () => {
+    const cart = [{ id: 'prod-1', descripcion: 'Camisa', precio: 52000, cantidad: 2.5 }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.itemsValidados).toEqual([]);
+    expect(res.errores).toHaveLength(1);
+    expect(res.errores[0]).toContain('2.5');
+  });
+
+  it('cantidad string no numérico ("abc") → error', () => {
+    const cart = [{ id: 'prod-1', descripcion: 'Camisa', precio: 52000, cantidad: 'abc' }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.itemsValidados).toEqual([]);
+    expect(res.errores).toHaveLength(1);
+  });
+
+  it('cantidad como string numérico entero ("3") → VÁLIDA, se sanea a número 3', () => {
+    // Number('3') = 3 es entero → pasa la validación y el item sale con cantidad numérica
+    const cart = [{ id: 'prod-1', descripcion: 'Camisa', precio: 52000, cantidad: '3' }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.errores).toEqual([]);
+    expect(res.itemsValidados).toHaveLength(1);
+    expect(res.itemsValidados[0].cantidad).toBe(3); // número, no '3'
+  });
+
+  it('precioEspecial del cliente gana sobre precioB2B en la validación', () => {
+    // prod-2 tiene precioB2B=38000 pero el cliente tiene especial=35000
+    const cart = [{ id: 'prod-2', descripcion: 'Pantalón Colegio A', talla: '14', precio: 38000, cantidad: 2 }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.itemsValidados[0].precio).toBe(35000); // el especial, no precioB2B
+    expect(res.discrepancias).toHaveLength(1); // carrito traía 38000
+    expect(res.discrepancias[0].precioOficial).toBe(35000);
+  });
+
+  it('item validado conserva el resto de sus campos (spread)', () => {
+    const cart = [{ id: 'prod-1', descripcion: 'Camisa Colegio A', talla: '8', color: 'Blanco', precio: 52000, cantidad: 1 }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.itemsValidados[0].talla).toBe('8');
+    expect(res.itemsValidados[0].color).toBe('Blanco');
+    expect(res.itemsValidados[0].descripcion).toBe('Camisa Colegio A');
+  });
+
+  it('mezcla: item válido + item con discrepancia + item con error → cada uno en su lista', () => {
+    const cart = [
+      { id: 'prod-1', descripcion: 'Camisa Colegio A', talla: '10', precio: 52000, cantidad: 2 },   // válido
+      { id: 'prod-2', descripcion: 'Pantalón Colegio A', talla: '12', precio: 1000, cantidad: 1 },   // discrepancia
+      { id: 'prod-x', descripcion: 'Producto fantasma', precio: 5000, cantidad: 1 }                  // error
+    ];
+    const res = revalidarCarritoB2B(cart, catalogo);
+
+    expect(res.itemsValidados).toHaveLength(2); // el válido y el de discrepancia (con precio corregido)
+    expect(res.itemsValidados[0].precio).toBe(52000);
+    expect(res.itemsValidados[1].precio).toBe(35000); // oficial (especial del cliente)
+
+    expect(res.discrepancias).toHaveLength(1);
+    expect(res.discrepancias[0].productoId).toBe('prod-2');
+    expect(res.discrepancias[0].precioCarrito).toBe(1000);
+    expect(res.discrepancias[0].precioOficial).toBe(35000);
+
+    expect(res.errores).toHaveLength(1);
+    expect(res.errores[0]).toContain('Producto fantasma');
+  });
+
+  it('carrito vacío → resultado vacío', () => {
+    expect(revalidarCarritoB2B([], catalogo)).toEqual({ itemsValidados: [], discrepancias: [], errores: [] });
+  });
+
+  it('sin argumentos (defaults) → resultado vacío', () => {
+    expect(revalidarCarritoB2B()).toEqual({ itemsValidados: [], discrepancias: [], errores: [] });
+  });
+
+  it('catálogo vacío → todos los items salen como error', () => {
+    const cart = [
+      { id: 'prod-1', descripcion: 'Camisa', precio: 52000, cantidad: 1 },
+      { id: 'prod-2', descripcion: 'Pantalón', precio: 38000, cantidad: 2 }
+    ];
+    const res = revalidarCarritoB2B(cart, {});
+    expect(res.itemsValidados).toEqual([]);
+    expect(res.errores).toHaveLength(2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// regresión: precio del carrito manipulable en localStorage
+// ─────────────────────────────────────────────────────────────
+describe('regresión: el pedido B2B nunca debe crearse con el precio del carrito', () => {
+  it('aunque el carrito traiga precio 0, el item validado sale con el oficial', () => {
+    // Bug original: el pedido se creaba con item.precio tal cual venía de
+    // localStorage. Un carrito editado con precio 0 generaba pedidos gratis.
+    const catalogo = { 'p1': { producto: { nombre: 'Chaqueta', precioB2B: 95000 } } };
+    const cart = [{ id: 'p1', descripcion: 'Chaqueta', talla: 'M', precio: 0, cantidad: 1 }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+
+    expect(res.itemsValidados[0].precio).toBe(95000);
+    expect(res.discrepancias).toEqual([{
+      productoId: 'p1',
+      descripcion: 'Chaqueta',
+      talla: 'M',
+      precioCarrito: 0,
+      precioOficial: 95000
+    }]);
+  });
+
+  it('item sin campo precio se trata como precioCarrito 0 → discrepancia, no crash', () => {
+    const catalogo = { 'p1': { producto: { nombre: 'Chaqueta', precioB2B: 95000 } } };
+    const cart = [{ id: 'p1', descripcion: 'Chaqueta', cantidad: 1 }]; // sin precio
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.itemsValidados[0].precio).toBe(95000);
+    expect(res.discrepancias[0].precioCarrito).toBe(0);
+  });
+
+  it('el total del pedido se calcula sobre precios oficiales, no del carrito', () => {
+    const catalogo = {
+      'p1': { producto: { precioB2B: 50000 }, precioEspecial: 45000 },
+      'p2': { producto: { precioB2B: 30000 } }
+    };
+    const cart = [
+      { id: 'p1', descripcion: 'A', precio: 100, cantidad: 2 },  // manipulado
+      { id: 'p2', descripcion: 'B', precio: 30000, cantidad: 3 } // correcto
+    ];
+    const { itemsValidados } = revalidarCarritoB2B(cart, catalogo);
+    const total = itemsValidados.reduce((sum, it) => sum + it.precio * it.cantidad, 0);
+    expect(total).toBe(45000 * 2 + 30000 * 3); // 180000, jamás 100*2 + 30000*3
   });
 });

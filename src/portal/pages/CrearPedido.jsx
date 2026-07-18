@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { usePortalAuth } from '../context/PortalAuthContext';
 import { useCart } from '../context/CartContext';
 import { db } from '../../services/firebase';
-import { collection, addDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, getDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { obtenerSiguienteNumeroPedidoB2B } from '../../services/consecutivos';
+import { revalidarCarritoB2B } from '../../utils/pedidosB2BLogic';
 import { ShoppingBag, Package, ArrowLeft, Send } from 'lucide-react';
 
 const CrearPedido = () => {
@@ -29,34 +30,78 @@ const CrearPedido = () => {
       return;
     }
 
-    // Bug 13: validar que cada producto del carrito siga existiendo en inventario
-    // (entre que se agregó al carrito y se confirma el pedido el admin pudo eliminarlo).
-    // No validamos stock — los pedidos B2B van a producción.
-    const itemsInvalidos = [];
-    for (const item of cartItems) {
-      if (!item.id) {
-        itemsInvalidos.push(`${item.descripcion || 'Producto sin nombre'} — sin ID válido`);
-        continue;
-      }
-      try {
-        const prodSnap = await getDoc(doc(db, 'products', item.id));
-        if (!prodSnap.exists()) {
-          itemsInvalidos.push(`${item.descripcion || item.id} — ya no existe en inventario`);
+    setLoading(true);
+    let revalidacion;
+    try {
+      // Revalidación contra el catálogo OFICIAL (Bug 13 + seguridad de precios):
+      // el carrito vive en localStorage — editable por el cliente y posiblemente
+      // desactualizado. El pedido SIEMPRE se crea con los precios oficiales del
+      // momento (precio especial del cliente || precioB2B || precio), y las
+      // cantidades se validan como enteras > 0. No validamos stock — B2B va a
+      // producción.
+      const catalogoPorId = {};
+
+      for (const item of cartItems) {
+        if (!item.id) continue; // revalidarCarritoB2B lo reporta como error
+        try {
+          const prodSnap = await getDoc(doc(db, 'products', item.id));
+          if (prodSnap.exists()) {
+            catalogoPorId[item.id] = { producto: prodSnap.data(), precioEspecial: undefined };
+          }
+        } catch (err) {
+          console.warn('Error validando producto', item.id, err);
         }
-      } catch (err) {
-        console.warn('Error validando producto', item.id, err);
       }
+
+      // Precios especiales del cliente (misma query que usa el catálogo)
+      if (clienteCorporativo?.id) {
+        const preciosSnap = await getDocs(query(
+          collection(db, 'precios_corporativos'),
+          where('clienteId', '==', clienteCorporativo.id)
+        ));
+        preciosSnap.forEach(pDoc => {
+          const data = pDoc.data();
+          if (catalogoPorId[data.productoId]) {
+            catalogoPorId[data.productoId].precioEspecial = data.precioEspecial;
+          }
+        });
+      }
+
+      revalidacion = revalidarCarritoB2B(cartItems, catalogoPorId);
+    } catch (error) {
+      console.error('Error revalidando el carrito:', error);
+      alert('Error validando el pedido: ' + error.message);
+      setLoading(false);
+      return;
     }
-    if (itemsInvalidos.length > 0) {
+    setLoading(false);
+
+    const { itemsValidados, discrepancias, errores } = revalidacion;
+
+    if (errores.length > 0) {
       alert(
         `⚠️ No se puede crear el pedido — los siguientes productos ya no son válidos:\n\n` +
-        itemsInvalidos.map(s => `• ${s}`).join('\n') +
+        errores.map(s => `• ${s}`).join('\n') +
         `\n\nPor favor elimínalos del carrito o contacta al administrador.`
       );
       return;
     }
 
-    if (!window.confirm('¿Confirmar la creación de este pedido?')) {
+    const totalOficial = itemsValidados.reduce(
+      (sum, item) => sum + (item.precio * item.cantidad), 0
+    );
+    const hayDiscrepancias = discrepancias.length > 0;
+
+    let mensajeConfirm = `¿Confirmar la creación de este pedido?\n\nTotal: ${formatCurrency(totalOficial)}`;
+    if (hayDiscrepancias) {
+      mensajeConfirm += `\n\n⚠️ Algunos precios cambiaron desde que armaste el carrito:\n` +
+        discrepancias.map(d =>
+          `• ${d.descripcion} (${d.talla}): ${formatCurrency(d.precioCarrito)} → ${formatCurrency(d.precioOficial)}`
+        ).join('\n') +
+        `\n\nEl pedido se creará con los precios actualizados y quedará PENDIENTE de aprobación por el administrador.`;
+    }
+
+    if (!window.confirm(mensajeConfirm)) {
       return;
     }
 
@@ -78,7 +123,8 @@ const CrearPedido = () => {
         clienteEmail: clienteCorporativo?.credenciales?.email || currentUser?.email || '',
         creatorUid: currentUser?.uid || '',
         codigoColegio: clienteCorporativo?.codigoColegio || '',
-        productos: cartItems.map(item => ({
+        // SIEMPRE con los precios oficiales revalidados (no los del carrito)
+        productos: itemsValidados.map(item => ({
           productoId: item.id || '',
           codigo: item.codigo || '',
           descripcion: item.descripcion || '',
@@ -100,14 +146,25 @@ const CrearPedido = () => {
           fechaRecepcion: null,
           historialEnvios: []
         })),
-        total: getTotalPrice(),
+        total: totalOficial,
         notas: notas.trim(),
-        // Auto-aprobación: el pedido entra directo a "En Preparación" para que el matching
-        // automático en entradas de producto pueda asignarle prendas sin esperar aprobación manual.
-        estado: 'En Preparación',
-        aprobado: true,
-        aprobadoPor: 'Auto-aprobación (portal)',
-        fechaAprobacion: serverTimestamp(),
+        // Auto-aprobación CONDICIONADA: si los precios del carrito coinciden con
+        // los oficiales, el pedido entra directo a "En Preparación" (el matching
+        // automático de entradas le asigna prendas sin esperar). Si hay
+        // discrepancias (carrito viejo o manipulado), nace PENDIENTE de
+        // aprobación manual y con el detalle persistido para el admin.
+        ...(hayDiscrepancias
+          ? {
+              estado: 'Pendiente',
+              aprobado: false,
+              discrepanciaPrecios: discrepancias
+            }
+          : {
+              estado: 'En Preparación',
+              aprobado: true,
+              aprobadoPor: 'Auto-aprobación (portal)',
+              fechaAprobacion: serverTimestamp()
+            }),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };
@@ -116,9 +173,11 @@ const CrearPedido = () => {
 
       // Crear notificación para administradores
       await addDoc(collection(db, 'notificaciones_admin'), {
-        tipo: 'nuevo_pedido_b2b',
-        titulo: 'Nuevo Pedido B2B',
-        mensaje: `${clienteCorporativo?.nombre || 'Cliente'} ha creado el pedido #${String(nextNumero).padStart(4, '0')} por ${formatCurrency(getTotalPrice())}`,
+        tipo: hayDiscrepancias ? 'pedido_b2b_requiere_aprobacion' : 'nuevo_pedido_b2b',
+        titulo: hayDiscrepancias ? '⚠️ Pedido B2B requiere aprobación' : 'Nuevo Pedido B2B',
+        mensaje: hayDiscrepancias
+          ? `${clienteCorporativo?.nombre || 'Cliente'} creó el pedido #${String(nextNumero).padStart(4, '0')} por ${formatCurrency(totalOficial)} con ${discrepancias.length} precio(s) distinto(s) a los oficiales en el carrito (se aplicaron los oficiales). Requiere aprobación manual.`
+          : `${clienteCorporativo?.nombre || 'Cliente'} ha creado el pedido #${String(nextNumero).padStart(4, '0')} por ${formatCurrency(totalOficial)}`,
         leida: false,
         pedidoId: pedidoRef.id || '',
         numeroPedido: nextNumero,
@@ -130,7 +189,9 @@ const CrearPedido = () => {
       clearCart();
 
       // Mostrar mensaje de éxito
-      alert(`¡Pedido #${String(nextNumero).padStart(4, '0')} creado exitosamente! El administrador será notificado.`);
+      alert(hayDiscrepancias
+        ? `Pedido #${String(nextNumero).padStart(4, '0')} creado con los precios actualizados.\n\nQuedó PENDIENTE de aprobación por el administrador — te notificaremos cuando sea aprobado.`
+        : `¡Pedido #${String(nextNumero).padStart(4, '0')} creado exitosamente! El administrador será notificado.`);
 
       // Redirigir a Mis Pedidos
       navigate('/portal/mis-pedidos');
