@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, serverTimestamp, query, orderBy, addDoc, where, limit, getDoc, getDocFromServer, writeBatch, increment, runTransaction, Timestamp, arrayUnion } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, serverTimestamp, query, orderBy, addDoc, where, getDoc, getDocFromServer, writeBatch, increment, runTransaction, Timestamp, arrayUnion } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { Package, CheckCircle, Eye, Calendar, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer, Loader2, DollarSign, Plus, Edit3, X } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { getAlistadaActual, calcularMaxAlistar } from '../utils/pedidosB2BLogic';
+import { obtenerSiguienteNumeroPedidoB2B } from '../services/consecutivos';
 
 const PedidosB2B = () => {
   const { user } = useAuth();
@@ -1822,14 +1823,10 @@ const PedidosB2B = () => {
 
     setCreandoPedido(true);
     try {
-      // Obtener el número de pedido consecutivo
-      const q = query(collection(db, 'pedidos_b2b'), orderBy('numeroPedido', 'desc'), limit(1));
-      const snapshot = await getDocs(q);
-      let nextNumero = 1;
-      if (!snapshot.empty) {
-        const lastPedido = snapshot.docs[0].data();
-        nextNumero = (lastPedido.numeroPedido || 0) + 1;
-      }
+      // Obtener el número de pedido consecutivo vía transacción sobre
+      // counters/pedidos_b2b (mismo contador que usa el portal — el patrón
+      // anterior de query max+1 tenía race condition entre pedidos simultáneos).
+      const nextNumero = await obtenerSiguienteNumeroPedidoB2B();
 
       // Crear el pedido
       const pedidoData = {

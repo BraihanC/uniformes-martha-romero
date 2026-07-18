@@ -50,15 +50,25 @@ service cloud.firestore {
     }
 
     // ─── Pedidos B2B (portal) ───────────────────────────────
-    // - create: cualquier autenticado (portal lo hace al confirmar carrito).
+    // - create: staff, o el cliente creando un pedido A SU NOMBRE (el
+    //   clienteEmail del doc debe ser el del token — evita crear pedidos
+    //   a nombre de otro cliente).
     // - read: staff total, o el cliente dueño (matcheado por clienteEmail).
     //   Pedidos legacy sin clienteEmail solo son legibles por staff (esperado tras backfill).
-    // - update / delete: solo staff (B2B no edita sus pedidos tras crearlos).
+    // - update: staff, o el cliente dueño SOLO para confirmar recepción de
+    //   mercancía (MisPedidos.jsx toca exactamente productos/estado/updatedAt).
+    // - delete: solo staff.
     match /pedidos_b2b/{id} {
-      allow create: if isSignedIn();
+      allow create: if isStaff() ||
+        (isSignedIn() && request.resource.data.clienteEmail == request.auth.token.email);
       allow read: if isStaff() ||
         (isSignedIn() && resource.data.clienteEmail == request.auth.token.email);
-      allow update, delete: if isStaff();
+      allow update: if isStaff() ||
+        (isSignedIn() &&
+         resource.data.clienteEmail == request.auth.token.email &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['productos', 'estado', 'updatedAt']));
+      allow delete: if isStaff();
     }
 
     // ─── Notificaciones ─────────────────────────────────────
@@ -67,12 +77,17 @@ service cloud.firestore {
       allow create: if isSignedIn();
       allow read, update, delete: if isStaff();
     }
-    // notificaciones_portal: staff las crea, B2B las lee (filtro por uid en cliente).
+    // notificaciones_portal: staff las crea, B2B las lee (filtro por uid en cliente)
+    // y las marca como leídas (NotificacionesContext toca solo leida/fechaLeida).
     // Phase 2: campo `clienteUid` para restringir por dueño en rules.
     match /notificaciones_portal/{id} {
       allow create: if isStaff();
       allow read: if isSignedIn();
-      allow update, delete: if isStaff();
+      allow update: if isStaff() ||
+        (isSignedIn() &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['leida', 'fechaLeida']));
+      allow delete: if isStaff();
     }
 
     // ─── Reportes de imperfectos (portal) ───────────────────
@@ -83,6 +98,23 @@ service cloud.firestore {
       allow read: if isStaff() ||
         (isSignedIn() && resource.data.clienteEmail == request.auth.token.email);
       allow update, delete: if isStaff();
+    }
+
+    // ─── Consecutivo de pedidos B2B ─────────────────────────
+    // El portal (cliente autenticado, sin rol staff) reserva su numeroPedido
+    // vía transacción sobre este doc. Solo se le permite el incremento EXACTO
+    // de +1 sobre lastNumber — cualquier otro valor o campo extra se rechaza.
+    // El doc lo siembra un admin (create/delete siguen siendo staff-only vía
+    // el match genérico de /counters/{id} más abajo).
+    match /counters/pedidos_b2b {
+      allow read: if isSignedIn();
+      // diff().affectedKeys() en vez de keys().hasOnly(): valida los campos
+      // TOCADOS por el write, no el doc final — así un campo extra sembrado
+      // por un admin en el doc no bloquea los incrementos del portal.
+      allow update: if isSignedIn() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastNumber']) &&
+        request.resource.data.lastNumber is int &&
+        request.resource.data.lastNumber == resource.data.lastNumber + 1;
     }
 
     // ─── Resto: solo staff (operación interna) ──────────────

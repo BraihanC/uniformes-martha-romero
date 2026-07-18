@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { usePortalAuth } from '../context/PortalAuthContext';
 import { useCart } from '../context/CartContext';
 import { db } from '../../services/firebase';
-import { collection, addDoc, doc, getDoc, serverTimestamp, query, orderBy, limit, getDocs } from 'firebase/firestore';
+import { collection, addDoc, doc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { obtenerSiguienteNumeroPedidoB2B } from '../../services/consecutivos';
 import { ShoppingBag, Package, ArrowLeft, Send } from 'lucide-react';
 
 const CrearPedido = () => {
@@ -61,14 +62,11 @@ const CrearPedido = () => {
 
     setLoading(true);
     try {
-      // Obtener el número de pedido consecutivo
-      const q = query(collection(db, 'pedidos_b2b'), orderBy('numeroPedido', 'desc'), limit(1));
-      const snapshot = await getDocs(q);
-      let nextNumero = 1;
-      if (!snapshot.empty) {
-        const lastPedido = snapshot.docs[0].data();
-        nextNumero = (lastPedido.numeroPedido || 0) + 1;
-      }
+      // Obtener el número de pedido consecutivo vía transacción sobre
+      // counters/pedidos_b2b. El patrón anterior (query global max+1) violaba
+      // la regla de lectura por clienteEmail → "insufficient permissions" en
+      // el portal, y además tenía race condition entre pedidos simultáneos.
+      const nextNumero = await obtenerSiguienteNumeroPedidoB2B();
 
       // Crear el pedido en Firestore
       const pedidoData = {
