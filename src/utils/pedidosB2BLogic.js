@@ -220,6 +220,21 @@ export const productoB2BCoincideConAsignacion = (producto, asig) => {
 };
 
 /**
+ * Variante ESTRICTA del matching anterior: solo identidad real (productoId o
+ * código), sin el fallback por descripción. Para matching en dos pasadas:
+ * primero exacto, y solo si no hay match se intenta el laxo — evita que dos
+ * productos DISTINTOS con la misma descripción+talla se crucen.
+ */
+export const productoB2BCoincideExacto = (producto, asig) => {
+  if (producto.anulado) return false;
+  if (String(producto.talla) !== String(asig.talla)) return false;
+  return !!(
+    (producto.productoId && asig.productoId && producto.productoId === asig.productoId) ||
+    (producto.codigo && asig.referencia && producto.codigo === asig.referencia)
+  );
+};
+
+/**
  * Verifica si un producto tiene unidades pendientes de alistar.
  */
 export const tienePendientes = (producto) => {
@@ -242,6 +257,25 @@ export const esEnvioCompleto = (productos) => {
     const totalEnviadoDespues = (p.cantidadEnviada || 0) + alistadaActual;
     return totalEnviadoDespues >= p.cantidad;
   });
+};
+
+/**
+ * ¿El pedido quedó completamente recibido? Solo entonces debe pasar a
+ * 'Completado' automáticamente al confirmar una recepción en el portal.
+ *
+ * La versión anterior comparaba recibida >= enviada por producto: un producto
+ * JAMÁS enviado cumplía trivialmente (0 >= 0), así que recibir un envío
+ * parcial marcaba 'Completado' un pedido con productos aún en producción —
+ * que además quedaban en limbo (el alistamiento automático de entradas
+ * excluye pedidos 'Completado') y el pedido quedaba inoperable para staff.
+ *
+ * Completo = todos los productos ACTIVOS (no anulados) recibieron la cantidad
+ * PEDIDA. Sin productos activos no hay auto-completado (eso lo decide staff).
+ */
+export const pedidoCompletamenteRecibido = (productos = []) => {
+  const activos = productos.filter(p => !p.anulado);
+  if (activos.length === 0) return false;
+  return activos.every(p => (p.cantidadRecibida || 0) >= (p.cantidad || 0));
 };
 
 /**

@@ -4,6 +4,7 @@ import { db } from '../../services/firebase';
 import { collection, query, where, getDocs, orderBy, doc, updateDoc, serverTimestamp, addDoc, runTransaction } from 'firebase/firestore';
 import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard, Filter, Download, X, Search, FileSpreadsheet, CheckCircle, AlertTriangle, ShoppingBag, Printer, Loader2 } from 'lucide-react';
 import jsPDF from 'jspdf';
+import { pedidoCompletamenteRecibido } from '../../utils/pedidosB2BLogic';
 
 const MisPedidos = () => {
   const { clienteCorporativo, currentUser } = usePortalAuth();
@@ -277,9 +278,11 @@ ${observaciones.trim() ? `📝 OBSERVACIONES:\n${observaciones.trim()}\n\n` : ''
           return p;
         });
 
-        const todosRecibidos = productosActualizados.every(p =>
-          (p.cantidadRecibida || 0) >= (p.cantidadEnviada || 0)
-        );
+        // 'Completado' SOLO cuando todo lo PEDIDO fue recibido (helper puro
+        // con tests). El chequeo anterior (recibida >= enviada) se cumplía
+        // trivialmente para productos nunca enviados y completaba pedidos
+        // con productos aún en producción.
+        const todosRecibidos = pedidoCompletamenteRecibido(productosActualizados);
 
         transaction.update(pedidoRef, {
           productos: productosActualizados,

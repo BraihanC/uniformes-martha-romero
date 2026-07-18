@@ -9,8 +9,10 @@ import {
   productoCoincide,
   productoB2BCoincideConInventario,
   productoB2BCoincideConAsignacion,
+  productoB2BCoincideExacto,
   tienePendientes,
   esEnvioCompleto,
+  pedidoCompletamenteRecibido,
   calcularSaldoPendienteB2B
 } from './pedidosB2BLogic';
 
@@ -560,6 +562,58 @@ describe('productoB2BCoincideConAsignacion', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// productoB2BCoincideExacto
+// Variante estricta (sin fallback por descripción) para matching en dos
+// pasadas: evita que dos productos DISTINTOS con la misma descripción+talla
+// se crucen en el envío (el decremento de stock iría al ref equivocado).
+// Usada en PedidosB2B.handleEnviarProductosAlistados.
+// ─────────────────────────────────────────────────────────────
+describe('productoB2BCoincideExacto', () => {
+  it('coincide por productoId', () => {
+    expect(productoB2BCoincideExacto(
+      { productoId: 'abc123', talla: 'M' },
+      { productoId: 'abc123', talla: 'M' }
+    )).toBe(true);
+  });
+
+  it('coincide por codigo (producto) === referencia (asignación)', () => {
+    expect(productoB2BCoincideExacto(
+      { codigo: 'REF001', talla: 'M' },
+      { referencia: 'REF001', talla: 'M' }
+    )).toBe(true);
+  });
+
+  it('NO coincide solo por descripción — esa es la diferencia con el matching laxo', () => {
+    // Dos productos distintos con la misma descripción+talla no deben cruzarse.
+    expect(productoB2BCoincideExacto(
+      { descripcion: 'Saco Cuello V', talla: 'L' },
+      { descripcion: 'Saco Cuello V', talla: 'L' }
+    )).toBe(false);
+  });
+
+  it('rechaza productos anulados', () => {
+    expect(productoB2BCoincideExacto(
+      { codigo: 'REF001', talla: 'M', anulado: true },
+      { referencia: 'REF001', talla: 'M' }
+    )).toBe(false);
+  });
+
+  it('no coincide si la talla difiere aunque el identificador esté', () => {
+    expect(productoB2BCoincideExacto(
+      { codigo: 'REF001', talla: 'M' },
+      { referencia: 'REF001', talla: 'L' }
+    )).toBe(false);
+  });
+
+  it('coerciona talla número vs string', () => {
+    expect(productoB2BCoincideExacto(
+      { codigo: 'REF001', talla: 10 },
+      { referencia: 'REF001', talla: '10' }
+    )).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
 // Regresión: selección con capacidad pendiente
 // Cubre el "Bug A" — al re-localizar el item en el batch, el findIndex
 // debe rechazar rows duplicados sin capacidad (cantidadAlistadaActual
@@ -662,6 +716,106 @@ describe('esEnvioCompleto', () => {
       { cantidad: 5, cantidadAlistadaActual: 5, cantidadEnviada: 0 },
       { cantidad: 3, cantidadAlistadaActual: 0, cantidadEnviada: 0, anulado: true }
     ])).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// pedidoCompletamenteRecibido
+// ─────────────────────────────────────────────────────────────
+describe('pedidoCompletamenteRecibido', () => {
+  it('true si todos los productos activos recibieron la cantidad pedida', () => {
+    expect(pedidoCompletamenteRecibido([
+      { cantidad: 5, cantidadEnviada: 5, cantidadRecibida: 5 },
+      { cantidad: 3, cantidadEnviada: 3, cantidadRecibida: 3 }
+    ])).toBe(true);
+  });
+
+  it('true si recibida supera lo pedido (dato raro pero cubierto)', () => {
+    expect(pedidoCompletamenteRecibido([
+      { cantidad: 5, cantidadEnviada: 6, cantidadRecibida: 6 }
+    ])).toBe(true);
+  });
+
+  it('false si un producto activo recibió menos de lo pedido', () => {
+    expect(pedidoCompletamenteRecibido([
+      { cantidad: 5, cantidadEnviada: 5, cantidadRecibida: 3 }
+    ])).toBe(false);
+  });
+
+  it('false con envío parcial recibido: un producto completo y otro sin enviar', () => {
+    expect(pedidoCompletamenteRecibido([
+      { cantidad: 5, cantidadEnviada: 5, cantidadRecibida: 5 },
+      { cantidad: 3, cantidadEnviada: 0, cantidadRecibida: 0 }
+    ])).toBe(false);
+  });
+
+  it('excluye productos anulados: activo completo + anulado sin recibir → true', () => {
+    expect(pedidoCompletamenteRecibido([
+      { cantidad: 5, cantidadEnviada: 5, cantidadRecibida: 5 },
+      { cantidad: 3, cantidadEnviada: 0, cantidadRecibida: 0, anulado: true }
+    ])).toBe(true);
+  });
+
+  it('false si todos los productos están anulados (no hay auto-completado)', () => {
+    expect(pedidoCompletamenteRecibido([
+      { cantidad: 5, cantidadRecibida: 0, anulado: true },
+      { cantidad: 3, cantidadRecibida: 0, anulado: true }
+    ])).toBe(false);
+  });
+
+  it('false con array vacío', () => {
+    expect(pedidoCompletamenteRecibido([])).toBe(false);
+  });
+
+  it('false sin argumento (default [])', () => {
+    expect(pedidoCompletamenteRecibido()).toBe(false);
+  });
+
+  it('producto activo sin campos cuenta como completo (0 >= 0)', () => {
+    // Comportamiento actual: sin cantidad ni cantidadRecibida, 0 >= 0 → true.
+    // Un producto así no bloquea el auto-completado.
+    expect(pedidoCompletamenteRecibido([{}])).toBe(true);
+  });
+
+  it('true si la recibida cubre lo pedido aunque la enviada sea mayor (discrepancia repuesta)', () => {
+    // Se enviaron 7 (5 + 2 de reposición) pero el cliente confirmó las 5 pedidas.
+    expect(pedidoCompletamenteRecibido([
+      { cantidad: 5, cantidadEnviada: 7, cantidadRecibida: 5 }
+    ])).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Regresión: auto-completado con productos jamás enviados
+// La versión anterior comparaba recibida >= enviada por producto: un
+// producto NUNCA enviado cumplía trivialmente (0 >= 0) y recibir un
+// envío parcial marcaba 'Completado' un pedido con productos aún en
+// producción, dejándolos en limbo (el alistamiento automático de
+// entradas excluye pedidos 'Completado').
+// ─────────────────────────────────────────────────────────────
+describe('regresión: producto nunca enviado no debe auto-completar el pedido', () => {
+  it('producto sin enviar ni recibir (0 de 5) → false', () => {
+    // La versión vieja daba true: recibida(0) >= enviada(0).
+    expect(pedidoCompletamenteRecibido([
+      { cantidad: 5, cantidadEnviada: 0, cantidadRecibida: 0 }
+    ])).toBe(false);
+  });
+
+  it('recepción de envío parcial: producto A completo + producto B en producción → false', () => {
+    // Escenario real del bug: el cliente confirma la recepción del primer
+    // envío (producto A) y el pedido NO debe pasar a 'Completado' porque
+    // el producto B sigue en producción sin un solo envío.
+    expect(pedidoCompletamenteRecibido([
+      { cantidad: 5, cantidadEnviada: 5, cantidadRecibida: 5 },
+      { cantidad: 3, cantidadEnviada: 0, cantidadRecibida: 0 }
+    ])).toBe(false);
+  });
+
+  it('producto legacy sin campos de envío/recepción pero con cantidad pedida → false', () => {
+    // Doc viejo sin cantidadEnviada/cantidadRecibida: 0 >= 5 es false.
+    expect(pedidoCompletamenteRecibido([
+      { cantidad: 5 }
+    ])).toBe(false);
   });
 });
 

@@ -5,7 +5,7 @@ import { collection, getDocs, doc, updateDoc, serverTimestamp, query, orderBy, a
 import { useAuth } from '../context/AuthContext';
 import { Package, CheckCircle, Eye, Calendar, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer, Loader2, DollarSign, Plus, Edit3, X } from 'lucide-react';
 import jsPDF from 'jspdf';
-import { getAlistadaActual, calcularMaxAlistar } from '../utils/pedidosB2BLogic';
+import { getAlistadaActual, calcularMaxAlistar, productoB2BCoincideConAsignacion, productoB2BCoincideExacto } from '../utils/pedidosB2BLogic';
 import { obtenerSiguienteNumeroPedidoB2B } from '../services/consecutivos';
 
 const PedidosB2B = () => {
@@ -248,6 +248,20 @@ const PedidosB2B = () => {
       const pedidoRef = doc(db, 'pedidos_b2b', pedido.id);
       const totalOriginal = obtenerTotalPedido(pedido);
       const abonosOriginales = pedido.abonos || [];
+
+      // Resetear las alistadas del ciclo actual en el doc: la reserva se libera
+      // en el paso 4, y si el array conservara cantidadAlistadaActual > 0 el
+      // botón "Enviar" del detalle permitiría re-enviar este pedido muerto
+      // (segunda liberación → reserva negativa + resurrección del pedido).
+      const productosReseteados = (pedido.productos || []).map(p => {
+        if (p.anulado || getAlistadaActual(p) <= 0) return p;
+        return {
+          ...p,
+          cantidadAlistadaActual: 0,
+          cantidadAlistada: p.cantidadEnviada || 0 // compat: total preparado = enviado
+        };
+      });
+
       batch.update(pedidoRef, {
         estado: 'Anulado',
         anulado: true,
@@ -257,6 +271,7 @@ const PedidosB2B = () => {
         abonosOriginales: abonosOriginales,
         total: 0,
         abonos: [],
+        productos: productosReseteados,
         updatedAt: serverTimestamp()
       });
 
@@ -1070,11 +1085,14 @@ const PedidosB2B = () => {
         // IMPORTANTE: Buscar por identificadores únicos, NO por índice (el índice puede ser incorrecto si hay filtros activos)
         let productoEncontrado = false;
         const productosActualizados = productosFrescos.map((p) => {
-          // Buscar por productoId+talla O por codigo+talla+descripcion
-          const coincideProductoId = p.productoId && productoAlistar.productoId &&
+          // Buscar por productoId+talla O por codigo+talla+descripcion.
+          // Items anulados se excluyen: si el admin anuló un item y agregó el
+          // mismo producto/talla como fila nueva, el primer match caía en la
+          // fila muerta y le alistaba stock (reserva sin destino).
+          const coincideProductoId = !p.anulado && p.productoId && productoAlistar.productoId &&
                                      p.productoId === productoAlistar.productoId &&
                                      p.talla === productoAlistar.talla;
-          const coincideCodigo = p.codigo && productoAlistar.codigo &&
+          const coincideCodigo = !p.anulado && p.codigo && productoAlistar.codigo &&
                                  p.codigo === productoAlistar.codigo &&
                                  p.talla === productoAlistar.talla &&
                                  p.descripcion === productoAlistar.descripcion;
@@ -1179,9 +1197,19 @@ const PedidosB2B = () => {
   };
 
   const handleEnviarProductosAlistados = async () => {
-    // Verificar que hay productos alistados para este envío
+    // Guard de estado: un pedido anulado/completado ya liberó sus reservas —
+    // "enviarlo" las liberaría de nuevo (reserva negativa) y lo resucitaría.
+    if (selectedPedido.anulado === true ||
+        selectedPedido.estado === 'Anulado' ||
+        selectedPedido.estado === 'Completado' ||
+        selectedPedido.estado === 'Entregado') {
+      alert(`⚠️ Este pedido está "${selectedPedido.estado}" — no se pueden enviar productos.`);
+      return;
+    }
+
+    // Verificar que hay productos alistados para este envío (excluyendo anulados)
     const productosAlistados = selectedPedido.productos.filter(p =>
-      getAlistadaActual(p) > 0
+      !p.anulado && getAlistadaActual(p) > 0
     );
 
     if (productosAlistados.length === 0) {
@@ -1197,8 +1225,9 @@ const PedidosB2B = () => {
       return totalEnviadoDespues >= p.cantidad;
     });
 
+    // Solo para el mensaje de confirmación — el estado definitivo se deriva
+    // con datos frescos dentro de la transacción.
     const tipoEnvio = todosEnviados ? 'completo' : 'parcial';
-    const nuevoEstado = todosEnviados ? 'Enviado' : 'Enviado Parcial';
 
     // Mostrar confirmación con detalle
     const detalleProductos = productosAlistados.map(p => {
@@ -1214,62 +1243,22 @@ const PedidosB2B = () => {
     try {
       const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
 
-      // Calcular número de envío (basado en el máximo de envíos previos de cualquier producto)
-      const enviosPrevios = selectedPedido.productos.reduce((max, p) => {
-        const historial = p.historialEnvios || [];
-        return Math.max(max, historial.length);
-      }, 0);
-      const numeroEnvio = enviosPrevios + 1;
-      const fechaEnvioActual = new Date().toISOString();
-
-      // Construir lista de productos a enviar y calcular productos actualizados
-      const productosParaEnviar = [];
-      const productosActualizados = selectedPedido.productos.map(p => {
-        const alistadaActual = getAlistadaActual(p);
-        if (alistadaActual > 0) {
-          productosParaEnviar.push({
-            codigo: p.codigo,
-            productoId: p.productoId,
-            talla: p.talla,
-            descripcion: p.descripcion,
-            cantidadAEnviar: alistadaActual
-          });
-          const nuevaCantidadEnviada = (p.cantidadEnviada || 0) + alistadaActual;
-
-          let nuevoEstadoProd;
-          if (nuevaCantidadEnviada >= p.cantidad) {
-            nuevoEstadoProd = 'enviado';
-          } else {
-            nuevoEstadoProd = 'en_produccion';
-          }
-
-          // Registrar en historial de envíos
-          const historialEnvios = [...(p.historialEnvios || [])];
-          historialEnvios.push({
-            envioNumero: numeroEnvio,
-            fecha: fechaEnvioActual,
-            cantidadEnviada: alistadaActual,
-            cantidadAcumulada: nuevaCantidadEnviada,
-            tipo: nuevaCantidadEnviada >= p.cantidad ? 'completo' : 'parcial'
-          });
-
-          return {
-            ...p,
-            cantidadEnviada: nuevaCantidadEnviada,
-            cantidadAlistadaActual: 0, // *** RESET del ciclo actual ***
-            cantidadAlistadaTotal: (p.cantidadAlistadaTotal ?? (p.cantidadAlistada || 0)),
-            cantidadAlistada: nuevaCantidadEnviada, // compat
-            estadoProduccion: nuevoEstadoProd,
-            fechaEnvio: Timestamp.now(),
-            historialEnvios
-          };
-        }
-        return p;
-      });
+      // Vista previa de lo que se va a enviar. Se usa SOLO para resolver los
+      // refs de inventario y las advertencias de stock (fuera de la transacción
+      // para poder mostrar window.confirm). Las cantidades DEFINITIVAS se
+      // recalculan adentro con datos frescos.
+      const productosParaEnviar = productosAlistados.map(p => ({
+        codigo: p.codigo,
+        productoId: p.productoId,
+        talla: p.talla,
+        descripcion: p.descripcion,
+        cantidadAEnviar: getAlistadaActual(p)
+      }));
 
       // FASE 1: Leer stock actual de cada producto UNA SOLA VEZ y verificar suficiencia
-      // Hacemos esto ANTES de la transacción para poder mostrar window.confirm al usuario
-      const productRefsAEnviar = []; // { productRef, cantidadAEnviar }
+      // Hacemos esto ANTES de la transacción para poder mostrar window.confirm al usuario.
+      // Un producto sin doc en inventario IGUAL se envía (solo se salta su decremento).
+      const enviosPlaneados = []; // { preview, productRef|null }
       const alertasStock = [];
 
       for (const producto of productosParaEnviar) {
@@ -1279,13 +1268,13 @@ const PedidosB2B = () => {
           producto.talla
         );
 
+        enviosPlaneados.push({
+          preview: producto,
+          productRef: productoEncontrado ? doc(db, 'products', productoEncontrado.id) : null
+        });
+
         if (productoEncontrado) {
           const stockActual = productoEncontrado.stockTotal || 0;
-          productRefsAEnviar.push({
-            productRef: doc(db, 'products', productoEncontrado.id),
-            cantidadAEnviar: producto.cantidadAEnviar
-          });
-
           if (stockActual < producto.cantidadAEnviar) {
             alertasStock.push({
               descripcion: producto.descripcion,
@@ -1315,58 +1304,164 @@ const PedidosB2B = () => {
         }
       }
 
-      // FASE 2: Transacción atómica — previene race conditions
-      // Firestore exige que TODOS los reads ocurran antes de CUALQUIER write
-      await runTransaction(db, async (transaction) => {
+      // FASE 2: Transacción atómica — TODO se recalcula desde el doc FRESCO.
+      // Antes se escribía `productos` derivado del estado de React: si una
+      // entrada de satélite/proveedor alistaba unidades mientras el modal
+      // estaba abierto, el envío las pisaba (alistamiento perdido en el pedido
+      // + reserva huérfana en el producto).
+      // Firestore exige que TODOS los reads ocurran antes de CUALQUIER write.
+      const resultado = await runTransaction(db, async (transaction) => {
         // --- TODOS LOS READS PRIMERO ---
         const pedidoDoc = await transaction.get(pedidoRef);
         if (!pedidoDoc.exists()) {
           throw new Error('El pedido ya no existe en la base de datos.');
         }
+        const pedidoFresco = pedidoDoc.data();
 
-        const productDocs = [];
-        for (const { productRef, cantidadAEnviar } of productRefsAEnviar) {
-          const productDoc = await transaction.get(productRef);
-          productDocs.push({ productRef, cantidadAEnviar, exists: productDoc.exists() });
+        // Guard autoritativo con datos frescos: si otro usuario anuló/completó
+        // el pedido mientras este modal estaba abierto, abortar.
+        if (pedidoFresco.anulado === true ||
+            pedidoFresco.estado === 'Anulado' ||
+            pedidoFresco.estado === 'Completado' ||
+            pedidoFresco.estado === 'Entregado') {
+          throw new Error(`El pedido está "${pedidoFresco.estado || 'Anulado'}" — no se pueden enviar productos. Recarga la página.`);
         }
 
+        const productDocs = [];
+        for (const { productRef, preview } of enviosPlaneados) {
+          if (!productRef) {
+            productDocs.push({ productRef: null, preview, exists: false });
+            continue;
+          }
+          const productDoc = await transaction.get(productRef);
+          productDocs.push({ productRef, preview, exists: productDoc.exists() });
+        }
+
+        // --- CÁLCULO CON DATOS FRESCOS (sin I/O) ---
+        const productosFrescos = [...(pedidoFresco.productos || [])];
+        const indicesUsados = new Set();
+        const decrementos = []; // { productRef, cantidad }
+        const enviosEfectivos = []; // { descripcion, talla, cantidad }
+
+        const enviosPrevios = productosFrescos.reduce((max, p) =>
+          Math.max(max, (p.historialEnvios || []).length), 0);
+        const numeroEnvio = enviosPrevios + 1;
+        const fechaEnvioActual = new Date().toISOString();
+
+        for (const { productRef, preview, exists } of productDocs) {
+          // Re-localizar el row FRESCO con el matching de la lib compartida
+          // (filtra anulados); sin reutilizar un row ya consumido por otra
+          // preview duplicada. Dos pasadas: primero identidad exacta
+          // (productoId/código) y solo como fallback el matching laxo por
+          // descripción — evita cruzar productos distintos con la misma
+          // descripción+talla (el decremento iría al ref equivocado).
+          const asigPreview = {
+            productoId: preview.productoId,
+            referencia: preview.codigo,
+            talla: preview.talla,
+            descripcion: preview.descripcion
+          };
+          let idx = productosFrescos.findIndex((p, i) =>
+            !indicesUsados.has(i) &&
+            productoB2BCoincideExacto(p, asigPreview) &&
+            getAlistadaActual(p) > 0
+          );
+          if (idx === -1) {
+            idx = productosFrescos.findIndex((p, i) =>
+              !indicesUsados.has(i) &&
+              productoB2BCoincideConAsignacion(p, asigPreview) &&
+              getAlistadaActual(p) > 0
+            );
+          }
+          if (idx === -1) continue; // otro flujo ya lo envió/des-alistó
+
+          const p = productosFrescos[idx];
+          indicesUsados.add(idx);
+
+          const alistadaFresca = getAlistadaActual(p);
+          // Se envía lo CONFIRMADO por el admin, capeado a lo alistado fresco.
+          // Si una entrada alistó MÁS mientras tanto, ese excedente queda
+          // alistado para el próximo envío (no se pisa ni se pierde).
+          const cantidadAEnviar = Math.min(preview.cantidadAEnviar, alistadaFresca);
+          if (cantidadAEnviar <= 0) continue;
+
+          const nuevaCantidadEnviada = (p.cantidadEnviada || 0) + cantidadAEnviar;
+          const nuevaAlistadaActual = alistadaFresca - cantidadAEnviar;
+
+          const historialEnvios = [...(p.historialEnvios || [])];
+          historialEnvios.push({
+            envioNumero: numeroEnvio,
+            fecha: fechaEnvioActual,
+            cantidadEnviada: cantidadAEnviar,
+            cantidadAcumulada: nuevaCantidadEnviada,
+            tipo: nuevaCantidadEnviada >= p.cantidad ? 'completo' : 'parcial'
+          });
+
+          productosFrescos[idx] = {
+            ...p,
+            cantidadEnviada: nuevaCantidadEnviada,
+            cantidadAlistadaActual: nuevaAlistadaActual,
+            cantidadAlistadaTotal: (p.cantidadAlistadaTotal ?? (p.cantidadAlistada || 0)),
+            cantidadAlistada: nuevaAlistadaActual + nuevaCantidadEnviada, // compat: total preparado
+            estadoProduccion: nuevaCantidadEnviada >= p.cantidad ? 'enviado' : 'en_produccion',
+            fechaEnvio: Timestamp.now(),
+            historialEnvios
+          };
+
+          if (exists && productRef) {
+            decrementos.push({ productRef, cantidad: cantidadAEnviar });
+          }
+          enviosEfectivos.push({ descripcion: p.descripcion, talla: p.talla, cantidad: cantidadAEnviar });
+        }
+
+        if (enviosEfectivos.length === 0) {
+          throw new Error('No hay unidades alistadas para enviar — otro usuario ya procesó este envío. Recarga la página.');
+        }
+
+        // Estado del pedido derivado del array FRESCO ya actualizado
+        const todosEnviadosFresco = productosFrescos.every(p => {
+          if (p.anulado) return true;
+          return (p.cantidadEnviada || 0) >= (p.cantidad || 0);
+        });
+        const nuevoEstadoFresco = todosEnviadosFresco ? 'Enviado' : 'Enviado Parcial';
+
         // --- TODOS LOS WRITES DESPUÉS ---
-        for (const { productRef, cantidadAEnviar, exists } of productDocs) {
-          if (!exists) continue;
+        for (const { productRef, cantidad } of decrementos) {
           transaction.update(productRef, {
-            stockReservadoB2B: increment(-cantidadAEnviar),
-            stockTotal: increment(-cantidadAEnviar),
+            stockReservadoB2B: increment(-cantidad),
+            stockTotal: increment(-cantidad),
             updatedAt: serverTimestamp()
           });
         }
 
         transaction.update(pedidoRef, {
-          productos: productosActualizados,
-          estado: nuevoEstado,
+          productos: productosFrescos,
+          estado: nuevoEstadoFresco,
           updatedAt: serverTimestamp()
         });
+
+        return { productosActualizados: productosFrescos, nuevoEstado: nuevoEstadoFresco, enviosEfectivos };
       });
 
-      // Actualizar selectedPedido localmente para reflejar cambios inmediatamente
+      // Actualizar selectedPedido con lo REALMENTE escrito (no el pre-cálculo)
       setSelectedPedido({
         ...selectedPedido,
-        productos: productosActualizados,
-        estado: nuevoEstado
+        productos: resultado.productosActualizados,
+        estado: resultado.nuevoEstado
       });
 
-      // Crear notificación para el cliente
-      const totalUnidadesEnviadas = productosAlistados.reduce((sum, p) => {
-        return sum + getAlistadaActual(p);
-      }, 0);
+      // Crear notificación para el cliente con las cantidades efectivas
+      const totalUnidadesEnviadas = resultado.enviosEfectivos.reduce((sum, e) => sum + e.cantidad, 0);
+      const tipoEnvioFinal = resultado.nuevoEstado === 'Enviado' ? 'completo' : 'parcial';
 
       await crearNotificacion(
         selectedPedido,
         'productos_enviados',
-        `Productos Enviados - ${tipoEnvio === 'completo' ? 'Envío Completo' : 'Envío Parcial'}`,
+        `Productos Enviados - ${tipoEnvioFinal === 'completo' ? 'Envío Completo' : 'Envío Parcial'}`,
         `Se han enviado ${totalUnidadesEnviadas} unidad(es) de tu pedido #${String(selectedPedido.numeroPedido || 0).padStart(4, '0')}. Revisa el detalle en el portal.`
       );
 
-      alert(`Productos enviados exitosamente (${tipoEnvio})`);
+      alert(`Productos enviados exitosamente (${tipoEnvioFinal})`);
       cerrarModalDetalle();
       fetchPedidos();
     } catch (error) {
@@ -1408,10 +1503,23 @@ const PedidosB2B = () => {
       const batch = writeBatch(db);
       const pedidoRef = doc(db, 'pedidos_b2b', selectedPedido.id);
 
+      // Resetear las alistadas del ciclo actual: la reserva se libera abajo;
+      // dejar cantidadAlistadaActual > 0 permitiría "enviar" el pedido
+      // completado desde el detalle (segunda liberación → reserva negativa).
+      const productosReseteados = (selectedPedido.productos || []).map(p => {
+        if (p.anulado || getAlistadaActual(p) <= 0) return p;
+        return {
+          ...p,
+          cantidadAlistadaActual: 0,
+          cantidadAlistada: p.cantidadEnviada || 0 // compat: total preparado = enviado
+        };
+      });
+
       batch.update(pedidoRef, {
         estado: 'Completado',
         fechaCompletado: serverTimestamp(),
         completadoPor: user?.displayName || user?.email || 'Admin',
+        productos: productosReseteados,
         updatedAt: serverTimestamp()
       });
 
@@ -2354,11 +2462,15 @@ const PedidosB2B = () => {
                 <div className="flex justify-between items-center mb-3">
                   <h3 className="font-semibold text-gray-800">Productos</h3>
                   <div className="flex gap-2">
-                    {/* Botón Enviar Productos Alistados */}
-                    {selectedPedido.productos?.some(p => getAlistadaActual(p) > 0) && (() => {
+                    {/* Botón Enviar Productos Alistados — oculto en pedidos
+                        anulados/completados (sus reservas ya fueron liberadas)
+                        y para items anulados */}
+                    {selectedPedido.anulado !== true &&
+                     !['Anulado', 'Completado', 'Entregado'].includes(selectedPedido.estado) &&
+                     selectedPedido.productos?.some(p => !p.anulado && getAlistadaActual(p) > 0) && (() => {
                       // Calcular si todos los productos están completamente alistados + enviados
                       const todosAlistados = selectedPedido.productos.every(p =>
-                        ((p.cantidadEnviada || 0) + getAlistadaActual(p)) >= p.cantidad
+                        p.anulado || ((p.cantidadEnviada || 0) + getAlistadaActual(p)) >= p.cantidad
                       );
                       const textoBoton = todosAlistados ? 'Enviar Pedido Completo' : 'Enviar Productos Alistados (Parcial)';
 
