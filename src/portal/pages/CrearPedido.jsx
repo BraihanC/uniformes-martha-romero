@@ -6,12 +6,15 @@ import { db } from '../../services/firebase';
 import { collection, addDoc, doc, getDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 import { obtenerSiguienteNumeroPedidoB2B } from '../../services/consecutivos';
 import { revalidarCarritoB2B } from '../../utils/pedidosB2BLogic';
-import { ShoppingBag, Package, ArrowLeft, Send } from 'lucide-react';
+import { bloquearSinConexion } from '../../utils/conexion';
+import { useConexion } from '../../hooks/useConexion';
+import { ShoppingBag, Package, ArrowLeft, Send, WifiOff } from 'lucide-react';
 
 const CrearPedido = () => {
   const navigate = useNavigate();
   const { clienteCorporativo, currentUser } = usePortalAuth();
   const { cartItems, getTotalPrice, clearCart } = useCart();
+  const { isOffline } = useConexion();
   const [notas, setNotas] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -25,6 +28,10 @@ const CrearPedido = () => {
   };
 
   const handleCrearPedido = async () => {
+    // El consecutivo sale de un runTransaction sobre counters/pedidos_b2b, y los
+    // precios se revalidan contra el servidor. Nada de eso funciona sin red.
+    if (bloquearSinConexion('enviar el pedido')) return;
+
     if (cartItems.length === 0) {
       alert('El carrito está vacío');
       return;
@@ -37,8 +44,11 @@ const CrearPedido = () => {
       // el carrito vive en localStorage — editable por el cliente y posiblemente
       // desactualizado. El pedido SIEMPRE se crea con los precios oficiales del
       // momento (precio especial del cliente || precioB2B || precio), y las
-      // cantidades se validan como enteras > 0. No validamos stock — B2B va a
-      // producción.
+      // cantidades se validan como enteras > 0. También se verifica que cada
+      // prenda siga siendo vendible a ESTE cliente (su colegio o una compartida
+      // habilitada): el carrito usa una clave global de localStorage, así que dos
+      // clientes en el mismo navegador podrían cruzarse prendas. No validamos
+      // stock — B2B va a producción.
       const catalogoPorId = {};
 
       for (const item of cartItems) {
@@ -67,7 +77,7 @@ const CrearPedido = () => {
         });
       }
 
-      revalidacion = revalidarCarritoB2B(cartItems, catalogoPorId);
+      revalidacion = revalidarCarritoB2B(cartItems, catalogoPorId, { cliente: clienteCorporativo });
     } catch (error) {
       console.error('Error revalidando el carrito:', error);
       alert('Error validando el pedido: ' + error.message);
@@ -318,11 +328,17 @@ const CrearPedido = () => {
         </button>
         <button
           onClick={handleCrearPedido}
-          disabled={loading}
+          disabled={loading || isOffline}
+          title={isOffline ? 'Sin conexión: no se puede enviar el pedido hasta que vuelva la red' : undefined}
           className="w-full sm:flex-1 flex items-center justify-center gap-2 px-4 md:px-6 py-2 md:py-3 text-sm md:text-base text-white font-semibold rounded-lg hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ backgroundColor: '#D50565' }}
         >
-          {loading ? (
+          {isOffline ? (
+            <>
+              <WifiOff size={18} className="md:w-5 md:h-5" />
+              Sin conexión
+            </>
+          ) : loading ? (
             <>
               <div className="animate-spin rounded-full h-4 w-4 md:h-5 md:w-5 border-b-2 border-white"></div>
               Creando...

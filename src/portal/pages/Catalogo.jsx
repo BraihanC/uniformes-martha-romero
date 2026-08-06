@@ -3,6 +3,7 @@ import { usePortalAuth } from '../context/PortalAuthContext';
 import { useCart } from '../context/CartContext';
 import { db } from '../../services/firebase';
 import { collection, getDocs, query, where, doc, getDoc } from 'firebase/firestore';
+import { CODIGO_COMPARTIDAS, construirCatalogoB2B, resolverPrecioOficialB2B } from '../../utils/pedidosB2BLogic';
 import { Search, ShoppingCart, Package, SlidersHorizontal, X } from 'lucide-react';
 
 const Catalogo = () => {
@@ -74,27 +75,33 @@ const Catalogo = () => {
       );
       const productosColegioSnapshot = await getDocs(productosColegioQuery);
 
-      // 4. Obtener productos B2B "OT" (Otros) - visibles para todos los clientes
-      const productosOTQuery = query(
+      // 4. Obtener prendas COMPARTIDAS (colegio 'OT'): las que se venden en tienda
+      //    y también a clientes B2B de cualquier colegio (pantalón England,
+      //    bicicleteros…). Cuáles ve ESTE cliente lo decide su lista blanca
+      //    `productosCompartidos` — sin lista, las ve todas (comportamiento previo).
+      const productosCompartidasQuery = query(
         productosRef,
-        where('colegio', '==', 'OT'),
+        where('colegio', '==', CODIGO_COMPARTIDAS),
         where('esB2B', '==', true)
       );
-      const productosOTSnapshot = await getDocs(productosOTQuery);
+      const productosCompartidasSnapshot = await getDocs(productosCompartidasQuery);
 
-      // 5. Combinar productos del colegio + productos OT
+      // 5. Combinar prendas exclusivas del colegio + compartidas habilitadas
       const productosDelColegio = productosColegioSnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
 
-      const productosOT = productosOTSnapshot.docs.map(doc => ({
+      const productosCompartidas = productosCompartidasSnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
 
-      // Combinar ambos arrays (OT se verá para todos los colegios)
-      const productosData = [...productosDelColegio, ...productosOT];
+      const productosData = construirCatalogoB2B(
+        productosDelColegio,
+        productosCompartidas,
+        clienteCorporativo
+      );
 
       setProductos(productosData);
     } catch (error) {
@@ -105,13 +112,9 @@ const Catalogo = () => {
     }
   };
 
-  const getPrecio = (producto) => {
-    // Prioridad de precios:
-    // 1. Precio corporativo (específico para este cliente + producto)
-    // 2. Precio B2B (general para todos los clientes B2B)
-    // 3. Precio regular (fallback)
-    return preciosCorporativos[producto.id] || producto.precioB2B || producto.precio || 0;
-  };
+  // Prioridad de precios: corporativo del cliente > precio B2B de lista > precio
+  // regular. Misma resolución que usa la revalidación al crear el pedido.
+  const getPrecio = (producto) => resolverPrecioOficialB2B(producto, preciosCorporativos[producto.id]);
 
   // Función para ordenar productos por talla
   const sortByTalla = (products) => {

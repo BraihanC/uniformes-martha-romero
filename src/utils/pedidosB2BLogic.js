@@ -290,6 +290,141 @@ export const calcularSaldoPendienteB2B = (pedido) => {
 };
 
 // ─────────────────────────────────────────────────────────────
+// CLIENTES B2B — alta, baja y acceso al portal
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Firebase Auth normaliza los emails a minúsculas. Si el documento del cliente
+ * guarda otra capitalización: (1) el login del portal no lo encuentra (matchea
+ * por igualdad exacta contra `credenciales.email`), y (2) la regla de create de
+ * pedidos_b2b (`clienteEmail == request.auth.token.email`) rechaza el pedido.
+ * Todo email de cliente B2B se guarda pasando por aquí.
+ */
+export const normalizarEmailB2B = (email) => String(email ?? '').trim().toLowerCase();
+
+/**
+ * ¿El cliente puede entrar al portal?
+ * `activo` ausente = activo, para no dejar fuera a los clientes creados antes
+ * de que el campo existiera. Solo un `false` explícito bloquea.
+ */
+export const clientePortalActivo = (cliente) => !!cliente && cliente.activo !== false;
+
+/**
+ * Resumen de lo que se perdería al borrar un cliente B2B, y si se puede borrar.
+ *
+ * Borrar destruye la cuenta de Auth: un cliente con pedidos en curso ya no podría
+ * confirmar recepción, y su saldo quedaría sin dueño visible. Por eso el borrado
+ * se reserva a clientes SIN historial (altas equivocadas) y para el resto se
+ * desactiva, que es reversible y no pierde nada.
+ *
+ * @param {Array} pedidos - pedidos_b2b del cliente (ya filtrados por clienteId)
+ * @returns {{ puedeBorrar, total, enCurso, saldoPendiente, motivo }}
+ */
+export const evaluarBorradoClienteB2B = (pedidos = []) => {
+  const total = pedidos.length;
+  const FINALIZADOS = ['Completado', 'Anulado', 'Cancelado'];
+  const enCurso = pedidos.filter(
+    p => p.anulado !== true && !FINALIZADOS.includes(p.estado)
+  ).length;
+  const saldoPendiente = pedidos
+    .filter(p => p.anulado !== true && p.estado !== 'Anulado' && p.estado !== 'Cancelado')
+    .reduce((sum, p) => sum + calcularSaldoPendienteB2B(p), 0);
+
+  if (total > 0) {
+    return {
+      puedeBorrar: false,
+      total,
+      enCurso,
+      saldoPendiente,
+      motivo:
+        `Este cliente tiene ${total} pedido(s) registrado(s)` +
+        (enCurso > 0 ? `, ${enCurso} de ellos en curso` : '') +
+        (saldoPendiente > 0 ? `, y un saldo pendiente de $${saldoPendiente.toLocaleString('es-CO')}` : '') +
+        '. Desactívalo en vez de borrarlo: se le revoca el acceso al portal sin perder el histórico.'
+    };
+  }
+
+  return { puedeBorrar: true, total: 0, enCurso: 0, saldoPendiente: 0, motivo: '' };
+};
+
+// ─────────────────────────────────────────────────────────────
+// CATÁLOGO POR CLIENTE (prendas compartidas + exclusivas)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Código del "colegio" bajo el que viven las prendas COMPARTIDAS: las que se
+ * venden en tienda y también a clientes B2B de cualquier colegio (pantalón
+ * England, bicicleteros, medias…). Un producto tiene UN solo `colegio`, así que
+ * este código es el bucket de lo transversal.
+ */
+export const CODIGO_COMPARTIDAS = 'OT';
+
+const normalizarCodigo = (valor) => String(valor ?? '').trim().toUpperCase();
+
+/**
+ * ¿El cliente ve una prenda compartida concreta?
+ *
+ * `clientes_corporativos.productosCompartidos` es la lista blanca de ids de
+ * productos compartidos que ESTE cliente compra:
+ *  - campo AUSENTE (no es array) → ve TODAS las compartidas. Es el comportamiento
+ *    histórico y evita que dar de alta la función cambie lo que ya ve un cliente
+ *    existente sin que nadie lo haya decidido.
+ *  - array (incluso vacío) → ve SOLO los ids listados. Vacío = ninguna.
+ */
+export const clienteVeCompartida = (cliente = {}, productoId) => {
+  const lista = cliente?.productosCompartidos;
+  if (!Array.isArray(lista)) return true;
+  return lista.some(id => String(id) === String(productoId));
+};
+
+/**
+ * ¿El cliente tiene una lista blanca definida para prendas compartidas?
+ * Útil en la UI para distinguir "ve todas (sin configurar)" de "ve estas".
+ */
+export const tieneListaCompartidas = (cliente = {}) =>
+  Array.isArray(cliente?.productosCompartidos);
+
+/**
+ * Filtra las prendas compartidas según la lista blanca del cliente.
+ * Los productos deben traer `id`.
+ */
+export const filtrarCompartidasPorCliente = (productosCompartidos = [], cliente = {}) => {
+  if (!tieneListaCompartidas(cliente)) return [...productosCompartidos];
+  return productosCompartidos.filter(p => clienteVeCompartida(cliente, p?.id));
+};
+
+/**
+ * Arma el catálogo B2B visible para un cliente: sus prendas exclusivas (las del
+ * código de su colegio) + las compartidas que tenga habilitadas.
+ * ÚNICA fuente de verdad — la usan el portal (Catalogo) y staff (PedidosB2B).
+ */
+export const construirCatalogoB2B = (productosDelColegio = [], productosCompartidos = [], cliente = {}) => [
+  ...productosDelColegio,
+  ...filtrarCompartidasPorCliente(productosCompartidos, cliente)
+];
+
+/**
+ * ¿Este producto se le puede vender a este cliente por el portal?
+ * Se evalúa contra los datos OFICIALES del producto (no contra el carrito):
+ *  - tiene que ser B2B,
+ *  - o es del colegio del cliente, o es compartida y está en su lista blanca.
+ * El producto debe traer `id` para poder validar la lista blanca.
+ */
+export const prendaPermitidaParaCliente = (producto = {}, cliente = {}) => {
+  if (producto?.esB2B !== true) return false;
+
+  const colegioProducto = normalizarCodigo(producto.colegio);
+  if (!colegioProducto) return false;
+
+  if (colegioProducto === CODIGO_COMPARTIDAS) {
+    return clienteVeCompartida(cliente, producto.id);
+  }
+
+  const colegioCliente = normalizarCodigo(cliente?.codigoColegio);
+  return !!colegioCliente && colegioProducto === colegioCliente;
+};
+
+// ─────────────────────────────────────────────────────────────
 // PRECIOS DEL PORTAL
 // ─────────────────────────────────────────────────────────────
 
@@ -304,28 +439,122 @@ export const resolverPrecioOficialB2B = (producto = {}, precioEspecial) =>
   Number(precioEspecial || producto.precioB2B || producto.precio || 0) || 0;
 
 /**
+ * Id determinístico de un precio corporativo: un solo documento posible por
+ * (cliente, producto). Con id autogenerado, un reintento tras un "error" falso
+ * — la persistencia multi-tab rechaza promesas de escrituras que SÍ se
+ * aplicaron — crearía un segundo documento para el mismo par, y el catálogo
+ * tomaría uno de los dos de forma impredecible. Con id fijo el guardado es
+ * idempotente: reintentar pisa el mismo doc.
+ */
+export const idPrecioCorporativo = (clienteId, productoId) =>
+  `${String(clienteId ?? '').trim()}__${String(productoId ?? '').trim()}`;
+
+/**
+ * Diff entre los precios propios escritos en la pantalla "Catálogo y precios" y
+ * los que ya están guardados en `precios_corporativos`. Decide qué crear, qué
+ * actualizar y qué borrar — un error aquí deja precios equivocados o documentos
+ * huérfanos que el portal seguiría aplicando.
+ *
+ * @param {Array}  productos        - productos listados en la pantalla (con id, nombre, precio)
+ * @param {Object} preciosInput     - { [productoId]: string } lo escrito en los inputs ('' = sin precio propio)
+ * @param {Object} preciosGuardados - { [productoId]: { docId, precioEspecial } } estado actual en Firestore
+ * @returns {{ aEscribir: Array, aBorrar: Array<string>, errores: Array<string> }}
+ *   - aEscribir: [{ productoId, docId?, referencia, nombre, precioEspecial, precioTienda, sospechoso }]
+ *     (sin docId = documento nuevo). `sospechoso` marca precios absurdamente bajos.
+ *   - aBorrar:   docIds de precios propios que quedaron vacíos → vuelven al precio de lista
+ *   - errores:   valores no válidos; si hay errores no se debe escribir nada
+ */
+export const calcularCambiosPreciosCorporativos = (productos = [], preciosInput = {}, preciosGuardados = {}) => {
+  const aEscribir = [];
+  const aBorrar = [];
+  const errores = [];
+
+  for (const producto of productos) {
+    const guardado = preciosGuardados[producto.id];
+    const crudo = String(preciosInput[producto.id] ?? '').trim();
+
+    // Vacío = sin precio propio: se borra el registro y vuelve al precioB2B/precio
+    if (crudo === '') {
+      if (guardado?.docId) aBorrar.push(guardado.docId);
+      continue;
+    }
+
+    // Cualquier punto o coma es un error, no un decimal: en pesos no hay
+    // centavos, y un input numérico acepta "64.000" que Number() lee como 64
+    // — un entero perfectamente válido. Se rechaza el texto crudo antes de
+    // convertirlo, que es la única forma de distinguir $64.000 de $64.
+    if (/[.,]/.test(crudo)) {
+      errores.push(
+        `${producto.nombre || producto.id}: "${crudo}" tiene punto o coma — escribe el precio sin separadores (64000, no 64.000).`
+      );
+      continue;
+    }
+
+    const valor = Number(crudo);
+    if (!Number.isInteger(valor) || valor <= 0) {
+      errores.push(
+        `${producto.nombre || producto.id}: "${crudo}" no es un precio válido — usa pesos enteros mayores a 0.`
+      );
+      continue;
+    }
+
+    if (guardado && Number(guardado.precioEspecial) === valor) continue; // sin cambios
+
+    const precioTienda = Number(producto.precio || 0);
+    aEscribir.push({
+      productoId: producto.id,
+      docId: guardado?.docId,
+      referencia: producto.referencia || '',
+      nombre: producto.nombre || '',
+      precioEspecial: valor,
+      precioTienda,
+      // Salvavidas del separador de miles: un input numérico acepta "64.000" y
+      // JavaScript lo lee como 64. Si el precio propio queda por debajo del 20%
+      // del de tienda, casi seguro le faltan ceros — se pide confirmación.
+      sospechoso: precioTienda > 0 && valor < precioTienda * 0.2
+    });
+  }
+
+  return { aEscribir, aBorrar, errores };
+};
+
+/**
  * Revalida los items del carrito B2B contra el catálogo OFICIAL al confirmar
  * el pedido. El carrito vive en localStorage (editable por el cliente y
  * potencialmente desactualizado) — el pedido SIEMPRE se crea con los precios
  * oficiales del momento; si difieren de los del carrito se reportan las
  * discrepancias para condicionar la auto-aprobación.
  *
+ * Si se pasa `cliente`, también valida que cada prenda SIGA siendo vendible a ese
+ * cliente (es B2B y es de su colegio o una compartida habilitada). Sin esto, un
+ * carrito viejo o de otro cliente en el mismo navegador — el carrito vive en
+ * localStorage con clave global — colaría prendas de otro colegio en el pedido.
+ *
  * @param {Array}  cartItems     - items del carrito {id, precio, cantidad, descripcion, talla}
  * @param {Object} catalogoPorId - { [productoId]: { producto, precioEspecial } }
+ * @param {Object} [opciones]    - { cliente } cliente corporativo dueño del carrito
  * @returns {{ itemsValidados: Array, discrepancias: Array, errores: Array }}
  *   - itemsValidados: items con precio OFICIAL y cantidad saneada (entera > 0)
  *   - discrepancias:  [{ productoId, descripcion, talla, precioCarrito, precioOficial }]
- *   - errores:        mensajes de items inválidos (no existen / cantidad inválida)
+ *   - errores:        mensajes de items inválidos (no existen / no vendibles / cantidad inválida)
  */
-export const revalidarCarritoB2B = (cartItems = [], catalogoPorId = {}) => {
+export const revalidarCarritoB2B = (cartItems = [], catalogoPorId = {}, opciones = {}) => {
   const itemsValidados = [];
   const discrepancias = [];
   const errores = [];
+  const { cliente } = opciones;
 
   for (const item of cartItems) {
     const entrada = item.id ? catalogoPorId[item.id] : null;
     if (!entrada || !entrada.producto) {
       errores.push(`${item.descripcion || item.id || 'Producto sin nombre'} — ya no existe en el catálogo`);
+      continue;
+    }
+
+    if (cliente && !prendaPermitidaParaCliente({ ...entrada.producto, id: item.id }, cliente)) {
+      errores.push(
+        `${item.descripcion || entrada.producto.nombre || item.id} — ya no está disponible para tu colegio`
+      );
       continue;
     }
 

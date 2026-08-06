@@ -32,9 +32,13 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow write: if isStaff();
     }
+    // precios_corporativos: precio especial por cliente × producto. Lo lee el
+    // portal (catálogo + revalidación del pedido) y la pantalla de staff, pero
+    // ESCRIBIRLO es fijar plata — admin-only, igual que el resto de precios y
+    // costos. Se administra en Configuración → Clientes B2B → "Catálogo y precios".
     match /precios_corporativos/{id} {
       allow read: if isSignedIn();
-      allow write: if isStaff();
+      allow write: if isAdmin();
     }
 
     // ─── Identidad de clientes corporativos ─────────────────

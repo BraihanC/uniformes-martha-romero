@@ -5,8 +5,9 @@ import { collection, getDocs, doc, updateDoc, serverTimestamp, query, orderBy, a
 import { useAuth } from '../context/AuthContext';
 import { Package, CheckCircle, Eye, Calendar, User, Building, Truck, ClipboardCheck, ShoppingBag, Trash2, Search, Printer, Loader2, DollarSign, Plus, Edit3, X } from 'lucide-react';
 import jsPDF from 'jspdf';
-import { getAlistadaActual, calcularMaxAlistar, productoB2BCoincideConAsignacion, productoB2BCoincideExacto } from '../utils/pedidosB2BLogic';
+import { getAlistadaActual, calcularMaxAlistar, productoB2BCoincideConAsignacion, productoB2BCoincideExacto, CODIGO_COMPARTIDAS, construirCatalogoB2B, resolverPrecioOficialB2B, clientePortalActivo } from '../utils/pedidosB2BLogic';
 import { obtenerSiguienteNumeroPedidoB2B } from '../services/consecutivos';
+import { bloquearSinConexion } from '../utils/conexion';
 
 const PedidosB2B = () => {
   const { user } = useAuth();
@@ -154,6 +155,7 @@ const PedidosB2B = () => {
 
   // Registrar abono
   const handleRegistrarAbono = async () => {
+    if (bloquearSinConexion('registrar el abono')) return;
     if (!montoAbono || isNaN(montoAbono) || parseFloat(montoAbono) <= 0) {
       alert('Por favor, ingresa un monto válido.');
       return;
@@ -402,18 +404,21 @@ const PedidosB2B = () => {
         where('colegio', '==', codigoColegio),
         where('esB2B', '==', true)
       ));
-      const productosOTSnap = await getDocs(query(
+      const productosCompartidasSnap = await getDocs(query(
         productosRef,
-        where('colegio', '==', 'OT'),
+        where('colegio', '==', CODIGO_COMPARTIDAS),
         where('esB2B', '==', true)
       ));
-      const productosBase = [
-        ...productosColegioSnap.docs.map(d => ({ id: d.id, ...d.data() })),
-        ...productosOTSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-      ];
-      // Aplicar precios corporativos si existen
-      let preciosMap = {};
+
+      // El cliente decide qué prendas compartidas entran a su catálogo. Se lee su
+      // doc para no ofrecer aquí prendas que él no ve en el portal.
+      let cliente = { codigoColegio };
+      const preciosMap = {};
       if (selectedPedido.clienteId) {
+        const clienteSnap = await getDoc(doc(db, 'clientes_corporativos', selectedPedido.clienteId));
+        if (clienteSnap.exists()) {
+          cliente = { id: clienteSnap.id, ...clienteSnap.data() };
+        }
         const preciosSnap = await getDocs(query(
           collection(db, 'precios_corporativos'),
           where('clienteId', '==', selectedPedido.clienteId)
@@ -423,9 +428,15 @@ const PedidosB2B = () => {
           preciosMap[data.productoId] = data.precioEspecial;
         });
       }
+
+      const productosBase = construirCatalogoB2B(
+        productosColegioSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        productosCompartidasSnap.docs.map(d => ({ id: d.id, ...d.data() })),
+        cliente
+      );
       const conPrecios = productosBase.map(p => ({
         ...p,
-        precioMostrar: preciosMap[p.id] !== undefined ? preciosMap[p.id] : (p.precioB2B || p.precio || 0)
+        precioMostrar: resolverPrecioOficialB2B(p, preciosMap[p.id])
       }));
       setProductosCatalogoEdicion(conPrecios);
     } catch (error) {
@@ -568,6 +579,8 @@ const PedidosB2B = () => {
   // - Producto nuevo: queda con tracking en 0 para que entradas futuras lo asignen.
   // - Cambio de precio: solo recalcula subtotal y total.
   const handleGuardarEdicionProductos = async () => {
+    // runTransaction sobre el pedido + getDocFromServer para releer el estado real.
+    if (bloquearSinConexion('guardar los cambios del pedido')) return;
     if (!selectedPedido) return;
 
     const nuevoTotal = calcularTotalEditado();
@@ -943,6 +956,7 @@ const PedidosB2B = () => {
   };
 
   const handleAprobarPedido = async (pedido) => {
+    if (bloquearSinConexion('aprobar el pedido')) return;
     if (!window.confirm('¿Aprobar este pedido?')) return;
 
     setAprobandoPedido(pedido.id);
@@ -975,6 +989,9 @@ const PedidosB2B = () => {
   };
 
   const handleAlistarProducto = async () => {
+    // runTransaction (mueve stockReservadoB2B) + getDocFromServer.
+    if (bloquearSinConexion('alistar el producto')) return;
+
     const cantidad = parseInt(cantidadAlistar);
     const cantidadPendiente = calcularMaxAlistar(productoAlistar);
 
@@ -1197,6 +1214,8 @@ const PedidosB2B = () => {
   };
 
   const handleEnviarProductosAlistados = async () => {
+    if (bloquearSinConexion('registrar el envío')) return;
+
     // Guard de estado: un pedido anulado/completado ya liberó sus reservas —
     // "enviarlo" las liberaría de nuevo (reserva negativa) y lo resucitaría.
     if (selectedPedido.anulado === true ||
@@ -1475,6 +1494,7 @@ const PedidosB2B = () => {
   // Corregir cantidad recibida (cuando el cliente reportó mal)
   // Marcar pedido como completado manualmente (para cuando sabes que faltan prendas pero quieres cerrar el pedido)
   const handleCompletarPedidoManualmente = async () => {
+    if (bloquearSinConexion('completar el pedido')) return;
     if (!selectedPedido) return;
 
     const productosConDiscrepancia = selectedPedido.productos.filter(p => {
@@ -1562,10 +1582,12 @@ const PedidosB2B = () => {
   const fetchClientesCorporativos = async () => {
     try {
       const querySnapshot = await getDocs(collection(db, 'clientes_corporativos'));
-      const clientes = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      const clientes = querySnapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        // Un cliente desactivado no puede entrar al portal; tampoco debe
+        // aparecer aquí, o se le facturaría a un colegio dado de baja.
+        // Su histórico de pedidos sigue intacto y visible en la lista.
+        .filter(cliente => clientePortalActivo(cliente));
       setClientesCorporativos(clientes);
     } catch (error) {
       console.error('Error al cargar clientes:', error);
@@ -1573,9 +1595,15 @@ const PedidosB2B = () => {
     }
   };
 
-  const fetchProductosDisponibles = async (codigoColegio, clienteId) => {
+  // Catálogo que staff puede pedir a nombre de un cliente. Debe ser EXACTAMENTE
+  // el mismo que ve el cliente en el portal: sus prendas exclusivas + las
+  // compartidas que tenga habilitadas (construirCatalogoB2B, fuente única).
+  const fetchProductosDisponibles = async (cliente) => {
     try {
       setCargandoProductos(true);
+
+      const codigoColegio = cliente?.codigoColegio || '';
+      const clienteId = cliente?.id || '';
 
       // Cargar productos B2B del colegio específico
       const productosRef = collection(db, 'products');
@@ -1586,57 +1614,44 @@ const PedidosB2B = () => {
       );
       const productosColegioSnapshot = await getDocs(productosColegioQuery);
 
-      // Cargar productos B2B "OT" (Otros) - visibles para todos los clientes
-      const productosOTQuery = query(
+      // Cargar prendas COMPARTIDAS (colegio 'OT')
+      const productosCompartidasQuery = query(
         productosRef,
-        where('colegio', '==', 'OT'),
+        where('colegio', '==', CODIGO_COMPARTIDAS),
         where('esB2B', '==', true)
       );
-      const productosOTSnapshot = await getDocs(productosOTQuery);
+      const productosCompartidasSnapshot = await getDocs(productosCompartidasQuery);
 
-      // Combinar productos del colegio + productos OT
       const productosDelColegio = productosColegioSnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
 
-      const productosOT = productosOTSnapshot.docs.map(doc => ({
+      const productosCompartidas = productosCompartidasSnapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
 
-      const productos = [...productosDelColegio, ...productosOT];
+      const productos = construirCatalogoB2B(productosDelColegio, productosCompartidas, cliente);
 
       // Cargar precios corporativos si existen
+      const preciosMap = {};
       if (clienteId) {
-        const preciosRef = collection(db, 'precios_corporativos');
-        const preciosQuery = query(
-          preciosRef,
+        const preciosSnapshot = await getDocs(query(
+          collection(db, 'precios_corporativos'),
           where('clienteId', '==', clienteId)
-        );
-        const preciosSnapshot = await getDocs(preciosQuery);
-
-        const preciosMap = {};
+        ));
         preciosSnapshot.forEach(doc => {
           const data = doc.data();
           preciosMap[data.productoId] = data.precioEspecial;
         });
-
-        // Aplicar precios con prioridad: corporativo > B2B > regular
-        const productosConPrecios = productos.map(p => ({
-          ...p,
-          precioMostrar: preciosMap[p.id] || p.precioB2B || p.precio || 0
-        }));
-
-        setProductosDisponibles(productosConPrecios);
-      } else {
-        // Sin precios corporativos, usar precio B2B o regular
-        const productosConPrecios = productos.map(p => ({
-          ...p,
-          precioMostrar: p.precioB2B || p.precio || 0
-        }));
-        setProductosDisponibles(productosConPrecios);
       }
+
+      // Prioridad: corporativo del cliente > B2B de lista > regular
+      setProductosDisponibles(productos.map(p => ({
+        ...p,
+        precioMostrar: resolverPrecioOficialB2B(p, preciosMap[p.id])
+      })));
     } catch (error) {
       console.error('Error al cargar productos:', error);
       alert('Error al cargar productos: ' + error.message);
@@ -1844,7 +1859,7 @@ const PedidosB2B = () => {
 
     if (cliente && cliente.codigoColegio) {
       // Cargar productos del colegio específico con precios corporativos
-      await fetchProductosDisponibles(cliente.codigoColegio, cliente.id);
+      await fetchProductosDisponibles(cliente);
     }
   };
 
@@ -1915,6 +1930,9 @@ const PedidosB2B = () => {
   };
 
   const handleCrearPedidoDesdeTienda = async () => {
+    // El consecutivo B2B sale de un runTransaction sobre counters/pedidos_b2b.
+    if (bloquearSinConexion('crear el pedido')) return;
+
     if (!clienteSeleccionado) {
       alert('Selecciona un cliente');
       return;

@@ -15,7 +15,18 @@ import {
   pedidoCompletamenteRecibido,
   calcularSaldoPendienteB2B,
   resolverPrecioOficialB2B,
-  revalidarCarritoB2B
+  revalidarCarritoB2B,
+  CODIGO_COMPARTIDAS,
+  clienteVeCompartida,
+  tieneListaCompartidas,
+  filtrarCompartidasPorCliente,
+  construirCatalogoB2B,
+  prendaPermitidaParaCliente,
+  calcularCambiosPreciosCorporativos,
+  idPrecioCorporativo,
+  normalizarEmailB2B,
+  clientePortalActivo,
+  evaluarBorradoClienteB2B
 } from './pedidosB2BLogic';
 
 // ─────────────────────────────────────────────────────────────
@@ -1298,5 +1309,547 @@ describe('regresión: el pedido B2B nunca debe crearse con el precio del carrito
     const { itemsValidados } = revalidarCarritoB2B(cart, catalogo);
     const total = itemsValidados.reduce((sum, it) => sum + it.precio * it.cantidad, 0);
     expect(total).toBe(45000 * 2 + 30000 * 3); // 180000, jamás 100*2 + 30000*3
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// CATÁLOGO POR CLIENTE — prendas compartidas y exclusivas
+// ─────────────────────────────────────────────────────────────
+
+// Prendas compartidas reales del negocio: viven en el colegio 'OT' y las ve
+// cualquier cliente B2B salvo que se le defina una lista blanca.
+const COMPARTIDAS = [
+  { id: 'ot-england-10', colegio: 'OT', esB2B: true, nombre: 'PANTALON EN DIARIO TALLA 10' },
+  { id: 'ot-england-12', colegio: 'OT', esB2B: true, nombre: 'PANTALON EN DIARIO TALLA 12' },
+  { id: 'ot-bici-8', colegio: 'OT', esB2B: true, nombre: 'BICICLETERO OT TALLA 8 AZUL' }
+];
+
+const EXCLUSIVAS_GAR = [
+  { id: 'gar-blusa-12', colegio: 'GAR', esB2B: true, nombre: 'BLUSA GAR DIARIO TALLA 12' }
+];
+
+describe('clienteVeCompartida', () => {
+  it('sin lista blanca (campo ausente) ve TODAS las compartidas — compat con clientes existentes', () => {
+    expect(clienteVeCompartida({ codigoColegio: 'GAR' }, 'ot-england-10')).toBe(true);
+    expect(clienteVeCompartida({}, 'lo-que-sea')).toBe(true);
+  });
+
+  it('con lista blanca solo ve los ids listados', () => {
+    const cliente = { productosCompartidos: ['ot-england-10'] };
+    expect(clienteVeCompartida(cliente, 'ot-england-10')).toBe(true);
+    expect(clienteVeCompartida(cliente, 'ot-bici-8')).toBe(false);
+  });
+
+  it('lista vacía = no ve ninguna compartida (distinto de "sin configurar")', () => {
+    expect(clienteVeCompartida({ productosCompartidos: [] }, 'ot-england-10')).toBe(false);
+  });
+
+  it('compara ids como string (no rompe si alguno llegara numérico)', () => {
+    expect(clienteVeCompartida({ productosCompartidos: [123] }, '123')).toBe(true);
+  });
+
+  it('null/undefined en el campo se tratan como "sin configurar"', () => {
+    expect(clienteVeCompartida({ productosCompartidos: null }, 'x')).toBe(true);
+    expect(clienteVeCompartida({ productosCompartidos: undefined }, 'x')).toBe(true);
+  });
+});
+
+describe('tieneListaCompartidas', () => {
+  it('distingue configurado de no configurado', () => {
+    expect(tieneListaCompartidas({})).toBe(false);
+    expect(tieneListaCompartidas({ productosCompartidos: [] })).toBe(true);
+    expect(tieneListaCompartidas({ productosCompartidos: ['a'] })).toBe(true);
+  });
+});
+
+describe('filtrarCompartidasPorCliente', () => {
+  it('sin lista devuelve todas', () => {
+    expect(filtrarCompartidasPorCliente(COMPARTIDAS, {})).toHaveLength(3);
+  });
+
+  it('con lista devuelve solo las habilitadas', () => {
+    const cliente = { productosCompartidos: ['ot-england-10', 'ot-england-12'] };
+    const res = filtrarCompartidasPorCliente(COMPARTIDAS, cliente);
+    expect(res.map(p => p.id)).toEqual(['ot-england-10', 'ot-england-12']);
+  });
+
+  it('ids en la lista que ya no existen en el catálogo simplemente no aparecen', () => {
+    const cliente = { productosCompartidos: ['ot-england-10', 'producto-borrado'] };
+    expect(filtrarCompartidasPorCliente(COMPARTIDAS, cliente).map(p => p.id))
+      .toEqual(['ot-england-10']);
+  });
+
+  it('no muta el array de entrada', () => {
+    const original = [...COMPARTIDAS];
+    filtrarCompartidasPorCliente(COMPARTIDAS, { productosCompartidos: [] });
+    expect(COMPARTIDAS).toEqual(original);
+  });
+});
+
+describe('construirCatalogoB2B', () => {
+  it('las exclusivas del colegio siempre entran; las compartidas se filtran', () => {
+    const cliente = { codigoColegio: 'GAR', productosCompartidos: ['ot-bici-8'] };
+    const res = construirCatalogoB2B(EXCLUSIVAS_GAR, COMPARTIDAS, cliente);
+    expect(res.map(p => p.id)).toEqual(['gar-blusa-12', 'ot-bici-8']);
+  });
+
+  it('un colegio sin compartidas habilitadas solo ve lo suyo', () => {
+    const cliente = { codigoColegio: 'NUE', productosCompartidos: [] };
+    expect(construirCatalogoB2B(EXCLUSIVAS_GAR, COMPARTIDAS, cliente).map(p => p.id))
+      .toEqual(['gar-blusa-12']);
+  });
+
+  it('cliente sin configurar ve exclusivas + todas las compartidas (comportamiento actual)', () => {
+    expect(construirCatalogoB2B(EXCLUSIVAS_GAR, COMPARTIDAS, { codigoColegio: 'GAR' }))
+      .toHaveLength(4);
+  });
+});
+
+describe('prendaPermitidaParaCliente', () => {
+  const gardner = { codigoColegio: 'GAR', productosCompartidos: ['ot-england-10'] };
+
+  it('permite la prenda exclusiva del colegio del cliente', () => {
+    expect(prendaPermitidaParaCliente(EXCLUSIVAS_GAR[0], gardner)).toBe(true);
+  });
+
+  it('RECHAZA la prenda exclusiva de OTRO colegio (carrito cruzado entre clientes)', () => {
+    const prendaOtroColegio = { id: 'nue-camisa', colegio: 'NUE', esB2B: true };
+    expect(prendaPermitidaParaCliente(prendaOtroColegio, gardner)).toBe(false);
+  });
+
+  it('permite la compartida habilitada y rechaza la no habilitada', () => {
+    expect(prendaPermitidaParaCliente(COMPARTIDAS[0], gardner)).toBe(true);  // en la lista
+    expect(prendaPermitidaParaCliente(COMPARTIDAS[2], gardner)).toBe(false); // fuera de la lista
+  });
+
+  it('rechaza cualquier producto que no sea B2B aunque sea de su colegio', () => {
+    expect(prendaPermitidaParaCliente({ id: 'x', colegio: 'GAR', esB2B: false }, gardner)).toBe(false);
+    expect(prendaPermitidaParaCliente({ id: 'x', colegio: 'GAR' }, gardner)).toBe(false);
+  });
+
+  it('normaliza mayúsculas/espacios del código de colegio', () => {
+    const cliente = { codigoColegio: ' gar ' };
+    expect(prendaPermitidaParaCliente({ id: 'x', colegio: 'GAR', esB2B: true }, cliente)).toBe(true);
+    expect(prendaPermitidaParaCliente({ id: 'x', colegio: ' gar', esB2B: true }, cliente)).toBe(true);
+  });
+
+  it('rechaza si el producto no tiene colegio o el cliente no tiene código', () => {
+    expect(prendaPermitidaParaCliente({ id: 'x', colegio: '', esB2B: true }, gardner)).toBe(false);
+    expect(prendaPermitidaParaCliente({ id: 'x', colegio: 'GAR', esB2B: true }, {})).toBe(false);
+  });
+
+  it('el código de compartidas es OT', () => {
+    expect(CODIGO_COMPARTIDAS).toBe('OT');
+  });
+});
+
+describe('revalidarCarritoB2B — validación de catálogo por cliente', () => {
+  const catalogo = {
+    'gar-blusa-12': { producto: { colegio: 'GAR', esB2B: true, nombre: 'BLUSA GAR', precioB2B: 47000 } },
+    'ot-england-10': { producto: { colegio: 'OT', esB2B: true, nombre: 'PANTALON EN', precioB2B: 64000 } },
+    'ot-bici-8': { producto: { colegio: 'OT', esB2B: true, nombre: 'BICICLETERO', precioB2B: 17000 } },
+    'nue-camisa': { producto: { colegio: 'NUE', esB2B: true, nombre: 'CAMISA NUEVO COLEGIO', precioB2B: 50000 } }
+  };
+  const gardner = { codigoColegio: 'GAR', productosCompartidos: ['ot-england-10'] };
+
+  it('sin cliente se comporta igual que antes (compatibilidad)', () => {
+    const cart = [{ id: 'nue-camisa', descripcion: 'Camisa', precio: 50000, cantidad: 1 }];
+    const res = revalidarCarritoB2B(cart, catalogo);
+    expect(res.errores).toHaveLength(0);
+    expect(res.itemsValidados).toHaveLength(1);
+  });
+
+  it('rechaza la prenda de otro colegio cuando se pasa el cliente', () => {
+    const cart = [{ id: 'nue-camisa', descripcion: 'Camisa', precio: 50000, cantidad: 1 }];
+    const res = revalidarCarritoB2B(cart, catalogo, { cliente: gardner });
+    expect(res.itemsValidados).toHaveLength(0);
+    expect(res.errores[0]).toMatch(/no está disponible para tu colegio/);
+  });
+
+  it('rechaza la compartida que el cliente no tiene habilitada', () => {
+    const cart = [{ id: 'ot-bici-8', descripcion: 'Bicicletero', precio: 17000, cantidad: 2 }];
+    const res = revalidarCarritoB2B(cart, catalogo, { cliente: gardner });
+    expect(res.itemsValidados).toHaveLength(0);
+    expect(res.errores).toHaveLength(1);
+  });
+
+  it('deja pasar lo suyo y lo compartido habilitado, y no toca los precios oficiales', () => {
+    const cart = [
+      { id: 'gar-blusa-12', descripcion: 'Blusa', precio: 47000, cantidad: 2 },
+      { id: 'ot-england-10', descripcion: 'England', precio: 64000, cantidad: 1 },
+      { id: 'ot-bici-8', descripcion: 'Bicicletero', precio: 17000, cantidad: 1 }
+    ];
+    const res = revalidarCarritoB2B(cart, catalogo, { cliente: gardner });
+    expect(res.itemsValidados.map(i => i.id)).toEqual(['gar-blusa-12', 'ot-england-10']);
+    expect(res.errores).toHaveLength(1);
+    expect(res.discrepancias).toHaveLength(0);
+  });
+
+  it('un precio especial del cliente sigue ganando sobre precioB2B tras el filtro', () => {
+    const catalogoConEspecial = {
+      'ot-england-10': { producto: { colegio: 'OT', esB2B: true, precioB2B: 64000 }, precioEspecial: 60000 }
+    };
+    const cart = [{ id: 'ot-england-10', descripcion: 'England', precio: 64000, cantidad: 1 }];
+    const res = revalidarCarritoB2B(cart, catalogoConEspecial, { cliente: gardner });
+    expect(res.itemsValidados[0].precio).toBe(60000);
+    expect(res.discrepancias[0].precioOficial).toBe(60000);
+  });
+
+  it('cliente sin lista blanca puede pedir cualquier compartida', () => {
+    const cart = [{ id: 'ot-bici-8', descripcion: 'Bicicletero', precio: 17000, cantidad: 1 }];
+    const res = revalidarCarritoB2B(cart, catalogo, { cliente: { codigoColegio: 'GAR' } });
+    expect(res.errores).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// calcularCambiosPreciosCorporativos — guardado de "Catálogo y precios"
+// ─────────────────────────────────────────────────────────────
+describe('calcularCambiosPreciosCorporativos', () => {
+  // Datos reales del negocio: el England escalona precio por talla
+  const PRODUCTOS = [
+    { id: 'p10', nombre: 'PANTALON EN DIARIO TALLA 10', referencia: 'EN10', precio: 67000, precioB2B: 64000 },
+    { id: 'p12', nombre: 'PANTALON EN DIARIO TALLA 12', referencia: 'EN12', precio: 68000, precioB2B: 65000 },
+    { id: 'g01', nombre: 'BLUSA GAR DIARIO TALLA 12', referencia: 'GAR003T12', precio: 47000 }
+  ];
+
+  it('input vacío sin precio guardado: no hace nada', () => {
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, {}, {});
+    expect(res).toEqual({ aEscribir: [], aBorrar: [], errores: [] });
+  });
+
+  it('input vacío con precio guardado: lo borra (vuelve al precio de lista)', () => {
+    const guardados = { p10: { docId: 'doc-1', precioEspecial: 60000 } };
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '' }, guardados);
+    expect(res.aBorrar).toEqual(['doc-1']);
+    expect(res.aEscribir).toHaveLength(0);
+  });
+
+  it('input ausente (nunca se tocó) con precio guardado también lo borra', () => {
+    const guardados = { p10: { docId: 'doc-1', precioEspecial: 60000 } };
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, {}, guardados);
+    expect(res.aBorrar).toEqual(['doc-1']);
+  });
+
+  it('precio nuevo se crea sin docId', () => {
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '64000' }, {});
+    expect(res.aEscribir).toHaveLength(1);
+    expect(res.aEscribir[0]).toMatchObject({
+      productoId: 'p10', precioEspecial: 64000, referencia: 'EN10', precioTienda: 67000
+    });
+    expect(res.aEscribir[0].docId).toBeUndefined();
+  });
+
+  it('precio cambiado reusa el docId existente (no duplica documentos)', () => {
+    const guardados = { p10: { docId: 'doc-1', precioEspecial: 64000 } };
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '62000' }, guardados);
+    expect(res.aEscribir[0].docId).toBe('doc-1');
+    expect(res.aEscribir[0].precioEspecial).toBe(62000);
+  });
+
+  it('precio idéntico al guardado no genera escritura', () => {
+    const guardados = { p10: { docId: 'doc-1', precioEspecial: 64000 } };
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '64000' }, guardados);
+    expect(res.aEscribir).toHaveLength(0);
+    expect(res.aBorrar).toHaveLength(0);
+  });
+
+  it('precio guardado como string compara sin dar falso cambio', () => {
+    const guardados = { p10: { docId: 'doc-1', precioEspecial: '64000' } };
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '64000' }, guardados);
+    expect(res.aEscribir).toHaveLength(0);
+  });
+
+  it('espacios alrededor del número no rompen nada', () => {
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '  64000  ' }, {});
+    expect(res.aEscribir[0].precioEspecial).toBe(64000);
+  });
+
+  it('rechaza 0, negativos y texto — sin escribir nada de ese producto', () => {
+    const res = calcularCambiosPreciosCorporativos(
+      PRODUCTOS,
+      { p10: '0', p12: '-5000', g01: 'abc' },
+      {}
+    );
+    expect(res.aEscribir).toHaveLength(0);
+    expect(res.errores).toHaveLength(3);
+  });
+
+  it('rechaza el separador de miles: "64.000" NO se guarda como $64', () => {
+    // Por qué se valida el texto crudo y no el número: Number('64.000') === 64,
+    // un entero perfectamente válido. Convertir primero perdería el caso.
+    expect(Number('64.000')).toBe(64);
+    expect(Number.isInteger(Number('64.000'))).toBe(true);
+
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '64.000' }, {});
+    expect(res.aEscribir).toHaveLength(0);
+    expect(res.errores[0]).toMatch(/punto o coma/);
+  });
+
+  it('rechaza coma como separador y decimales reales', () => {
+    expect(calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '64,000' }, {}).errores).toHaveLength(1);
+    expect(calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '64000.5' }, {}).errores).toHaveLength(1);
+  });
+
+  it('un precio válido pero absurdamente bajo queda marcado como sospechoso', () => {
+    // "64" en vez de "64000": es un entero legítimo, así que solo se puede
+    // advertir. La pantalla lo muestra en el confirm con ⚠️ antes de escribir.
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '64' }, {});
+    expect(res.errores).toHaveLength(0);
+    expect(res.aEscribir[0].sospechoso).toBe(true);
+  });
+
+  it('un precio normal no queda marcado como sospechoso', () => {
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '64000', g01: '44000' }, {});
+    expect(res.aEscribir.every(c => c.sospechoso === false)).toBe(true);
+  });
+
+  it('sin precio de tienda no puede juzgar sospecha (no marca)', () => {
+    const sinPrecio = [{ id: 'x', nombre: 'X', precio: 0 }];
+    const res = calcularCambiosPreciosCorporativos(sinPrecio, { x: '10' }, {});
+    expect(res.aEscribir[0].sospechoso).toBe(false);
+  });
+
+  it('escenario completo: crea uno, actualiza otro, borra un tercero', () => {
+    const guardados = {
+      p12: { docId: 'doc-12', precioEspecial: 65000 },
+      g01: { docId: 'doc-g1', precioEspecial: 44000 }
+    };
+    const res = calcularCambiosPreciosCorporativos(
+      PRODUCTOS,
+      { p10: '64000', p12: '63000', g01: '' },
+      guardados
+    );
+    expect(res.errores).toHaveLength(0);
+    expect(res.aEscribir.map(c => [c.productoId, c.precioEspecial, c.docId])).toEqual([
+      ['p10', 64000, undefined],
+      ['p12', 63000, 'doc-12']
+    ]);
+    expect(res.aBorrar).toEqual(['doc-g1']);
+  });
+
+  it('un guardado sin docId no se intenta borrar (dato corrupto no rompe el guardado)', () => {
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, { p10: '' }, { p10: { precioEspecial: 1 } });
+    expect(res.aBorrar).toHaveLength(0);
+  });
+
+  it('replica el descuento fijo por grupo: tienda − 3000 en cada talla', () => {
+    const descuento = 3000;
+    const inputs = {};
+    PRODUCTOS.filter(p => p.id.startsWith('p')).forEach(p => {
+      inputs[p.id] = String(p.precio - descuento);
+    });
+    const res = calcularCambiosPreciosCorporativos(PRODUCTOS, inputs, {});
+    expect(res.aEscribir.map(c => c.precioEspecial)).toEqual([64000, 65000]);
+    expect(res.errores).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Escenarios integrales del alta de un colegio nuevo
+// ─────────────────────────────────────────────────────────────
+describe('alta de colegio nuevo — catálogo y pedido punta a punta', () => {
+  const compartidas = [
+    { id: 'ot-en-10', colegio: 'OT', esB2B: true, nombre: 'PANTALON EN DIARIO TALLA 10', precio: 67000, precioB2B: 64000 },
+    { id: 'ot-bici-8', colegio: 'OT', esB2B: true, nombre: 'BICICLETERO OT TALLA 8', precio: 18000, precioB2B: 17000 }
+  ];
+  const exclusivasNuevo = [
+    { id: 'nue-camisa-10', colegio: 'NUE', esB2B: true, nombre: 'CAMISA NUE DIARIO TALLA 10', precio: 55000 }
+  ];
+
+  it('cliente recién creado (lista vacía) solo ve sus prendas exclusivas', () => {
+    const nuevo = { codigoColegio: 'NUE', productosCompartidos: [] };
+    const catalogo = construirCatalogoB2B(exclusivasNuevo, compartidas, nuevo);
+    expect(catalogo.map(p => p.id)).toEqual(['nue-camisa-10']);
+  });
+
+  it('al habilitarle el England lo ve, con SU precio propio y no el de lista', () => {
+    const nuevo = { codigoColegio: 'NUE', productosCompartidos: ['ot-en-10'] };
+    const catalogo = construirCatalogoB2B(exclusivasNuevo, compartidas, nuevo);
+    expect(catalogo.map(p => p.id)).toEqual(['nue-camisa-10', 'ot-en-10']);
+
+    const preciosPropios = { 'ot-en-10': 62000 };
+    const england = catalogo.find(p => p.id === 'ot-en-10');
+    expect(resolverPrecioOficialB2B(england, preciosPropios[england.id])).toBe(62000);
+    // Gardner, sin precio propio, sigue en el precioB2B de lista
+    expect(resolverPrecioOficialB2B(england, undefined)).toBe(64000);
+  });
+
+  it('sin precio propio ni precioB2B, la prenda exclusiva se cobra al precio de tienda', () => {
+    expect(resolverPrecioOficialB2B(exclusivasNuevo[0], undefined)).toBe(55000);
+  });
+
+  it('el pedido del colegio nuevo rechaza la compartida que no le habilitaron', () => {
+    const nuevo = { codigoColegio: 'NUE', productosCompartidos: ['ot-en-10'] };
+    const catalogoPorId = {
+      'ot-en-10': { producto: compartidas[0], precioEspecial: 62000 },
+      'ot-bici-8': { producto: compartidas[1] }
+    };
+    const cart = [
+      { id: 'ot-en-10', descripcion: 'England', precio: 62000, cantidad: 5 },
+      { id: 'ot-bici-8', descripcion: 'Bicicletero', precio: 17000, cantidad: 3 }
+    ];
+    const res = revalidarCarritoB2B(cart, catalogoPorId, { cliente: nuevo });
+    expect(res.itemsValidados.map(i => i.id)).toEqual(['ot-en-10']);
+    expect(res.itemsValidados[0].precio).toBe(62000);
+    expect(res.errores).toHaveLength(1);
+    expect(res.discrepancias).toHaveLength(0); // el precio del carrito ya era el oficial
+  });
+
+  it('quitarle una prenda del catálogo no cambia el precio de las que sí lleva', () => {
+    const antes = { codigoColegio: 'NUE', productosCompartidos: ['ot-en-10', 'ot-bici-8'] };
+    const despues = { codigoColegio: 'NUE', productosCompartidos: ['ot-en-10'] };
+    const precios = { 'ot-en-10': 62000 };
+    const enAntes = construirCatalogoB2B([], compartidas, antes).find(p => p.id === 'ot-en-10');
+    const enDespues = construirCatalogoB2B([], compartidas, despues).find(p => p.id === 'ot-en-10');
+    expect(resolverPrecioOficialB2B(enAntes, precios[enAntes.id]))
+      .toBe(resolverPrecioOficialB2B(enDespues, precios[enDespues.id]));
+  });
+
+  it('Gardner sin lista definida no se ve afectado por el alta del colegio nuevo', () => {
+    const gardner = { codigoColegio: 'GAR' }; // sin productosCompartidos
+    const catalogo = construirCatalogoB2B([], compartidas, gardner);
+    expect(catalogo).toHaveLength(2); // sigue viendo todas las compartidas
+  });
+
+  it('el carrito de Gardner no puede colar una prenda del colegio nuevo', () => {
+    const gardner = { codigoColegio: 'GAR' };
+    const catalogoPorId = { 'nue-camisa-10': { producto: exclusivasNuevo[0] } };
+    const cart = [{ id: 'nue-camisa-10', descripcion: 'Camisa NUE', precio: 55000, cantidad: 1 }];
+    const res = revalidarCarritoB2B(cart, catalogoPorId, { cliente: gardner });
+    expect(res.itemsValidados).toHaveLength(0);
+    expect(res.errores[0]).toMatch(/no está disponible para tu colegio/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// idPrecioCorporativo — idempotencia del guardado
+// ─────────────────────────────────────────────────────────────
+describe('idPrecioCorporativo', () => {
+  it('el mismo par cliente+producto siempre da el mismo id', () => {
+    expect(idPrecioCorporativo('cli1', 'prod1')).toBe(idPrecioCorporativo('cli1', 'prod1'));
+  });
+
+  it('clientes distintos sobre el mismo producto no colisionan', () => {
+    expect(idPrecioCorporativo('cli1', 'prod1')).not.toBe(idPrecioCorporativo('cli2', 'prod1'));
+  });
+
+  it('productos distintos del mismo cliente no colisionan', () => {
+    expect(idPrecioCorporativo('cli1', 'prod1')).not.toBe(idPrecioCorporativo('cli1', 'prod2'));
+  });
+
+  it('el separador evita colisiones entre ids que se solapan', () => {
+    // Sin separador, ('ab','c') y ('a','bc') producirían el mismo id
+    expect(idPrecioCorporativo('ab', 'c')).not.toBe(idPrecioCorporativo('a', 'bc'));
+  });
+
+  it('no produce "/" — rompería la ruta del documento en Firestore', () => {
+    expect(idPrecioCorporativo('gardner_001', 'AbC123')).not.toContain('/');
+  });
+
+  it('tolera espacios accidentales sin cambiar el id', () => {
+    expect(idPrecioCorporativo(' cli1 ', ' prod1 ')).toBe(idPrecioCorporativo('cli1', 'prod1'));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// CLIENTES B2B — alta, baja y acceso al portal
+// ─────────────────────────────────────────────────────────────
+describe('normalizarEmailB2B', () => {
+  it('pasa a minúsculas y quita espacios', () => {
+    expect(normalizarEmailB2B('  Rector@ColegioNuevo.EDU.co ')).toBe('rector@colegionuevo.edu.co');
+  });
+
+  it('un email ya normalizado no cambia', () => {
+    expect(normalizarEmailB2B('norma@colegiogardner.com')).toBe('norma@colegiogardner.com');
+  });
+
+  it('null/undefined dan cadena vacía en vez de romper', () => {
+    expect(normalizarEmailB2B(null)).toBe('');
+    expect(normalizarEmailB2B(undefined)).toBe('');
+  });
+
+  it('es idempotente', () => {
+    const una = normalizarEmailB2B(' A@B.CO ');
+    expect(normalizarEmailB2B(una)).toBe(una);
+  });
+});
+
+describe('clientePortalActivo', () => {
+  it('solo un false explícito bloquea el acceso', () => {
+    expect(clientePortalActivo({ activo: false })).toBe(false);
+    expect(clientePortalActivo({ activo: true })).toBe(true);
+  });
+
+  it('cliente legacy sin el campo sigue entrando (no se les corta el acceso)', () => {
+    expect(clientePortalActivo({ nombre: 'Gardner' })).toBe(true);
+  });
+
+  it('sin cliente no hay acceso', () => {
+    expect(clientePortalActivo(null)).toBe(false);
+    expect(clientePortalActivo(undefined)).toBe(false);
+  });
+});
+
+describe('evaluarBorradoClienteB2B', () => {
+  it('un cliente sin pedidos sí se puede borrar (alta equivocada)', () => {
+    const res = evaluarBorradoClienteB2B([]);
+    expect(res.puedeBorrar).toBe(true);
+    expect(res.motivo).toBe('');
+  });
+
+  it('un cliente con pedidos NO se puede borrar', () => {
+    const res = evaluarBorradoClienteB2B([{ estado: 'Completado', total: 100000, abonos: [{ monto: 100000 }] }]);
+    expect(res.puedeBorrar).toBe(false);
+    expect(res.total).toBe(1);
+    expect(res.motivo).toMatch(/Desactívalo/);
+  });
+
+  it('cuenta los pedidos en curso y excluye los finalizados', () => {
+    const res = evaluarBorradoClienteB2B([
+      { estado: 'Completado' }, { estado: 'Anulado' }, { estado: 'Cancelado' },
+      { estado: 'Enviado' }, { estado: 'En Preparación' }
+    ]);
+    expect(res.total).toBe(5);
+    expect(res.enCurso).toBe(2);
+  });
+
+  it('el flag anulado también saca al pedido de "en curso"', () => {
+    const res = evaluarBorradoClienteB2B([{ estado: 'Enviado', anulado: true }]);
+    expect(res.enCurso).toBe(0);
+  });
+
+  it('suma el saldo pendiente descontando abonos', () => {
+    const res = evaluarBorradoClienteB2B([
+      { estado: 'Enviado', total: 500000, abonos: [{ monto: 241000 }] },
+      { estado: 'Completado', total: 100000, abonos: [{ monto: 100000 }] }
+    ]);
+    expect(res.saldoPendiente).toBe(259000);
+    expect(res.motivo).toMatch(/259.000/);
+  });
+
+  it('los pedidos anulados no arrastran saldo', () => {
+    const res = evaluarBorradoClienteB2B([{ estado: 'Anulado', total: 900000, abonos: [] }]);
+    expect(res.saldoPendiente).toBe(0);
+  });
+
+  it('sin abonos el saldo es el total del pedido', () => {
+    const res = evaluarBorradoClienteB2B([{ estado: 'Enviado', total: 80000 }]);
+    expect(res.saldoPendiente).toBe(80000);
+  });
+
+  it('escenario real de Gardner: 15 pedidos, 9 en curso, $259.000 → no se borra', () => {
+    const pedidos = [
+      ...Array.from({ length: 5 }, () => ({ estado: 'Completado', total: 100000, abonos: [{ monto: 100000 }] })),
+      { estado: 'Anulado', total: 50000, abonos: [] },
+      ...Array.from({ length: 7 }, () => ({ estado: 'Enviado', total: 100000, abonos: [{ monto: 100000 }] })),
+      { estado: 'Enviado Parcial', total: 259000, abonos: [] },
+      { estado: 'Enviado Parcial', total: 100000, abonos: [{ monto: 100000 }] }
+    ];
+    const res = evaluarBorradoClienteB2B(pedidos);
+    expect(res.total).toBe(15);
+    expect(res.enCurso).toBe(9);
+    expect(res.saldoPendiente).toBe(259000);
+    expect(res.puedeBorrar).toBe(false);
   });
 });

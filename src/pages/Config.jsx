@@ -2,13 +2,15 @@ import { useState, useEffect } from 'react';
 import { db, functions, storage } from '../services/firebase';
 import {
   collection, getDocs, addDoc, updateDoc, deleteDoc, doc,
-  getDoc, setDoc, serverTimestamp, query, where, orderBy
+  getDoc, setDoc, serverTimestamp, query, where, orderBy, writeBatch
 } from 'firebase/firestore';
+import { normalizarEmailB2B, evaluarBorradoClienteB2B } from '../utils/pedidosB2BLogic';
 import { httpsCallable } from 'firebase/functions';
 import {
   ref, uploadBytesResumable, getDownloadURL
 } from 'firebase/storage';
 import GestionCostos from '../components/config/GestionCostos';
+import CatalogoClienteB2B from '../components/config/CatalogoClienteB2B';
 import { useAuth } from '../context/AuthContext';
 
 const Config = () => {
@@ -70,6 +72,9 @@ const Config = () => {
   const [loadingB2B, setLoadingB2B] = useState(false);
   const [showB2BModal, setShowB2BModal] = useState(false);
   const [editingB2BId, setEditingB2BId] = useState(null);
+  // Cliente cuyo catálogo B2B (prendas compartidas visibles + precios propios)
+  // se está editando. null = modal cerrado.
+  const [clienteCatalogo, setClienteCatalogo] = useState(null);
   const [formDataB2B, setFormDataB2B] = useState({
     nombre: '',
     codigoColegio: '',
@@ -94,6 +99,9 @@ const Config = () => {
       fetchUsuarios();
     } else if (activeTab === 'clientesB2B') {
       fetchClientesB2B();
+      // El alta de un cliente exige elegir un colegio existente: sin esta lista
+      // el selector saldría vacío y no se podría validar el código.
+      fetchColegios();
     }
   }, [activeTab]);
 
@@ -654,6 +662,25 @@ const Config = () => {
       }
     }
 
+    // El email SIEMPRE en minúsculas: Firebase Auth normaliza el suyo, y si el
+    // documento guarda otra capitalización el cliente no pasa el login y la
+    // regla de create de pedidos_b2b (clienteEmail == token.email) lo rechaza.
+    const emailNormalizado = normalizarEmailB2B(formDataB2B.email);
+
+    // El código de colegio debe existir: el catálogo del portal filtra
+    // `where('colegio','==',codigoColegio)`, así que un código inventado deja al
+    // cliente con el catálogo vacío y sin ninguna pista de por qué.
+    const codigoColegio = formDataB2B.codigoColegio.trim().toUpperCase();
+    const colegioExiste = colegios.some(c => (c.codigo || '').trim().toUpperCase() === codigoColegio);
+    if (!colegioExiste) {
+      alert(
+        `El código de colegio "${codigoColegio}" no existe.\n\n` +
+        'Créalo primero en la pestaña "Gestión de Colegios". ' +
+        'Si el código no coincide exactamente, el cliente entrará al portal y verá el catálogo vacío.'
+      );
+      return;
+    }
+
     setLoadingB2B(true);
     try {
       if (editingB2BId) {
@@ -661,9 +688,9 @@ const Config = () => {
         const clienteRef = doc(db, 'clientes_corporativos', editingB2BId);
         await updateDoc(clienteRef, {
           nombre: formDataB2B.nombre.trim(),
-          codigoColegio: formDataB2B.codigoColegio.trim().toUpperCase(),
+          codigoColegio,
           credenciales: {
-            email: formDataB2B.email.trim()
+            email: emailNormalizado
           },
           contacto: {
             nombre: formDataB2B.contactoNombre.trim(),
@@ -676,28 +703,42 @@ const Config = () => {
         // Crear nuevo cliente
         // 1. Crear usuario en Firebase Authentication
         const createUserFunction = httpsCallable(functions, 'createUser');
-        const userResult = await createUserFunction({
-          email: formDataB2B.email.trim(),
+        // El rol 'b2b' NO es staff: las reglas de Firestore solo le abren su
+        // catálogo y sus propios pedidos. La function rechazaba este rol, así
+        // que este alta fallaba siempre y los clientes había que crearlos a mano.
+        await createUserFunction({
+          email: emailNormalizado,
           password: formDataB2B.password, // Validado arriba: mín 8 chars con letra y número
-          role: 'b2b' // Aunque no se usa, lo marcamos
+          role: 'b2b'
         });
 
         // 2. Crear documento en clientes_corporativos
         await addDoc(collection(db, 'clientes_corporativos'), {
           nombre: formDataB2B.nombre.trim(),
-          codigoColegio: formDataB2B.codigoColegio.trim().toUpperCase(),
+          codigoColegio,
           credenciales: {
-            email: formDataB2B.email.trim()
+            email: emailNormalizado
           },
           contacto: {
             nombre: formDataB2B.contactoNombre.trim(),
             telefono: formDataB2B.contactoTelefono.trim()
           },
           activo: true,
+          // Nace SIN prendas compartidas habilitadas: solo verá las de su propio
+          // colegio hasta que un admin le habilite las compartidas en
+          // "Catálogo y precios". El default seguro es que le falte una prenda
+          // (se nota y se corrige) antes que verla al precio pactado con otro
+          // colegio. Los clientes viejos no tienen el campo → siguen viendo todas.
+          productosCompartidos: [],
           createdAt: serverTimestamp()
         });
 
-        alert('Cliente B2B creado correctamente');
+        alert(
+          'Cliente B2B creado correctamente.\n\n' +
+          'Por ahora solo verá las prendas de su propio colegio. Abre "Catálogo y precios" ' +
+          'para habilitarle las prendas compartidas (pantalón England, bicicleteros…) y ' +
+          'fijarle precios propios si los negociaste distinto.'
+        );
       }
 
       // Limpiar formulario y recargar
@@ -736,32 +777,154 @@ const Config = () => {
     setShowB2BModal(true);
   };
 
-  // Eliminar cliente B2B
-  const handleDeleteClienteB2B = async (id, nombre, email) => {
-    if (!window.confirm(`¿Estás seguro de eliminar el cliente "${nombre}"? Esto también eliminará su usuario de autenticación.`)) {
-      return;
+  // Activar / desactivar cliente B2B — la baja NORMAL.
+  // Reversible y sin pérdida: conserva pedidos, saldo, precios propios y catálogo.
+  // Corta el acceso por dos vías independientes: el flag `activo` (que el portal
+  // valida al entrar) y la cuenta de Auth deshabilitada (que ni siquiera deja
+  // autenticarse). Con una sola de las dos bastaría; se hacen las dos porque
+  // deshabilitar en Auth puede fallar si la cuenta no existe.
+  const handleToggleActivoClienteB2B = async (cliente) => {
+    const estaActivo = cliente.activo !== false;
+    const accion = estaActivo ? 'desactivar' : 'reactivar';
+    const email = normalizarEmailB2B(cliente.credenciales?.email);
+
+    const mensaje = estaActivo
+      ? `¿Desactivar a "${cliente.nombre}"?\n\n` +
+        `• No podrá entrar al portal ni crear pedidos.\n` +
+        `• Se conserva TODO: pedidos, saldos, precios propios y su catálogo.\n` +
+        `• Puedes reactivarlo cuando quieras desde este mismo botón.`
+      : `¿Reactivar a "${cliente.nombre}"? Volverá a tener acceso al portal con su catálogo y precios de siempre.`;
+
+    if (!window.confirm(mensaje)) return;
+
+    setLoadingB2B(true);
+    let flagActualizado = false;
+    try {
+      await updateDoc(doc(db, 'clientes_corporativos', cliente.id), {
+        activo: !estaActivo,
+        updatedAt: serverTimestamp()
+      });
+      flagActualizado = true;
+
+      // Deshabilitar también la cuenta de Auth. Si no existe, el flag ya cortó
+      // el acceso: se avisa pero no se revierte nada.
+      let avisoAuth = '';
+      if (email) {
+        try {
+          const setUserDisabled = httpsCallable(functions, 'setUserDisabled');
+          await setUserDisabled({ email, disabled: estaActivo });
+        } catch (errAuth) {
+          console.warn('No se pudo cambiar el estado en Auth:', errAuth);
+          avisoAuth =
+            `\n\nNota: no se pudo ${estaActivo ? 'deshabilitar' : 'habilitar'} la cuenta de acceso ` +
+            `(${errAuth.message}). El bloqueo por estado del cliente sí quedó aplicado.`;
+        }
+      }
+
+      alert(`Cliente ${estaActivo ? 'desactivado' : 'reactivado'} correctamente.` + avisoAuth);
+      fetchClientesB2B();
+    } catch (error) {
+      console.error(`Error al ${accion} cliente B2B:`, error);
+      alert(
+        (flagActualizado
+          ? 'El cambio pudo haberse aplicado parcialmente. Refresca y verifica el estado antes de reintentar.'
+          : `No se pudo ${accion} el cliente.`) +
+        `\n\nDetalle (${error.code || 'sin código'}): ${error.message}`
+      );
+    } finally {
+      setLoadingB2B(false);
     }
+  };
+
+  // Eliminar cliente B2B — SOLO para altas equivocadas (sin ningún pedido).
+  // Borrar destruye la cuenta de Auth: un cliente con pedidos en curso quedaría
+  // sin poder confirmar recepción y con su saldo sin dueño visible.
+  const handleDeleteClienteB2B = async (cliente) => {
+    const { id, nombre } = cliente;
+    const email = normalizarEmailB2B(cliente.credenciales?.email);
 
     setLoadingB2B(true);
     try {
-      // 1. Buscar y eliminar el usuario de Authentication
-      const listUsersFunction = httpsCallable(functions, 'listUsers');
-      const result = await listUsersFunction();
-      const user = result.data.users.find(u => u.email === email);
+      // 1. ¿Tiene historial? Se consulta por clienteId (como los reportes)
+      const pedidosSnap = await getDocs(query(
+        collection(db, 'pedidos_b2b'),
+        where('clienteId', '==', id)
+      ));
+      const pedidos = pedidosSnap.docs.map(d => d.data());
+      const evaluacion = evaluarBorradoClienteB2B(pedidos);
 
-      if (user) {
-        const deleteUserFunction = httpsCallable(functions, 'deleteUser');
-        await deleteUserFunction({ uid: user.uid });
+      if (!evaluacion.puedeBorrar) {
+        alert(`No se puede eliminar a "${nombre}".\n\n${evaluacion.motivo}`);
+        return;
       }
 
-      // 2. Eliminar documento de clientes_corporativos
+      // 2. Confirmación fuerte: escribir el nombre exacto
+      const respuesta = window.prompt(
+        `Vas a ELIMINAR definitivamente a "${nombre}".\n\n` +
+        `No tiene pedidos registrados, así que no se pierde historial, pero sí se borran:\n` +
+        `• su cuenta de acceso al portal\n` +
+        `• sus precios propios y su catálogo configurado\n` +
+        `• sus notificaciones\n\n` +
+        `Esta acción NO se puede deshacer. Escribe el nombre del cliente para confirmar:`
+      );
+      if (respuesta === null) return;
+      if (respuesta.trim() !== nombre.trim()) {
+        alert('El nombre no coincide. No se eliminó nada.');
+        return;
+      }
+
+      // 3. Limpiar lo que quedaría huérfano (mismo id de cliente)
+      const [preciosSnap, notifsSnap] = await Promise.all([
+        getDocs(query(collection(db, 'precios_corporativos'), where('clienteId', '==', id))),
+        getDocs(query(collection(db, 'notificaciones_portal'), where('clienteId', '==', id)))
+      ]);
+      const batch = writeBatch(db);
+      preciosSnap.forEach(d => batch.delete(d.ref));
+      notifsSnap.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+
+      // 4. Borrar el usuario de Authentication.
+      // getUserByEmail en la function evita el matching frágil por listUsers:
+      // antes, un email con otra capitalización no encontraba al usuario, no lo
+      // borraba, y aun así se borraba el documento — dejando una cuenta huérfana.
+      if (email) {
+        try {
+          const listUsersFunction = httpsCallable(functions, 'listUsers');
+          const result = await listUsersFunction();
+          const user = result.data.users.find(
+            u => normalizarEmailB2B(u.email) === email
+          );
+          if (user) {
+            const deleteUserFunction = httpsCallable(functions, 'deleteUser');
+            await deleteUserFunction({ uid: user.uid });
+          }
+        } catch (errAuth) {
+          console.error('No se pudo eliminar el usuario de Auth:', errAuth);
+          alert(
+            `No se pudo eliminar la cuenta de acceso de ${email} (${errAuth.message}).\n\n` +
+            'No se borró el cliente para no dejar una cuenta huérfana que aún puede autenticarse. ' +
+            'Revisa Authentication en la consola de Firebase y reintenta.'
+          );
+          return;
+        }
+      }
+
+      // 5. Borrar el documento del cliente
       await deleteDoc(doc(db, 'clientes_corporativos', id));
 
-      alert('Cliente B2B eliminado correctamente');
+      alert(
+        `Cliente "${nombre}" eliminado.\n\n` +
+        `• Precios propios borrados: ${preciosSnap.size}\n` +
+        `• Notificaciones borradas: ${notifsSnap.size}`
+      );
       fetchClientesB2B();
     } catch (error) {
       console.error('Error al eliminar cliente B2B:', error);
-      alert('Error al eliminar cliente B2B: ' + error.message);
+      alert(
+        'Error al eliminar cliente B2B. Puede que parte de la limpieza sí se haya aplicado — ' +
+        'refresca y verifica antes de reintentar.' +
+        `\n\nDetalle (${error.code || 'sin código'}): ${error.message}`
+      );
     } finally {
       setLoadingB2B(false);
     }
@@ -1686,8 +1849,12 @@ const Config = () => {
         </div>
       )}
 
-      {/* CONTENIDO PESTAÑA CLIENTES B2B */}
-      {activeTab === 'clientesB2B' && (
+      {/* CONTENIDO PESTAÑA CLIENTES B2B
+          Doble guard como en la pestaña de Costos: además de ocultar el botón,
+          el contenido exige isAdmin — desde aquí se fijan los precios B2B por
+          cliente, que es plata. La protección real son las reglas de Firestore
+          (clientes_corporativos y precios_corporativos son write: isAdmin). */}
+      {activeTab === 'clientesB2B' && isAdmin && (
         <div>
           {/* Botón para añadir cliente */}
           <div className="flex justify-end mb-4">
@@ -1752,7 +1919,15 @@ const Config = () => {
                           </div>
                         </div>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => setClienteCatalogo(cliente)}
+                          disabled={loadingB2B}
+                          className="w-full px-4 py-2 text-white text-sm rounded hover:opacity-90 transition-colors disabled:opacity-50"
+                          style={{ backgroundColor: '#D50565' }}
+                        >
+                          Catálogo y precios
+                        </button>
                         <button
                           onClick={() => handleEditClienteB2B(cliente)}
                           disabled={loadingB2B}
@@ -1761,11 +1936,22 @@ const Config = () => {
                           Editar
                         </button>
                         <button
-                          onClick={() => handleDeleteClienteB2B(cliente.id, cliente.nombre, cliente.credenciales?.email)}
+                          onClick={() => handleToggleActivoClienteB2B(cliente)}
                           disabled={loadingB2B}
-                          className="flex-1 px-4 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600 transition-colors disabled:opacity-50"
+                          className={`flex-1 px-4 py-2 text-white text-sm rounded transition-colors disabled:opacity-50 ${
+                            cliente.activo !== false
+                              ? 'bg-amber-500 hover:bg-amber-600'
+                              : 'bg-green-600 hover:bg-green-700'
+                          }`}
                         >
-                          Eliminar
+                          {cliente.activo !== false ? 'Desactivar' : 'Reactivar'}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteClienteB2B(cliente)}
+                          disabled={loadingB2B}
+                          className="w-full px-4 py-2 bg-white border border-red-300 text-red-600 text-sm rounded hover:bg-red-50 transition-colors disabled:opacity-50"
+                        >
+                          Eliminar (solo sin pedidos)
                         </button>
                       </div>
                     </div>
@@ -1810,6 +1996,15 @@ const Config = () => {
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-right text-sm space-x-2">
                             <button
+                              onClick={() => setClienteCatalogo(cliente)}
+                              disabled={loadingB2B}
+                              className="px-4 py-1.5 text-white rounded hover:opacity-90 transition-colors disabled:opacity-50"
+                              style={{ backgroundColor: '#D50565' }}
+                              title="Elegir qué prendas compartidas ve este cliente y a qué precio compra"
+                            >
+                              Catálogo y precios
+                            </button>
+                            <button
                               onClick={() => handleEditClienteB2B(cliente)}
                               disabled={loadingB2B}
                               className="px-4 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors disabled:opacity-50"
@@ -1817,9 +2012,24 @@ const Config = () => {
                               Editar
                             </button>
                             <button
-                              onClick={() => handleDeleteClienteB2B(cliente.id, cliente.nombre, cliente.credenciales?.email)}
+                              onClick={() => handleToggleActivoClienteB2B(cliente)}
                               disabled={loadingB2B}
-                              className="px-4 py-1.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors disabled:opacity-50"
+                              className={`px-4 py-1.5 text-white rounded transition-colors disabled:opacity-50 ${
+                                cliente.activo !== false
+                                  ? 'bg-amber-500 hover:bg-amber-600'
+                                  : 'bg-green-600 hover:bg-green-700'
+                              }`}
+                              title={cliente.activo !== false
+                                ? 'Revoca el acceso al portal sin perder pedidos, saldos ni precios'
+                                : 'Devuelve el acceso al portal'}
+                            >
+                              {cliente.activo !== false ? 'Desactivar' : 'Reactivar'}
+                            </button>
+                            <button
+                              onClick={() => handleDeleteClienteB2B(cliente)}
+                              disabled={loadingB2B}
+                              className="px-4 py-1.5 bg-white border border-red-300 text-red-600 rounded hover:bg-red-50 transition-colors disabled:opacity-50"
+                              title="Solo para altas equivocadas: se bloquea si el cliente tiene pedidos"
                             >
                               Eliminar
                             </button>
@@ -1960,17 +2170,27 @@ const Config = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Código del Colegio <span className="text-red-500">*</span>
                   </label>
-                  <input
-                    type="text"
+                  {/* Selector y no texto libre: el catálogo del portal filtra por
+                      igualdad exacta contra este código, así que un código tecleado
+                      a mano deja al cliente con el catálogo vacío sin ninguna pista. */}
+                  <select
                     name="codigoColegio"
                     value={formDataB2B.codigoColegio}
                     onChange={handleB2BFormChange}
-                    placeholder="Ej: GAR"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary uppercase"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary bg-white"
                     required
-                  />
+                  >
+                    <option value="">Seleccionar colegio…</option>
+                    {colegios.map((colegio) => (
+                      <option key={colegio.id} value={colegio.codigo}>
+                        {colegio.nombre} ({colegio.codigo})
+                      </option>
+                    ))}
+                  </select>
                   <p className="text-xs text-gray-500 mt-1">
-                    Debe coincidir con un colegio existente
+                    {colegios.length === 0
+                      ? 'No hay colegios registrados: créalo primero en "Gestión de Colegios".'
+                      : 'Define qué prendas verá el cliente en el portal.'}
                   </p>
                 </div>
 
@@ -2080,6 +2300,15 @@ const Config = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Catálogo B2B por cliente: qué prendas compartidas ve y a qué precio compra */}
+      {clienteCatalogo && (
+        <CatalogoClienteB2B
+          cliente={clienteCatalogo}
+          onClose={() => setClienteCatalogo(null)}
+          onSaved={fetchClientesB2B}
+        />
       )}
     </div>
   );

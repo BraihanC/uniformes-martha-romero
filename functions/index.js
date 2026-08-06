@@ -64,22 +64,40 @@ exports.listUsers = onCall(async (request) => {
 });
 
 /**
+ * Roles válidos como custom claim.
+ * - admin / vendedor: personal interno. isStaff() en las reglas de Firestore.
+ * - b2b: cliente corporativo del portal. NO es staff: con este rol las reglas
+ *   solo le permiten su catálogo y sus propios pedidos. Sin él, el alta de
+ *   clientes B2B desde Configuración fallaba con invalid-argument.
+ */
+const ROLES_VALIDOS = ["admin", "vendedor", "b2b"];
+
+/**
+ * Firebase Auth normaliza los emails a minúsculas. Si el documento de Firestore
+ * guarda otra capitalización, el login del portal (que matchea por igualdad) y
+ * las reglas de pedidos_b2b (clienteEmail == token.email) fallan. Se normaliza
+ * en el único punto donde se crea la cuenta.
+ */
+const normalizarEmail = (email) => String(email || "").trim().toLowerCase();
+
+/**
  * [Función 2] - Crear un nuevo usuario
  * Recibe email, password y rol, y crea un nuevo usuario.
- * Asigna el rol ("admin" o "vendedor") usando "Custom Claims".
+ * Asigna el rol ("admin", "vendedor" o "b2b") usando "Custom Claims".
  */
 exports.createUser = onCall(async (request) => {
   // Verificar permisos de Admin
   assertIsAdmin(request);
 
-  const { email, password, role } = request.data;
+  const { password, role } = request.data;
+  const email = normalizarEmail(request.data.email);
 
   // Validar datos de entrada
   if (!email || !password || !role) {
     throw new HttpsError("invalid-argument", "Email, contraseña y rol son requeridos.");
   }
-  if (role !== "admin" && role !== "vendedor") {
-    throw new HttpsError("invalid-argument", "El rol debe ser 'admin' o 'vendedor'.");
+  if (!ROLES_VALIDOS.includes(role)) {
+    throw new HttpsError("invalid-argument", `El rol debe ser uno de: ${ROLES_VALIDOS.join(", ")}.`);
   }
 
   try {
@@ -133,6 +151,44 @@ exports.deleteUser = onCall(async (request) => {
   } catch (error) {
     logger.error(`Error al eliminar usuario ${uid}:`, error);
     throw new HttpsError("internal", "Error al eliminar el usuario.");
+  }
+});
+
+/**
+ * [Función 3b] - Habilitar / deshabilitar un usuario de Authentication
+ *
+ * Baja REVERSIBLE de un cliente B2B: deshabilitar la cuenta revoca el acceso al
+ * portal de inmediato sin destruir nada (el histórico de pedidos, el saldo y los
+ * precios propios quedan intactos y se puede reactivar con un clic). Es lo que
+ * se debe usar en vez de borrar cuando el cliente ya tiene operación.
+ */
+exports.setUserDisabled = onCall(async (request) => {
+  assertIsAdmin(request);
+
+  const email = normalizarEmail(request.data.email);
+  const { disabled } = request.data;
+
+  if (!email) {
+    throw new HttpsError("invalid-argument", "El email del usuario es requerido.");
+  }
+  if (typeof disabled !== "boolean") {
+    throw new HttpsError("invalid-argument", "El campo 'disabled' debe ser true o false.");
+  }
+
+  try {
+    const userRecord = await getAuth().getUserByEmail(email);
+    await getAuth().updateUser(userRecord.uid, { disabled });
+
+    logger.info(`Usuario ${userRecord.uid} (${email}) ${disabled ? "deshabilitado" : "habilitado"}.`);
+    return { success: true, uid: userRecord.uid, disabled };
+  } catch (error) {
+    if (error.code === "auth/user-not-found") {
+      // El documento de Firestore existe pero la cuenta de Auth no. No es fatal:
+      // el portal igual bloquea por `activo`, pero conviene que el admin lo sepa.
+      throw new HttpsError("not-found", `No existe una cuenta de acceso para ${email}.`);
+    }
+    logger.error(`Error al cambiar el estado del usuario ${email}:`, error);
+    throw new HttpsError("internal", "Error al cambiar el estado del usuario.");
   }
 });
 
