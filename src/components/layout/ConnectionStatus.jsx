@@ -1,71 +1,79 @@
-import { useState, useEffect } from 'react';
-import { Wifi, WifiOff, CloudOff, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Wifi, WifiOff, RefreshCw } from 'lucide-react';
+import { useConexion } from '../../hooks/useConexion';
 
+/**
+ * Banner de estado de conexión.
+ *
+ * IMPORTANTE — el texto tiene que ser honesto. La versión anterior decía
+ * "Modo offline activo - Los datos se guardarán localmente", lo cual es FALSO para
+ * los flujos que más importan: POS, Pedidos, Apartados y Pedidos B2B usan
+ * `runTransaction` (consecutivos + verificación de stock) y las transacciones de
+ * Firestore no funcionan sin servidor. Prometer que "se guarda localmente" hacía que
+ * la vendedora intentara facturar y recibiera un error crudo en inglés.
+ *
+ * Lo que SÍ funciona offline son las lecturas, que salen del caché de Firestore.
+ */
 const ConnectionStatus = () => {
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [showBanner, setShowBanner] = useState(false);
-  const [wasOffline, setWasOffline] = useState(false);
+  const { isOnline } = useConexion();
+  const [showBanner, setShowBanner] = useState(!navigator.onLine);
+  const estuvoOffline = useRef(!navigator.onLine);
+  const timeoutRef = useRef(null);
 
   useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-      if (wasOffline) {
-        // Mostrar mensaje de reconexión brevemente
-        setShowBanner(true);
-        setTimeout(() => setShowBanner(false), 3000);
-      }
-      setWasOffline(false);
-    };
-
-    const handleOffline = () => {
-      setIsOnline(false);
-      setWasOffline(true);
+    if (!isOnline) {
+      // Offline: el banner se queda fijo hasta que vuelva la conexión.
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      estuvoOffline.current = true;
       setShowBanner(true);
-    };
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    // Mostrar banner si inicia offline
-    if (!navigator.onLine) {
-      setShowBanner(true);
-      setWasOffline(true);
+      return;
     }
 
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, [wasOffline]);
+    // Online: solo mostramos "conexión restaurada" si veníamos de estar caídos.
+    if (estuvoOffline.current) {
+      estuvoOffline.current = false;
+      setShowBanner(true);
+      timeoutRef.current = setTimeout(() => setShowBanner(false), 4000);
+    } else {
+      setShowBanner(false);
+    }
+  }, [isOnline]);
 
-  // No mostrar nada si está online y no hay banner
+  // Limpiar el timeout al desmontar para no hacer setState sobre un componente muerto.
+  useEffect(() => () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  }, []);
+
   if (isOnline && !showBanner) return null;
 
   return (
     <div
-      className={`fixed bottom-4 left-4 z-50 flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg transition-all duration-300 ${
-        isOnline
-          ? 'bg-green-600 text-white'
-          : 'bg-amber-500 text-white'
+      role="status"
+      aria-live="polite"
+      className={`fixed bottom-4 left-4 z-50 flex items-start gap-3 px-4 py-3 rounded-lg shadow-lg max-w-sm transition-all duration-300 ${
+        isOnline ? 'bg-green-600 text-white' : 'bg-red-600 text-white'
       }`}
     >
       {isOnline ? (
         <>
-          <Wifi size={20} />
+          <Wifi size={20} className="shrink-0 mt-0.5" />
           <div>
             <p className="font-medium text-sm">Conexión restaurada</p>
-            <p className="text-xs opacity-90">Sincronizando datos...</p>
+            <p className="text-xs opacity-90">Ya puedes registrar ventas y pedidos.</p>
           </div>
-          <RefreshCw size={16} className="animate-spin ml-2" />
+          <RefreshCw size={16} className="animate-spin ml-2 shrink-0 mt-0.5" />
         </>
       ) : (
         <>
-          <WifiOff size={20} />
+          <WifiOff size={20} className="shrink-0 mt-0.5" />
           <div>
-            <p className="font-medium text-sm">Sin conexión a Internet</p>
-            <p className="text-xs opacity-90">Modo offline activo - Los datos se guardarán localmente</p>
+            <p className="font-medium text-sm">Sin conexión a internet</p>
+            <p className="text-xs opacity-90 mt-0.5">
+              Puedes <strong>consultar</strong> inventario, clientes y pedidos, pero{' '}
+              <strong>no registrar</strong> ventas, pedidos, apartados ni abonos hasta
+              que vuelva la conexión.
+            </p>
           </div>
-          <CloudOff size={16} className="ml-2" />
         </>
       )}
     </div>

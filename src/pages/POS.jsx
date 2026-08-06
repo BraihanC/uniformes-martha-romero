@@ -16,7 +16,9 @@ import {
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
-import { Loader2 } from 'lucide-react';
+import { Loader2, WifiOff } from 'lucide-react';
+import { useConexion } from '../hooks/useConexion';
+import { bloquearSinConexion, bloquearEnvioSinConexion } from '../utils/conexion';
 import {
   calcularSubtotal,
   calcularDescuentoItem,
@@ -29,6 +31,7 @@ import {
 
 const POS = () => {
   const { currentUser } = useAuth();
+  const { isOffline } = useConexion();
   const searchInputRef = useRef(null);
 
   // Data states
@@ -645,6 +648,11 @@ const POS = () => {
 
   // ====== GENERATE FACTURA (CON TRANSACCIÓN Y VERIFICACIÓN DE STOCK) ======
   const handleGenerateFactura = async () => {
+    // La venta corre dentro de un runTransaction (consecutivo de factura +
+    // verificación de stock disponible). Las transacciones no funcionan sin
+    // servidor, así que abortamos antes de que el usuario llene todo el flujo.
+    if (bloquearSinConexion('registrar la venta')) return;
+
     // Validations
     if (!selectedClient) {
       alert('Por favor seleccione un cliente');
@@ -939,6 +947,9 @@ const POS = () => {
   };
 
   const handleSendEmail = async () => {
+    // El envío va por Cloud Function (httpsCallable): requiere red sí o sí.
+    if (bloquearEnvioSinConexion('la factura por correo')) return;
+
     if (!emailRecipient.trim()) {
       alert('Por favor ingrese un correo electrónico');
       return;
@@ -1588,11 +1599,17 @@ const POS = () => {
               </button>
               <button
                 onClick={handleGenerateFactura}
-                disabled={cartItems.length === 0 || !selectedClient || loading}
+                disabled={cartItems.length === 0 || !selectedClient || loading || isOffline}
+                title={isOffline ? 'Sin conexión: no se puede facturar hasta que vuelva la red' : undefined}
                 className="flex-1 px-3 md:px-4 py-2 md:py-3 text-sm md:text-base bg-orange-500 text-white rounded-md hover:bg-orange-600 font-medium disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                style={{ backgroundColor: cartItems.length > 0 && selectedClient && !loading ? '#EA5C2E' : undefined }}
+                style={{ backgroundColor: cartItems.length > 0 && selectedClient && !loading && !isOffline ? '#EA5C2E' : undefined }}
               >
-                {loading && cartItems.length > 0 ? (
+                {isOffline ? (
+                  <>
+                    <WifiOff size={18} />
+                    Sin conexión
+                  </>
+                ) : loading && cartItems.length > 0 ? (
                   <>
                     <Loader2 size={18} className="animate-spin" />
                     Procesando...

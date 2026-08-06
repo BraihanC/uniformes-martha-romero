@@ -1002,6 +1002,13 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
     if (guardandoProducto) return;
     setGuardandoProducto(true);
 
+    // Con persistencia offline + multi-tab, addDoc/updateDoc pueden rechazar la
+    // promesa aunque la mutación ya haya quedado persistida y se sincronice
+    // después (p.ej. si la pestaña primaria cambia a mitad de la escritura).
+    // Marcamos si la escritura ya se lanzó para no decirle al usuario "no se
+    // guardó" cuando en realidad puede haberse guardado.
+    let escrituraLanzada = false;
+
     setLoading(true);
     try {
       if (editingProduct) {
@@ -1050,6 +1057,7 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
           }
         }
 
+        escrituraLanzada = true;
         await updateDoc(productRef, {
           referencia: formData.referencia.trim(),
           nombre: formData.nombre.trim(),
@@ -1073,6 +1081,7 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
         }
 
         // Crear nuevo producto
+        escrituraLanzada = true;
         await addDoc(collection(db, 'products'), {
           referencia: formData.referencia.trim(),
           nombre: formData.nombre.trim(),
@@ -1099,7 +1108,20 @@ ${entrada.asignaciones?.length > 0 ? `- ${entrada.asignaciones.length} asignacio
       fetchProducts();
     } catch (error) {
       console.error('Error al guardar producto:', error);
-      alert('Error al guardar el producto.');
+      const detalle = `\n\nDetalle técnico: ${error?.code || 'sin-codigo'} — ${error?.message || error}`;
+      if (escrituraLanzada) {
+        alert(
+          'No se pudo confirmar el guardado del producto.\n\n' +
+          '⚠️ IMPORTANTE: la escritura pudo haberse aplicado de todos modos ' +
+          '(pasa con conexión inestable o con varias pestañas de la app abiertas).\n\n' +
+          'Refresca la página y busca la referencia ANTES de reintentar, para no crear un duplicado.' +
+          detalle
+        );
+      } else {
+        alert('Error al guardar el producto. No se alcanzó a escribir nada.' + detalle);
+      }
+      // Refrescamos para que la lista refleje el estado real del servidor.
+      fetchProducts();
     } finally {
       setLoading(false);
       setGuardandoProducto(false);

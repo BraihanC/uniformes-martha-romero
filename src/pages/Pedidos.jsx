@@ -19,7 +19,9 @@ import {
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '../context/AuthContext';
-import { Phone, Loader2 } from 'lucide-react';
+import { Phone, Loader2, WifiOff } from 'lucide-react';
+import { useConexion } from '../hooks/useConexion';
+import { bloquearSinConexion, bloquearEnvioSinConexion } from '../utils/conexion';
 import {
   calcularValorDeEntrega,
   calcularValorYaEntregado,
@@ -34,6 +36,7 @@ import { calcularEstadoItemPOS } from '../utils/stockLogic';
 
 const Pedidos = () => {
   const { currentUser, isAdmin } = useAuth();
+  const { isOffline } = useConexion();
 
   // Estados para datos
   const [allClients, setAllClients] = useState([]);
@@ -495,6 +498,10 @@ const Pedidos = () => {
   const handleSavePedido = async (e) => {
     e.preventDefault();
 
+    // El consecutivo del pedido sale de un runTransaction sobre counters/*, que
+    // no funciona sin servidor.
+    if (bloquearSinConexion('crear el pedido')) return;
+
     if (!selectedClient) {
       alert('Por favor, selecciona un cliente.');
       return;
@@ -838,6 +845,9 @@ const Pedidos = () => {
 
   // Sub-Módulo 2: Registrar Entrega Parcial (PARTE 3)
   const handleRegistrarEntregaParcial = async () => {
+    // Mueve stock y puede generar factura, ambos vía runTransaction.
+    if (bloquearSinConexion('registrar la entrega')) return;
+
     if (!selectedPedido || selectedItemsForDelivery.length === 0) {
       alert('Por favor, selecciona al menos un ítem para entregar.');
       return;
@@ -1259,6 +1269,7 @@ const Pedidos = () => {
   const handleRegistrarAbonoAdicional = async (e) => {
     e.preventDefault();
 
+    if (bloquearSinConexion('registrar el abono')) return;
     if (!selectedPedido) return;
     if (bloquearSiPedidoAnulado(selectedPedido)) return;
 
@@ -2602,6 +2613,8 @@ const Pedidos = () => {
 
   // ===== REINTENTAR FACTURA (red de seguridad si el paso de facturación falló tras la entrega) =====
   const handleReintentarFactura = async () => {
+    // Consecutivo de factura vía runTransaction.
+    if (bloquearSinConexion('generar la factura')) return;
     if (!selectedPedido || reintentandoFactura) return;
     setReintentandoFactura(true);
     try {
@@ -2958,6 +2971,8 @@ const Pedidos = () => {
   };
 
   const handleSendEmail = async () => {
+    if (bloquearEnvioSinConexion('el pedido por correo')) return;
+
     if (!emailRecipient.trim()) {
       alert('Por favor ingrese un correo electrónico');
       return;
@@ -3708,12 +3723,14 @@ const Pedidos = () => {
               <div className="flex gap-3 sticky bottom-0 bg-white pt-4 border-t border-gray-200">
                 <button
                   type="submit"
-                  disabled={loading || guardandoPedido || !selectedClient || cartItems.length === 0}
+                  disabled={loading || guardandoPedido || !selectedClient || cartItems.length === 0 || isOffline}
+                  title={isOffline ? 'Sin conexión: no se pueden crear pedidos hasta que vuelva la red' : undefined}
                   style={{ backgroundColor: '#D50565' }}
                   className="flex-1 px-6 py-3 text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
+                  {isOffline && <WifiOff size={18} />}
                   {guardandoPedido && <Loader2 size={18} className="animate-spin" />}
-                  {guardandoPedido ? 'Guardando...' : 'Guardar Pedido'}
+                  {isOffline ? 'Sin conexión' : guardandoPedido ? 'Guardando...' : 'Guardar Pedido'}
                 </button>
                 <button
                   type="button"
@@ -4098,12 +4115,14 @@ const Pedidos = () => {
 
                     <button
                       onClick={showAbonoForm ? confirmarEntrega : handleRegistrarEntregaParcial}
-                      disabled={loading || registrandoEntrega || selectedItemsForDelivery.length === 0}
+                      disabled={loading || registrandoEntrega || selectedItemsForDelivery.length === 0 || isOffline}
+                      title={isOffline ? 'Sin conexión: no se pueden registrar entregas hasta que vuelva la red' : undefined}
                       style={{ backgroundColor: '#D50565' }}
                       className="w-full px-6 py-3 text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
+                      {isOffline && <WifiOff size={18} />}
                       {(loading || registrandoEntrega) && <Loader2 size={18} className="animate-spin" />}
-                      {(loading || registrandoEntrega) ? 'Procesando...' : showAbonoForm ? 'Confirmar Entrega' :
+                      {isOffline ? 'Sin conexión' : (loading || registrandoEntrega) ? 'Procesando...' : showAbonoForm ? 'Confirmar Entrega' :
                         (() => {
                           // Verificar si después de esta entrega, TODOS los items estarán entregados
                           const itemsQueQuedaranPendientes = selectedPedido.items.filter((item, index) => {

@@ -38,11 +38,15 @@ import {
   Clock,
   Phone,
   Trash2,
-  Loader2
+  Loader2,
+  WifiOff
 } from 'lucide-react';
+import { useConexion } from '../hooks/useConexion';
+import { bloquearSinConexion, bloquearEnvioSinConexion } from '../utils/conexion';
 
 const Apartados = () => {
   const { currentUser, isAdmin } = useAuth();
+  const { isOffline } = useConexion();
 
   // Estados principales
   const [apartados, setApartados] = useState([]);
@@ -524,6 +528,9 @@ const Apartados = () => {
 
   // Crear apartado
   const handleCrearApartado = async () => {
+    // El número de apartado sale de un runTransaction sobre counters/*.
+    if (bloquearSinConexion('crear el apartado')) return;
+
     if (!selectedClienteId) {
       alert('Selecciona un cliente');
       return;
@@ -665,6 +672,8 @@ const Apartados = () => {
 
   // Registrar abono (VERSIÓN ATÓMICA MEJORADA)
   const handleRegistrarAbono = async () => {
+    if (bloquearSinConexion('registrar el abono')) return;
+
     // Validar estado del apartado
     if (selectedApartado.estadoGeneral === 'Completado') {
       alert('⚠️ Este apartado ya está completado. No se pueden agregar más abonos.');
@@ -2002,6 +2011,8 @@ const Apartados = () => {
   };
 
   const handleSendEmail = async () => {
+    if (bloquearEnvioSinConexion('el apartado por correo')) return;
+
     if (!emailRecipient.trim()) {
       alert('Por favor ingrese un correo electrónico');
       return;
@@ -2822,11 +2833,17 @@ const Apartados = () => {
               </button>
               <button
                 onClick={handleCrearApartado}
-                disabled={!selectedClienteId || selectedProductos.length === 0 || creandoApartado}
+                disabled={!selectedClienteId || selectedProductos.length === 0 || creandoApartado || isOffline}
+                title={isOffline ? 'Sin conexión: no se pueden crear apartados hasta que vuelva la red' : undefined}
                 className="px-6 py-2 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed font-medium flex items-center justify-center gap-2"
                 style={{ backgroundColor: '#D50565' }}
               >
-                {creandoApartado ? (
+                {isOffline ? (
+                  <>
+                    <WifiOff size={18} />
+                    Sin conexión
+                  </>
+                ) : creandoApartado ? (
                   <>
                     <Loader2 size={18} className="animate-spin" />
                     Creando...
@@ -3101,16 +3118,19 @@ const Apartados = () => {
                     </div>
                     <button
                       onClick={handleRegistrarAbono}
-                      disabled={!nuevoAbono || parseFloat(nuevoAbono) <= 0 || registrandoAbono}
+                      disabled={!nuevoAbono || parseFloat(nuevoAbono) <= 0 || registrandoAbono || isOffline}
+                      title={isOffline ? 'Sin conexión: no se pueden registrar abonos hasta que vuelva la red' : undefined}
                       className="w-full px-4 py-2 text-white rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed font-medium flex items-center justify-center gap-2"
                       style={{ backgroundColor: '#D50565' }}
                     >
-                      {registrandoAbono ? (
+                      {isOffline ? (
+                        <WifiOff size={18} />
+                      ) : registrandoAbono ? (
                         <Loader2 size={18} className="animate-spin" />
                       ) : (
                         <CheckCircle size={18} />
                       )}
-                      {registrandoAbono ? 'Registrando...' : 'Registrar Abono'}
+                      {isOffline ? 'Sin conexión' : registrandoAbono ? 'Registrando...' : 'Registrar Abono'}
                     </button>
                   </div>
                 </div>

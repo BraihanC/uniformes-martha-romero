@@ -5,6 +5,7 @@ import { collection, query, where, getDocs, orderBy, doc, updateDoc, serverTimes
 import { Package, Calendar, DollarSign, FileText, ChevronDown, ChevronUp, CreditCard, Filter, Download, X, Search, FileSpreadsheet, CheckCircle, AlertTriangle, ShoppingBag, Printer, Loader2 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { pedidoCompletamenteRecibido } from '../../utils/pedidosB2BLogic';
+import { bloquearSinConexion } from '../../utils/conexion';
 
 const MisPedidos = () => {
   const { clienteCorporativo, currentUser } = usePortalAuth();
@@ -176,6 +177,9 @@ const MisPedidos = () => {
   };
 
   const handleConfirmarRecepcion = async () => {
+    // Corre dentro de un runTransaction sobre el pedido.
+    if (bloquearSinConexion('confirmar la recepción')) return;
+
     // Prevenir doble clic
     if (confirmandoRecepcion) {
       return;
